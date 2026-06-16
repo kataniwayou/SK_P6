@@ -478,22 +478,24 @@ await Guard(() => ep.Send(dispatch, ctx => ctx.MessageId = /* carried messageId 
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> Resolved during /gsd-plan-phase 70 and baked into the plans. Annotations added 2026-06-16 (plan-checker reconciliation).
 
 1. **What does `StepCompleted.EntryId` carry now that output is keyed by `messageId`?** (A1)
    - What we know: the 4 `Step*` records keep an `EntryId` field (`StepCompleted.cs:11`); output now lives at `OutputData(messageId)`, not `ExecutionData(entryId)`.
    - What's unclear: whether the processor sets `EntryId = Guid.Empty`, `EntryId = messageId`, or something else — this is the orchestrator-threading seam the SPEC defers.
-   - Recommendation: carry a consistent placeholder (default `Guid.Empty`) this phase; document it as the orchestrator-phase seam. Confirm in discuss-phase.
+   - **RESOLVED:** default `Guid.Empty` (the orchestrator `entryId`↔`messageId` threading is SPEC-deferred, out of scope). Applied in Plan 70-02 (INJECT) and Plan 70-03 (`OutputTail.BuildStep`) — 7 `EntryId = Guid.Empty` occurrences; the orchestrator seam is explicitly NOT invented this phase.
 
 2. **Does `KeeperReinject` need a new `MessageId` field?** (A3)
    - What we know: req 6 requires re-inject "with the same messageId"; the current contract has no messageId.
    - What's unclear: D-12 says "KeeperReinject stays" (behavioral) — does that permit a field add?
-   - Recommendation: add `Guid MessageId` to `KeeperReinject` (the carried envelope id). This is consistent with D-12 "reshape in-place" and D-02 "carried messageId." Treat as in-scope.
+   - **RESOLVED:** yes — add `Guid MessageId` to `KeeperReinject` (in-scope under D-12 "reshape in-place"). Applied in Plan 70-01 Task 2; consumed by the REINJECT envelope override in Plan 70-02.
 
 3. **MassTransit 8.5.5 exact `Send` + `SendContext.MessageId` API.** (A4)
    - What we know: `SendContext` is mutable (the repo's `OutboundCorrelationSendFilter` sets `CorrelationId`); MassTransit exposes a `Send` overload taking a context-callback.
    - What's unclear: the exact arity/signature in 8.5.5 (`Send(T, Action<SendContext<T>>, CancellationToken)` vs an `IPipe<SendContext<T>>` form).
-   - Recommendation: at implementation, confirm via Context7/MassTransit docs and pin the overload in the `OutputTail`/`SpawnToPost`/keeper sends; add a hermetic fact capturing the resulting `SendContext.MessageId`.
+   - **RESOLVED:** plans pin the per-send lambda `Send(msg, ctx => ctx.MessageId = carried, ct)` with a documented `IPipe<SendContext>` fallback to confirm at implementation; a hermetic fact captures the resulting `SendContext.MessageId` (Plan 70-04 + `CapturingSendProvider` extension). Not a bus-wide filter.
 
 ---
 

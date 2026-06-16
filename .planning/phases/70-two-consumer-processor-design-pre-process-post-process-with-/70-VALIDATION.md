@@ -1,8 +1,8 @@
 ---
 phase: 70
 slug: two-consumer-processor-design-pre-process-post-process-with
-status: draft
-nyquist_compliant: false
+status: ready
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-06-16
 ---
@@ -99,13 +99,29 @@ Test infra to create/migrate before/with implementation (D-17):
 
 ---
 
+## Deliberate Sequencing Note (contracts → consumers → tests)
+
+By design (build-before-teardown, research Pitfall 5), production lands in Waves 1–2 and the
+behavioral hermetic facts land in Wave 3 (Plan 70-04). Wave 1 (70-01 contracts) and Wave 2
+70-03 (BaseProcessor.Core/Sample) tasks gate on grep + `dotnet build` (structural + compile)
+at task time; Wave 2 70-02 (Keeper) tasks are `tdd="true"` and run scoped facts at task time.
+The whole-suite `dotnet test tests/BaseApi.Tests` runs at **each wave merge** (Sampling Rate
+above), so a regression in the 70-03 pipeline rewrite is caught at the Wave-2→3 merge.
+
+This is an accepted trade-off: pulling a smoke fact into Wave 2 for the Pre/OutputTail core
+would require Wave-0 test infra to exist before the seam it tests — which fights the compile
+coupling the wave ordering is built to respect. The feedback loop for the most complex code
+(70-03) is therefore one wave-merge long, not per-task. Accepted with rationale.
+
+---
+
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency acceptable (hermetic suite)
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (grep/build per task; behavioral facts in Wave 3 + whole-suite at each wave merge)
+- [x] Sampling continuity: whole-suite `dotnet test` at every wave merge; no watch-mode gaps (see Deliberate Sequencing Note for the contracts→consumers→tests trade-off)
+- [x] Wave 0 covers all MISSING references (migration list above; created in Plan 70-04)
+- [x] No watch-mode flags
+- [x] Feedback latency acceptable (hermetic suite — seconds scoped / low-minutes full)
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-06-16 (plan-checker reconciliation; `wave_0_complete` flips true when Plan 70-04 lands the migrated facts during execution)
