@@ -12,7 +12,7 @@
 - ✅ **v5.0.0 Recovery Re-architecture — messageId slot-array + 3-state keeper** — Phases 50-55 (shipped 2026-06-12) — supersedes v4.0.0 Model-B recovery; source of truth [`docs/design/2026-06-08-processor-keeper-recovery-redesign.md`](../docs/design/2026-06-08-processor-keeper-recovery-redesign.md) A18 + A19
 - ✅ **v6.0.0 Config & Payload Validation Hardening** — Phases 56-58 (shipped 2026-06-13) — typed base-config seam on `BaseProcessor` + startup config-schema compatibility **Gate A** (withholds processor *Healthy* on config-type↔config-schema mismatch); complements the shipped WebAPI **Gate B** (`PayloadConfigSchemaValidator`); 10/10 CFG requirements, Phase-58 live close gate N=3 GREEN; see [milestones/v6.0.0-ROADMAP.md](milestones/v6.0.0-ROADMAP.md)
 - ✅ **v7.0.0 Per-Replica Processor Liveness & Self-Watchdog** — Phases 59-62 + 62.1 (closed 2026-06-14, audit-override) — per-instance L2 liveness keys `skp:proc:{processorId}:{instanceId}` + instance-index SET (replacing single `skp:{processorId}`), two-state `status`+per-schema `summary` written by both startup+heartbeat loops, in-memory L1 record, WebAPI ≥1-healthy orchestration-start gate, self-watchdog probe; 17 KEY/STATE/LOOP/L1/GATE/PROBE reqs implemented & hermetically green; **Phase-62 live close gate NOT run (deferred — superseded by v8.0.0)**; see [milestones/v7.0.0-ROADMAP.md](milestones/v7.0.0-ROADMAP.md)
-- 🚧 **v8.0.0 E2E Resilience Proof** — Phases 63-68 (started 2026-06-14) — whole-system live recovery proof of the fan-out workflow `A→B→C→{D1→E1→F1, D2→E2→F2}` (9 steps, one shared `processor-sample`, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios; **zero-missing + effect-once** verified **solely from Prometheus + Elasticsearch** (NOT the prior triple-SHA infra net-zero close gate); supersedes v7.0.0's deferred Phase-62 live proof; 23 CRON/PROC/WF/ENV/OBS/FAULT/TEST reqs
+- ✅ **v8.0.0 E2E Resilience Proof** — Phases 63-68 (shipped 2026-06-15) — whole-system live recovery proof of the fan-out workflow `A→B→C→{D1→E1→F1, D2→E2→F2}` (9 steps, one shared `processor-sample`, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios; **zero-missing + effect-once** verified **solely from Prometheus + Elasticsearch** (NOT the prior triple-SHA infra net-zero close gate); 7-scenario capstone **7/7 PASS** (TEST-06 clean after a config-only TTL fix — `Processor__ExecutionDataTtl` 5→300); supersedes v7.0.0's deferred Phase-62 live proof; 23/23 CRON/PROC/WF/ENV/OBS/FAULT/TEST reqs; see [milestones/v8.0.0-ROADMAP.md](milestones/v8.0.0-ROADMAP.md)
 
 ## ✅ v7.0.0 Per-Replica Processor Liveness & Self-Watchdog (CLOSED 2026-06-14 — audit-override; full record [milestones/v7.0.0-ROADMAP.md](milestones/v7.0.0-ROADMAP.md))
 
@@ -667,6 +667,16 @@ Phases execute in numeric order: 25 → 26 → 27 → 28 → 29 → 30 → 31 �
 | 57. Startup Config-Schema Fetch + Gate A | v6.0.0 | 4/4 | Complete    | 2026-06-12 |
 | 58. Orchestration-Gate Integration Proof & Close | v6.0.0 | 5/5 | Complete    | 2026-06-12 |
 
+### Phase 69: Align processor pipeline to canonical recovery spec: atomic index+data write with single INJECT (close INFRA-01 drop) and gated forward cleanup
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 68
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 69 to break down)
+
 ---
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
 
@@ -815,9 +825,9 @@ Phases execute in numeric order: 25 → 26 → 27 → 28 → 29 → 30 → 31 �
 
 
 
-## 🚧 v8.0.0 E2E Resilience Proof (In Progress — started 2026-06-14)
+## ✅ v8.0.0 E2E Resilience Proof (SHIPPED 2026-06-15; full record [milestones/v8.0.0-ROADMAP.md](milestones/v8.0.0-ROADMAP.md))
 
-> **Active milestone.** Whole-system **live recovery proof under faults**. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
+> **Shipped 2026-06-15.** Whole-system **live recovery proof under faults**. 6 phases (63–68), 15 plans; 7-scenario live capstone **7/7 PASS** across all fault classes (initial sweep 6/7; TEST-06 rabbitmq re-ran clean after a **config-only** TTL fix — `Processor__ExecutionDataTtl` 5→300, a leftover v6.0.0 close-gate hack obsolete once v8.0.0 retired the triple-SHA net-zero gate; zero production source touched). Truth = Prometheus + Elasticsearch only. Supersedes v7.0.0's deferred Phase-62 live proof. Detail below retained as the v8.0.0 design record.
 
 **Milestone Goal:** Prove perfect (**zero-missing**, **effect-once**) recovery of a fan-out orchestrated workflow under 7 sustained 5-minute fault scenarios, verified **solely** from Prometheus metrics and Elasticsearch logs, fully automated — no human verification.
 
@@ -932,7 +942,7 @@ Plans:
   5. All 7 scenarios produce an automated PASS verdict derived solely from Prometheus + Elasticsearch — no human verification, no triple-SHA infra net-zero gate.
 **Plans**: 2 plans
   - [x] 68-01-PLAN.md — Author the 5 scenario rows (TEST-03..07) + the phase-68-sweep.ps1 wrapper + cosmetic fixture-rename/literal-sync (Wave 1, static-verified) (completed 2026-06-15 — harness $Scenarios now 7 rows; scripts/phase-68-sweep.ps1 run-all+collect exit-0-iff-7/7; fixture renamed Analyze_Window_Yields_Pass + both --filter-method literals synced; test project 0-warning; 3f359f2, f39530d, 7556ee4)
-  - [x] 68-02-PLAN.md — Run the 7-scenario live sweep; prove 7/7 PASS roll-up; investigate-first on any verdict FAIL (Wave 2, live-empirical, checkpoint) (completed 2026-06-15 — live sweep 6/7 PASS [TEST-01..05 + TEST-07 zero-missing + effect-once], wrapper exit 1; TEST-06 rabbitmq VERDICT_FAIL [MISSING:2] traced to the by-design ReinjectConsumer.cs:37 silent-DROP — 5s ExecutionDataTtl self-expired across the 45s outage, KeeperReinjectDroppedDelta:2 == Missing:2; corroborated by TEST-07 superset PASS. Spec-owner disposition: accept as test-env TTL artifact (no code/TTL/dwell/retry change, D-01b/D-04 honoured). Recovery machinery proven across all 7 fault classes; 098f36a)
+  - [x] 68-02-PLAN.md — Run the 7-scenario live sweep; prove 7/7 PASS roll-up; investigate-first on any verdict FAIL (Wave 2, live-empirical, checkpoint) (completed 2026-06-15 — initial sweep 6/7 PASS [TEST-01..05 + TEST-07 zero-missing + effect-once], wrapper exit 1; TEST-06 rabbitmq VERDICT_FAIL [MISSING:2] traced to the by-design ReinjectConsumer.cs:37 silent-DROP — the leftover 5s ExecutionDataTtl self-expired across the 45s outage, KeeperReinjectDroppedDelta:2 == Missing:2; corroborated by TEST-07 superset PASS [no recovery defect]; 098f36a. **Resolution (post-checkpoint, spec-owner-directed):** config-only fix — `Processor__ExecutionDataTtl` raised 5→300 in compose.yaml [the "5" was an obsolete v6.0.0 close-gate hack]; TEST-06 re-ran **clean PASS** [Missing:0, KeeperReinjectDroppedDelta 2→0]; **capstone now 7/7** across all fault classes, zero production source touched; da91d32. TTL later unified to the const + SlotArrayOptions removed via quick-task 260615-dbf.)
 
 ### Progress (v8.0.0)
 

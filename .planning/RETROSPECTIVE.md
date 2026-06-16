@@ -217,6 +217,35 @@ Per-instance L2 liveness keyspace (`skp:proc:{processorId}:{instanceId}` + insta
 - Model mix: orchestration/execution on Opus (profile `quality`); audit/verifiers on Sonnet.
 - Notable: feature-complete & hermetic, but closed without its live capstone — the capstone became the seed for v8.0.0.
 
+## Milestone: v8.0.0 — E2E Resilience Proof
+
+**Shipped:** 2026-06-15
+**Phases:** 6 (63–68) | **Plans:** 15 | **Capstone:** 7-scenario live sweep, 7/7 PASS (Prometheus + ES only)
+
+### What Was Built
+A fully-automated, Prometheus+Elasticsearch-only live resilience proof of the fan-out workflow `A→B→C→{D1→E1→F1, D2→E2→F2}` (9 steps, one shared `processor-sample`, seconds-cron `*/30`) under 7 sustained 5-minute fault scenarios. Product changes were deliberately minimal: seconds-granularity cron (shared `CronFieldForm` detector) + processor int+string payload with `Step_*` structured logging. Everything else was test infrastructure: idempotent fan-out seeder + clean-state stack, a Prometheus+ES analyzer / PASS-FAIL engine (correlationId-aggregated traces, MISSING/DUPLICATE detection), and a fault-injection harness (`phase-67-harness.ps1` + `phase-68-sweep.ps1`).
+
+### What Worked
+- **The reframed live proof delivered on the v7.0.0 lesson.** A single comprehensive resilience suite (7 fault classes, truth = Prom + ES) proved the existing recovery machinery end-to-end where per-milestone triple-SHA close gates had repeatedly been deferred.
+- **Scope discipline held:** "prove, don't build" — no new recovery logic; the only product deltas were the two enabling changes. The milestone validated v3.6.0/v3.7.0/v5.0.0/v7.0.0 machinery under real faults.
+- **Investigate-first on the one verdict FAIL paid off.** TEST-06's MISSING:2 was root-caused (leftover 5s TTL vs 45s outage), corroborated against TEST-07's superset PASS, and fixed config-only — not blind-retried.
+
+### What Was Inefficient
+- **A leftover config constant (`Processor__ExecutionDataTtl=5`, a dead v6.0.0 close-gate hack) caused the only capstone miss.** Obsolete config from a retired gate survived into a new milestone's test env and cost a re-run. Retiring a gate should sweep its config artifacts.
+- **Planning-archive debt compounded.** The milestone opened on top of two un-closed milestones (v7.0.0 audit-override, v5.0.0 never archived) and 73 unarchived phase dirs — close required a full manual archival pass first.
+
+### Patterns Established
+- **Comprehensive live resilience suite > per-milestone close gate.** Prom+ES correlationId aggregation with zero-missing + effect-once bars is the new live-proof shape.
+- **ES-binding verdict arbiter** (Prometheus demoted to non-fatal corroboration) absorbs mid-window counter resets — corrects per-run-denominator fragility under real fan-out load.
+
+### Key Lessons
+- **Sweep obsolete config when retiring the gate that introduced it.** The 5s TTL was harmless under the triple-SHA gate but wrong once the gate was gone.
+- **Close milestones as you ship them.** Deferring `/gsd-complete-milestone` let archive debt (un-archived milestones + 73 phase dirs) accumulate to the point it blocked starting the next milestone.
+
+### Cost Observations
+- Model mix: orchestration/execution on Opus (profile `quality`); verifiers/analysis on Sonnet.
+- Notable: 139 commits (18 feat / 21 fix) over ~2 days; the bulk was test harness + analyzer, not product code.
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -228,6 +257,7 @@ Per-instance L2 liveness keyspace (`skp:proc:{processorId}:{instanceId}` + insta
 | v3.4.0 | ~3 days | 9 | Two-process messaging (RabbitMQ); triple-SHA close gate (+ `rabbitmqctl`); gap-closure decimal phases |
 | v3.6.0 | ~2 days | 4 | Exactly-once-effect dedup; Wave-0 reality probes; build-then-revert (breaker → dead-letter) |
 | v3.7.0 | ~3 days | 10 | Keeper recovery console; spike-first de-risk; consolidated authoritative close gate; audit→gap-closure phases (40/41/42) |
+| v8.0.0 | ~2 days | 6 | Comprehensive live resilience suite (7 fault classes, Prom+ES truth) replacing per-milestone close gates; prove-don't-build scope discipline; investigate-first on the lone verdict FAIL |
 
 ### Cumulative Quality
 
@@ -238,10 +268,12 @@ Per-instance L2 liveness keyspace (`skp:proc:{processorId}:{instanceId}` + insta
 | v3.4.0 | 335 facts × 3 GREEN | + real RabbitMQ | MassTransit messaging tier |
 | v3.6.0 | 452 facts × 3 GREEN | + induced-redelivery E2E | none (idempotency layer over existing tiers) |
 | v3.7.0 | 500 facts × 3 GREEN | + induced-L2-outage recover/give-up E2E | `Keeper` console (multi-replica recovery tier) |
+| v8.0.0 | 7-scenario live sweep 7/7 PASS | + 7 fault classes (proc/orch/keeper/redis/rmq/redis+rmq), Prom+ES truth | none (test harness + analyzer + seeder only — no new product tier) |
 
 ### Top Lessons (Verified Across Milestones)
 
 1. **The 3-consecutive-GREEN + byte-identical SHA close gate catches flakes and resource leaks** — proven across 20+ phases now (psql `\l` in v3.2.0, `redis-cli --scan` in v3.3.0, `rabbitmqctl list_queues` in v3.4.0; the redis SHA caught the Phase-31.1 flag-churn leak).
 2. **Bisect-friendly N-commit sequences + doc-first amendments keep spec and code aligned** through surface revisions (Phase 10 in v3.2.0; Phase 16 Stop-contract rewrite in v3.3.0).
 3. **Check a design against its real constraints before building it** — infra availability (v3.4.0 delayed-message plugin → 24.1 teardown) and trigger-condition behavior (v3.6.0 breaker → 32.1 revert) both caused build-then-remove cycles a design-time check would have avoided.
-4. **`gsd-sdk milestone.complete` is broken in this SDK build** — manual archival every milestone (v3.4.0, v3.6.0).
+4. **`gsd-sdk milestone.complete` is broken in this SDK build** — manual archival every milestone (v3.4.0, v3.6.0, v8.0.0; the handler calls `phasesArchive([])` with no version and always throws "version required for phases archive").
+5. **Close milestones as you ship them, and sweep a retired gate's config.** v8.0.0 opened atop two un-closed milestones + 73 unarchived phase dirs (archive debt that blocked the next start), and its only capstone miss came from a leftover 5s `ExecutionDataTtl` left behind when the triple-SHA gate was retired.

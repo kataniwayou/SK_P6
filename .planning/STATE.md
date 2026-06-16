@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v8.0.0
 milestone_name: E2E Resilience Proof
 current_plan: 2
-status: milestone_complete
-stopped_at: Completed 68-02-PLAN.md
-last_updated: "2026-06-15T05:30:00.000Z"
-last_activity: 2026-06-15
+status: milestone_archived
+stopped_at: v8.0.0 closed & archived (Completed 68-02-PLAN.md)
+last_updated: "2026-06-16T00:00:00.000Z"
+last_activity: 2026-06-16
 progress:
   total_phases: 27
   completed_phases: 28
@@ -19,7 +19,9 @@ progress:
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-06-14 — v7.0.0 closed audit-override; v8.0.0 started)
+See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
+
+**Current focus:** No active milestone — v8.0.0 shipped (7-scenario live resilience capstone 7/7 PASS). Next: `/gsd-new-milestone`. ⚠ Before the next milestone's phase work, run `/gsd-cleanup` to archive the still-in-place phase dirs 01-62.1 from prior milestones.
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
@@ -65,6 +67,8 @@ Last activity: 2026-06-15 - Completed quick task 260615-kgz: per-(correlationId,
 > v3.7.0 (Keeper) — ✅ SHIPPED & ARCHIVED 2026-06-07 (tag `v3.7.0`). 10 phases (33-42), 32 plans, 37/37 requirements + live-proven (Phase-39 close gate 3×500 GREEN, triple-SHA net-zero). Archives: milestones/v3.7.0-{ROADMAP,REQUIREMENTS,MILESTONE-AUDIT}.md.
 
 ## Deferred Items
+
+Acknowledged at **v8.0.0 close (2026-06-15, archived 2026-06-16)** — **32 open artifacts** surfaced by the pre-close `audit-open` and acknowledged-all to proceed: the same carried-over v3.x items below (UAT/verification `human_needed` on phases 08/09/32–40, 1 stale debug session `phase29-scopeproof`) PLUS **5 quick-task summaries** missing a STATUS line (`260614-2hf` / `260614-9jd` / `260614-b5c` / `260615-dbf` / `260615-kgz` — all done & committed) PLUS **Phase 62 (62-HUMAN-UAT pending + 62-VERIFICATION live half)** (carried from v7.0.0). **None are v8.0.0 regressions** — v8.0.0's own phases 63–68 are clean. v8.0.0 was operator-closed without a `/gsd-audit-milestone` (skipped) given the 7-scenario live capstone already proves the milestone end-to-end. Optional: stamp the 5 quick-task SUMMARYs with a STATUS line to clear them from future audits.
 
 Re-affirmed at **v7.0.0 close (2026-06-14, audit-override)** — 29 open artifacts surfaced by the pre-close `audit-open`: the same carried-over v3.x items below (UAT/verification `human_needed` on phases 08/09/32–40, 1 stale debug session, 3 quick-task summaries) PLUS **Phase 62 (62-HUMAN-UAT.md pending + 62-VERIFICATION live half)** — Phase 62's live proof + triple-SHA close gate was never run; it is **deferred and superseded by v8.0.0 (E2E Resilience Proof)**, whose comprehensive live fault-injection E2E subsumes it. All acknowledged and deferred to start v8.0.0.
 
@@ -1536,6 +1540,7 @@ Forward-looking notes:
 - Phase 29 added (v3.5.0 follow-up): Structured execution-scope logging — ambient structured-attribute logs (CorrelationId, WorkflowId, StepId, ProcessorId, ExecutionId, EntryId) via MEL log scopes + OTel IncludeScopes → Elasticsearch; new bus-wide `InboundExecutionScopeConsumeFilter` (execution id-set for `IExecutionCorrelated`, both consoles) alongside the unchanged `CorrelationId` filter, shared `ExecutionLogScope` keys (skip `Guid.Empty`), per-result inner scope for minted ExecutionId/output EntryId, process-wide ProcessorId enricher from `IProcessorContext`, explicit scope in the Quartz `WorkflowFireJob`. Requirements LOG-01..06 TBD at spec.
 - Phase 38 added (v3.7.0 follow-up): Uniform `service_name` + instance labels across all metrics — `service_name={name}_{version}` + `service_instance_id` on every metric series (runtime/HTTP/business); processor name+version sourced from the DB (extend `ProcessorIdentityFound`, remove redundant processor appsettings, `processor-pending` placeholder); logs `service.name` unchanged; Prometheus query consumers updated. SPEC locked 2026-06-05 (MLBL-01..05, ambiguity 0.11, 38-SPEC.md). No human verification required.
 - Phases 38↔39 renumbered (v3.7.0, 2026-06-05): the metrics-label phase was moved BEFORE the close gate so the gate seals the final metric-label contract. Metrics-labels is now **Phase 38**; "Keeper Observability + Real-Stack E2E + Close Gate" is now **Phase 39**. (Historical "Phase-38 close gate" references in the frozen 34-/35-0X-SUMMARY records predate the swap and refer to what is now Phase 39.)
+- Phase 69 added: Align processor pipeline to canonical recovery spec — atomic index+data write collapsing the `INFRA-01` index-write drop + the data-write-fail escalation into a single `INJECT`; gated forward cleanup (skip the atomic two-key delete when any item escalated to the keeper); In-Process contract. Spec of record: `docs/design/processor-keeper-recovery-spec.md`.
 
 ### Pending Todos
 

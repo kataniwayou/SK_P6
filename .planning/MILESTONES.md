@@ -1,5 +1,31 @@
 # Steps API — Milestones
 
+## v8.0.0 E2E Resilience Proof (Shipped: 2026-06-15)
+
+**Phases completed:** 6 phases (63–68), 15 plans
+
+**Requirements:** 23/23 satisfied (CRON/PROC/WF/ENV/FAULT/OBS/TEST) · **Audit:** none run (operator-skipped) · **Close posture:** 7-scenario live capstone **7/7 PASS** (Prometheus + Elasticsearch only) across all fault classes
+
+**Stats:** 139 commits (18 feat / 21 fix) · 136 files changed (+18,800 / −1,202) · 2026-06-14 → 2026-06-15
+
+**Known deferred items at close:** 32 (carried over from prior un-closed milestones v3.x–v7.0.0 — UAT/verification `human_needed` on phases 08/09/32–40, 1 stale debug session [phase29], 5 quick-task summaries [260614/260615], Phase-62 pending UAT; none are v8.0.0 regressions — see STATE.md → Deferred Items)
+
+### TEST-06 — initial miss, root cause, and config-only fix
+
+- The initial sweep was **6/7**: **TEST-06 (RabbitMQ) MISSING:2**, traced to the by-design `ReinjectConsumer.cs:37` silent-DROP — the leftover 5s `Processor__ExecutionDataTtl` self-expired across the 45s outage so keeper REINJECT correctly dropped already-gone keys (`KeeperReinjectDroppedDelta:2 == Missing:2`). Corroborated by TEST-07 (strictly-harder redis+rabbitmq superset) PASS — a deterministic rabbitmq-recovery defect would have failed TEST-07 too, confirming **no recovery-logic defect**.
+- **Spec-owner-directed config-only fix:** `Processor__ExecutionDataTtl` raised 5→300 in `compose.yaml` (the `"5"` was an obsolete v6.0.0 close-gate hack, dead once v8.0.0 retired the triple-SHA net-zero gate). TEST-06 re-ran a **clean PASS** (Missing:0, `KeeperReinjectDroppedDelta` 2→0) → **capstone 7/7**, zero production source touched (da91d32). TTL later unified to the const + `SlotArrayOptions` removed via quick-task 260615-dbf.
+
+**Key accomplishments:**
+
+- **Seconds-granularity cron (CRON-01/02):** lifted the 1-minute cron floor — a shared `CronFieldForm` token-count detector (zero Cronos dep, in `Messaging.Contracts.Projections`) routes both `CronInterval` (NextOccurrence + IntervalSeconds) and both Workflow create/update validators through 6-field (IncludeSeconds) / 5-field (Standard) resolution; `*/30 * * * * *` fires every 30s (UTC) and validates, 5-field still accepted.
+- **Processor work + structured logging (PROC-01/02/03):** `SampleConfig(int Number, string? Label)` deserialized from the assignment payload; `ProcessAsync` sum = Number + `Random.Shared.Next(0,100)` → `{number,label}` JSON result + one `Step_<label>` structured log carrying correlationId + stepId so ES can aggregate a run.
+- **Fan-out seeder + clean-state stack (WF-01/02, ENV-01/02):** idempotent reverse-topo seeder for `A→B→C→{D1→E1→F1, D2→E2→F2}` (9 steps/8 edges/9 assignments, 1 shared processor, `*/30` cron, sentinel `v8-fanout-proof`); `scripts/phase-65-reset.ps1` (FLUSHALL → heal-wait → FK-safe psql DELETE → processor-set assert) + minimal single-`processor-sample` stack bring-up.
+- **Prometheus + ES analyzer / PASS-FAIL engine (OBS-01/02/03/04):** aggregates ES logs by correlationId into per-run traces (9 steps + both sinks), detects MISSING/DUPLICATE vs total triggers, cross-checks Prom counters, emits per-test report + automated verdict; OBS-04 verdict re-founded on an ES-binding arbiter (Prom→non-fatal corroboration), correcting a Phase-66 per-run-denominator defect surfaced under the first real fan-out load.
+- **Fault-injection harness (FAULT-01/02/03):** `scripts/phase-67-harness.ps1` drives clean → seed → activate (`POST /orchestration/start`) → 5-min/30s-cron observe → mid-run container kill/restart → health-wait → analyze → teardown, fully automated; proven live on TEST-01 baseline + TEST-02 processor-crash recovery (both Pass 10/10).
+- **7-scenario live capstone (TEST-01..07):** `scripts/phase-68-sweep.ps1` ran the full sweep — happy path + processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crashes — **7/7 PASS** (zero-missing + effect-once each); recovery machinery live-proven across all 7 fault classes (initial 6/7; TEST-06 re-ran clean after the config-only TTL fix, above).
+
+---
+
 ## v7.0.0 Per-Replica Processor Liveness & Self-Watchdog (Closed: 2026-06-14 — audit-override)
 
 **Phases completed:** 3 phases (59–61) + 1 inserted (62.1), 12 plans · Phase 62 (live proof + close gate) authored but NOT run
