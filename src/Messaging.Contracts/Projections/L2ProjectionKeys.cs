@@ -23,7 +23,7 @@ namespace Messaging.Contracts.Projections;
 ///   <item><description>PerInstance: <c>{Prefix}proc:{processorId:D}:{instanceId}</c> — KEY-01, the per-replica liveness key.</description></item>
 ///   <item><description>InstanceIndex: <c>{Prefix}proc:{processorId:D}</c> — KEY-02, the per-processor instance-index SET key (prefix of PerInstance).</description></item>
 ///   <item><description>ExecutionData: <c>{Prefix}data:{entryId:D}</c> — the sole GUID-keyed data builder (D-08; the legacy 64-hex content-addressed string overload was removed in v4.0.0).</description></item>
-///   <item><description>MessageIndex: <c>{Prefix}msg:{messageId:D}</c> — the processor-owned slot-array allocation-index key (D-04; a Redis HASH of int-slot → entryId, D-05). No TTL baked in.</description></item>
+///   <item><description>OutputData: <c>{Prefix}out:{messageId:D}</c> — D-10, the per-message output blob key.</description></item>
 /// </list>
 /// </summary>
 public static class L2ProjectionKeys
@@ -54,11 +54,11 @@ public static class L2ProjectionKeys
     /// in; caller concern). The legacy 64-hex content-addressed string overload was removed in v4.0.0.</summary>
     public static string ExecutionData(Guid entryId) => $"{Prefix}data:{entryId:D}";
 
-    /// <summary>D-04: the processor-owned slot-array allocation-index key —
-    /// <c>skp:msg:{messageId:D}</c> (a Redis HASH of int-slot → entryId; D-05). No TTL baked
-    /// in (caller concern, mirrors <see cref="ExecutionData"/>; the random TTL lands in Phase 51).
-    /// <c>messageId</c> is the MassTransit broker MessageId (a Guid).</summary>
-    public static string MessageIndex(Guid messageId) => $"{Prefix}msg:{messageId:D}";
+    /// <summary>D-10: the per-message output blob key — <c>skp:out:{messageId:D}</c> — written by the
+    /// Pre inline tail / Post / INJECT (write L2[messageId]=data, completed-only). Distinct `out:`
+    /// namespace separates output blobs (by messageId) from input blobs (`skp:data:` by entryId). The
+    /// jittered random[ExecutionDataTtl, 2×ExecutionDataTtl] TTL is a caller concern (passed on the write).</summary>
+    public static string OutputData(Guid messageId) => $"{Prefix}out:{messageId:D}";
 
     /// <summary>D-03: probe scratch key — short-TTL write-then-delete; the TTL is the crash net-zero net.</summary>
     public static string KeeperProbe(string h) => $"{Prefix}keeper:probe:{h}";   // "skp:keeper:probe:{h}"
