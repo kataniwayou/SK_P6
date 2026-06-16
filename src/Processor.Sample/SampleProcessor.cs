@@ -1,7 +1,7 @@
 using System.Text.Json;                  // JsonSerializer — NOT in .NET 8 implicit usings
 using BaseProcessor.Core.Configuration;  // ProcessorConfig.SerializerOptions
 using BaseProcessor.Core.Processing;
-using Messaging.Contracts;               // ExecutionLogScope.ExecutionId
+using Messaging.Contracts;               // DataResult / StepOutcome / ExecutionLogScope
 using Microsoft.Extensions.Logging;
 
 namespace Processor.Sample;
@@ -11,20 +11,22 @@ namespace Processor.Sample;
 /// typed In-Process <c>ProcessAsync</c> seam; the framework owns deserialization (it hands in a typed
 /// <see cref="SampleConfig"/>) and the entire Pre/Post/end-delete pipeline.
 /// <para>
-/// DELIBERATE multiple-execution stress test, keyed on the inbound <c>executionId</c>:
+/// Phase 70 (req 10): the two-mode worked example, keyed on the inbound <c>executionId</c>:
 /// <list type="bullet">
-///   <item><b>ENTRY/seed</b> (<c>executionId == Guid.Empty</c>): spawns TWO completed
-///   <see cref="ProcessItem"/> executions, each a {number,label} JSON string with an INDEPENDENT random sum
-///   over the config's <c>Number</c> and its own freshly-minted ExecutionId — each becomes an independently
-///   traceable instance.</item>
-///   <item><b>DOWNSTREAM</b> (<c>executionId != Guid.Empty</c>): returns ONE completed execution that REUSES
-///   the inbound executionId; its sum is the inbound {number} plus the config's <c>Number</c>, deterministic
-///   (NO random) so the per-instance accumulation is reproducible.</item>
+///   <item><b>ENTRY/seed</b> (<c>executionId == Guid.Empty</c>, Mode-2): generates TWO numbers (each
+///   <c>baseNumber + random[0,99]</c>), logs <c>"{label} had the following numbers: …"</c>, then SPAWNS two
+///   completed <see cref="DataResult"/>s to the Post-Process queue via <c>SpawnToPost</c>
+///   with DISTINCT freshly-minted executionIds (D-09, swallow), DELETES the inbound entry via
+///   <c>DeleteEntry</c>, and RETURNS NULL — the framework writes/sends/deletes nothing
+///   inline (req 3).</item>
+///   <item><b>DOWNSTREAM</b> (<c>executionId != Guid.Empty</c>, Mode-1): accumulates ONE number
+///   (<c>incomingNumber + baseNumber</c>, deterministic — NO random), logs the same line, and RETURNS ONE
+///   completed <see cref="DataResult"/> REUSING the inbound executionId — the framework's inline tail runs
+///   (no spawn, no delete).</item>
 /// </list>
-/// Every execution emits ONE structured log carrying BOTH the <c>{StepLabel}</c> structured param AND that
-/// execution's <c>ExecutionId</c> (via a nested <see cref="ExecutionLogScope.ExecutionId"/> BeginScope — the
-/// bus-wide consume filter SKIPS ExecutionId when <c>Guid.Empty</c>, so the entry-minted ids MUST be added
-/// here). The 6 correlation ids attach automatically from the ambient consume-filter scope (D-09).
+/// The author writes NO RetryLoop/keeper/envelope code — <c>SpawnToPost</c> /
+/// <c>DeleteEntry</c> own resilience, and <c>NewResult</c> stamps
+/// the ambient ids + carried messageId.
 /// </para>
 /// </summary>
 /// <remarks>
@@ -34,7 +36,7 @@ namespace Processor.Sample;
 public sealed class SampleProcessor(ILogger<SampleProcessor> logger) : BaseProcessor<SampleConfig>
 {
     /// <inheritdoc/>
-    protected override Task<List<ProcessItem>> ProcessAsync(
+    protected override async Task<DataResult?> ProcessAsync(
         string validatedData, SampleConfig? config, Guid executionId, CancellationToken ct)
     {
         var baseNumber = config?.Number ?? 0;            // D-03 null-config default — warning-clean guard (Pitfall 2)
@@ -42,48 +44,34 @@ public sealed class SampleProcessor(ILogger<SampleProcessor> logger) : BaseProce
 
         if (executionId == Guid.Empty)
         {
-            // ENTRY/seed: ONE dispatch spawns TWO completed executions, each an independent random sum and
-            // its own freshly-minted ExecutionId — each is a new independently traceable instance.
-            var items = new List<ProcessItem>(2);
+            // ENTRY/seed (Mode-2): generate 2 numbers, log the line, spawn 2 to Post (distinct minted execIds,
+            // swallow on exhaust), delete the inbound entry, return null.
+            var numbers = new int[2];
             for (var i = 0; i < 2; i++)
+                numbers[i] = baseNumber + Random.Shared.Next(0, 100);   // 0..99 inclusive; independent per execution
+
+            logger.LogInformation("{StepLabel} had the following numbers: {Numbers}",
+                label, string.Join(", ", numbers));
+
+            foreach (var number in numbers)
             {
-                var sum      = baseNumber + Random.Shared.Next(0, 100);   // 0..99 inclusive; independent random per execution
-                var thisExec = Guid.NewGuid();                           // mint a NEW exec per spawned execution
-                var data     = JsonSerializer.Serialize(
-                    new { number = sum, label },
-                    ProcessorConfig.SerializerOptions);
-                // One structured log per execution: {StepLabel} stays AND the minted ExecutionId is added via a
-                // nested scope (the consume filter skips Guid.Empty, so the minted id must be supplied here).
-                using (logger.BeginScope(new Dictionary<string, object>
-                {
-                    [ExecutionLogScope.ExecutionId] = thisExec.ToString(),
-                }))
-                {
-                    logger.LogInformation("step completed {StepLabel} sum {Sum}", label, sum);
-                }
-                items.Add(new(ProcessOutcome.Completed, data, thisExec));
+                var data = JsonSerializer.Serialize(new { number, label }, ProcessorConfig.SerializerOptions);
+                await this.SpawnToPost(this.NewResult(StepOutcome.Completed, data), Guid.NewGuid());   // mint per spawn (D-09)
             }
-            return Task.FromResult(items);
+            await this.DeleteEntry();
+            return null;   // req 3: spawn handled everything — skip the framework inline tail
         }
 
-        // DOWNSTREAM: REUSE the inbound executionId, accumulate deterministically (NO random) so the
-        // per-instance number is reproducible across steps.
+        // DOWNSTREAM (Mode-1): REUSE the inbound executionId, accumulate deterministically (NO random).
         using var parsed = JsonDocument.Parse(validatedData);
         var incomingNumber = parsed.RootElement.GetProperty("number").GetInt32();
-        var accumulated    = incomingNumber + baseNumber;   // deterministic accumulate
+        var accumulated    = incomingNumber + baseNumber;
+
+        logger.LogInformation("{StepLabel} had the following numbers: {Numbers}",
+            label, accumulated.ToString());
+
         var downstreamData = JsonSerializer.Serialize(
-            new { number = accumulated, label },
-            ProcessorConfig.SerializerOptions);
-        using (logger.BeginScope(new Dictionary<string, object>
-        {
-            [ExecutionLogScope.ExecutionId] = executionId.ToString(),   // reuse inbound exec
-        }))
-        {
-            logger.LogInformation("step completed {StepLabel} sum {Sum}", label, accumulated);
-        }
-        return Task.FromResult(new List<ProcessItem>(1)
-        {
-            new(ProcessOutcome.Completed, downstreamData, executionId),  // REUSE the inbound exec
-        });
+            new { number = accumulated, label }, ProcessorConfig.SerializerOptions);
+        return this.NewResult(StepOutcome.Completed, downstreamData) with { ExecutionId = executionId };   // reuse inbound exec
     }
 }

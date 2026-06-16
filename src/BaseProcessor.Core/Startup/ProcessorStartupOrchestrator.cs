@@ -275,10 +275,23 @@ public sealed class ProcessorStartupOrchestrator(
         });
         await handle.Ready;                                          // queue declared + consumer attached BEFORE Healthy (D-03)
 
-        context.MarkHealthy(); // NOW IsHealthy opens -> heartbeat's first write lands AFTER the bind (LIVE-04/EXEC-01).
+        // Phase 70 (D-16 / Pitfall 2): the sibling Post-Process endpoint queue:{id:D}-post. SAME posture as
+        // the entry bind — configure NOTHING but ConfigureConsumer (no UseMessageRetry, no ConfigureError;
+        // the in-code OutputTail RetryLoop owns retries, send-exhaust throws → broker nack-requeue). BOTH
+        // binds + BOTH .Ready awaits complete BEFORE MarkHealthy so a Mode-2 self-spawn never sends to a
+        // not-yet-declared queue (the orchestrator admits only Healthy processors).
+        var postQueueName = $"{context.Id!.Value:D}-post";
+        var postHandle = endpointConnector.ConnectReceiveEndpoint(postQueueName, (ctx, cfg) =>
+        {
+            cfg.ConfigureConsumer<PostProcessConsumer>(ctx);
+        });
+        await postHandle.Ready;                                       // -post queue declared + consumer attached BEFORE Healthy
+
+        context.MarkHealthy(); // NOW IsHealthy opens -> heartbeat's first write lands AFTER the binds (LIVE-04/EXEC-01).
         gate.MarkReady();      // flip the startup gate HERE, not at host-start.
         logger.LogInformation(
-            "Dispatch endpoint {Queue} bound; processor reached Healthy; startup gate ready.", queueName);
+            "Dispatch endpoints {Queue} + {PostQueue} bound; processor reached Healthy; startup gate ready.",
+            queueName, postQueueName);
     }
 
     /// <summary>

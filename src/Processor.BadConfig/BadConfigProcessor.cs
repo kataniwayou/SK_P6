@@ -1,4 +1,5 @@
 using BaseProcessor.Core.Processing;
+using Messaging.Contracts;   // DataResult / StepOutcome
 using Microsoft.Extensions.Logging;
 
 namespace Processor.BadConfig;
@@ -18,15 +19,13 @@ namespace Processor.BadConfig;
 public sealed class BadConfigProcessor(ILogger<BadConfigProcessor> logger) : BaseProcessor<BadConfig>
 {
     /// <inheritdoc/>
-    protected override Task<List<ProcessItem>> ProcessAsync(
+    protected override Task<DataResult?> ProcessAsync(
         string validatedData, BadConfig? config, Guid executionId, CancellationToken ct)
     {
-        // Dead path — Gate A withholds the queue bind so this is never invoked. Trivial completed item.
+        // Dead path — Gate A withholds the queue bind so this is never invoked. Trivial completed result
+        // (Phase 70: one-or-null seam; framework stamps ids/messageId via NewResult).
         logger.LogWarning("badconfig transform invoked (unexpected — Gate A should have withheld health)");
 
-        return Task.FromResult(new List<ProcessItem>
-        {
-            new(ProcessOutcome.Completed, "processor-badconfig-ok", Guid.NewGuid()),
-        });
+        return Task.FromResult<DataResult?>(this.NewResult(StepOutcome.Completed, "processor-badconfig-ok"));
     }
 }

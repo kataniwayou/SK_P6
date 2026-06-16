@@ -79,6 +79,12 @@ public static class BaseProcessorServiceCollectionExtensions
                 // The correct durable {id:D} endpoint is bound at runtime by ProcessorStartupOrchestrator,
                 // AFTER identity resolves and BEFORE MarkHealthy (D-02/D-03).
                 x.AddConsumer<EntryStepDispatchConsumer>().ExcludeFromConfigureEndpoints();
+
+                // Phase 70 (D-15/D-16): the Post-Process consumer — registered for DI so the runtime
+                // ConnectReceiveEndpoint can ConfigureConsumer<PostProcessConsumer> on queue:{id:D}-post,
+                // EXCLUDED from auto-endpoint config (the -post endpoint is bound at runtime by
+                // ProcessorStartupOrchestrator, AFTER identity resolves and BEFORE MarkHealthy).
+                x.AddConsumer<PostProcessConsumer>().ExcludeFromConfigureEndpoints();
             });
 
         // 2b. PIPE-01 (Phase 44): the Pre→In→Post→end-delete runner the now-thin EntryStepDispatchConsumer
@@ -97,6 +103,13 @@ public static class BaseProcessorServiceCollectionExtensions
         //     (ValidateScopes = true / ValidateOnBuild = true) — the .NET Host enables both by default in the
         //     Development environment.
         services.AddScoped<ProcessorPipeline>();
+
+        // 2c. Phase 70 (D-15): the shared output tail (validate → write-gated-on-completed → send-by-result),
+        //     resolved by BOTH the ProcessorPipeline inline tail AND the PostProcessConsumer. Scoped, mirroring
+        //     the pipeline; its collaborators (IConnectionMultiplexer, IProcessorContext, ISendEndpointProvider,
+        //     IOptions<RetryOptions>, IOptions<ProcessorLivenessOptions>, ProcessorMetrics) are all already
+        //     registered by the calls above / steps 3/3b/6c.
+        services.AddScoped<OutputTail>();
 
         // 3. Liveness/heartbeat knobs (CONFIG-01) — six independent seconds-ints from the "Processor" section.
         services.Configure<ProcessorLivenessOptions>(cfg.GetSection("Processor"));
