@@ -1,18 +1,18 @@
 ---
 gsd_state_version: 1.0
-milestone: v8.0.0
-milestone_name: E2E Resilience Proof
-current_plan: 2
-status: milestone_archived
-stopped_at: v8.0.0 closed & archived (Completed 68-02-PLAN.md)
-last_updated: "2026-06-16T00:00:00.000Z"
-last_activity: 2026-06-16
+milestone: v7.0.0
+milestone_name: Per-Replica Processor Liveness & Self-Watchdog
+current_plan: Not started
+status: completed
+stopped_at: Phase 70 context gathered
+last_updated: "2026-06-16T20:22:45.804Z"
+last_activity: "2026-06-15 - Completed quick task 260615-kgz: per-(correlationId,executionId) multi-execution scoring"
 progress:
-  total_phases: 27
-  completed_phases: 28
-  total_plans: 86
-  completed_plans: 86
-  percent: 104
+  total_phases: 29
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 99
 ---
 
 # Project State
@@ -1569,9 +1569,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-15T04:28:13.360Z
-Stopped at: Completed 68-01-PLAN.md
-Resume file: None
+Last session: --stopped-at
+Stopped at: Phase 70 context gathered
+Resume file: --resume-file
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
 **Phase 29 (Structured Execution-Scope Logging):** 5/5 plans complete — close gate GATE_EXIT=0 (405 Passed ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held; live scopeProof passes on a `processor-sample` Completed log); LOG-01..06 all complete. Awaiting orchestrator phase verification + `phase.complete`. Milestone v3.5.0 = 17/17 plans across phases 25-29.
