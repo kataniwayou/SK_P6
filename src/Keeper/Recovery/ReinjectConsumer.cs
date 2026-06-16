@@ -52,6 +52,9 @@ public sealed class ReinjectConsumer(
         // IN-01: the inner broker Send uses CancellationToken.None to match ProcessorPipeline's send
         // convention ("do not abort a broker send once started"). The outer Guard keeps ct so the
         // bounded RetryLoop still observes bus shutdown between attempts.
-        await Guard(() => ep.Send(dispatch, CancellationToken.None), ct);
+        // req 6 (Phase 70): re-inject with the SAME messageId on the outbound envelope — override
+        // SendContext.MessageId to the carried m.MessageId (precedent: OutboundCorrelationSendFilter
+        // sets SendContext.CorrelationId). No inbox/dedup on this endpoint, so the reused id is safe.
+        await Guard(() => ep.Send(dispatch, ctx => ctx.MessageId = m.MessageId, CancellationToken.None), ct);
     }
 }
