@@ -74,19 +74,44 @@ internal static class RecoveryTestKit
     }
 
     /// <summary>An <see cref="ISendEndpointProvider"/> recording each boxed message + the endpoint URI it
-    /// was sent to. The recovery bodies send the concrete record (NOT boxed as object), so capture both the
-    /// generic and the object Send overloads.</summary>
+    /// was sent to. Phase 70: the reshaped INJECT/REINJECT bodies send through the envelope-override overload
+    /// <c>Send(object, Action&lt;SendContext&gt;, CancellationToken)</c>, so capture that AND the legacy
+    /// concrete overloads. For the override overload, the callback is materialized against a substituted
+    /// <see cref="SendContext"/> so the resulting <see cref="SendContext.MessageId"/> is recorded into
+    /// <see cref="SentMessageIds"/> — letting a fact assert <c>req 6/11</c> ("re-emit with the same
+    /// messageId on the envelope").</summary>
     public sealed class CapturingSendProvider : ISendEndpointProvider
     {
         public List<(Uri Uri, object Message)> Sent { get; } = new();
 
+        /// <summary>The envelope MessageId set by the override callback, one per override-overload send,
+        /// in send order (parallel to the override entries appended to <see cref="Sent"/>).</summary>
+        public List<Guid> SentMessageIds { get; } = new();
+
         public Task<ISendEndpoint> GetSendEndpoint(Uri address)
         {
             var endpoint = Substitute.For<ISendEndpoint>();
+
+            // Legacy concrete overloads (no envelope override) — kept so non-override sends still record.
             endpoint.Send(Arg.Any<EntryStepDispatch>(), Arg.Any<CancellationToken>())
                 .Returns(ci => { Sent.Add((address, ci[0]!)); return Task.CompletedTask; });
             endpoint.Send(Arg.Any<StepCompleted>(), Arg.Any<CancellationToken>())
                 .Returns(ci => { Sent.Add((address, ci[0]!)); return Task.CompletedTask; });
+
+            // Phase 70 envelope-override overload: Send(object, Action<SendContext>, CancellationToken).
+            // Materialize the callback against a substituted SendContext and record the set MessageId.
+            endpoint.Send(Arg.Any<object>(), Arg.Any<Action<SendContext>>(), Arg.Any<CancellationToken>())
+                .Returns(ci =>
+                {
+                    var msg = ci.ArgAt<object>(0);
+                    var callback = ci.ArgAt<Action<SendContext>>(1);
+                    var sendCtx = Substitute.For<SendContext>();
+                    callback(sendCtx);                  // applies ctx.MessageId = carried id
+                    Sent.Add((address, msg));
+                    SentMessageIds.Add(sendCtx.MessageId ?? Guid.Empty);
+                    return Task.CompletedTask;
+                });
+
             return Task.FromResult(endpoint);
         }
 

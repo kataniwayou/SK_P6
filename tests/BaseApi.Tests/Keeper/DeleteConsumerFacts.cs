@@ -9,8 +9,9 @@ using Xunit;
 namespace BaseApi.Tests.Keeper;
 
 /// <summary>
-/// Phase 52 / KEEP-03: the Keeper DELETE state deletes the L2 execution-data key (GC only) and
-/// drops-on-absent (KeyDeleteAsync no-ops on a missing key, A18 line 217).
+/// Phase 70 / req 8 (D-12): the Keeper DELETE state is delete-only — exactly one single-key DEL of
+/// L2[entryId] (ExecutionData) and ZERO orchestrator sends. Drop-on-absent (KeyDeleteAsync no-ops on a
+/// missing key — no throw).
 /// </summary>
 public sealed class DeleteConsumerFacts
 {
@@ -27,13 +28,12 @@ public sealed class DeleteConsumerFacts
         {
             CorrelationId = Guid.NewGuid(),
             ExecutionId = Guid.NewGuid(),
-            EntryId = Guid.NewGuid(),
-            MessageId = Guid.NewGuid(),   // A19: a distinct, assertable origin-index id (both-key DEL operand 2)
+            EntryId = Guid.NewGuid(),   // the single DELETE operand (entryId-only — no index/MessageId)
         };
 
     [Fact]
-    [Trait("Phase", "52")]
-    public async Task Delete_deletes_execution_data_key()
+    [Trait("Phase", "70")]
+    public async Task Delete_single_key_entryId_only_and_sends_nothing()
     {
         var ct = TestContext.Current.CancellationToken;
         var db = RecoveryTestKit.Db();
@@ -47,22 +47,23 @@ public sealed class DeleteConsumerFacts
 
         await consumer.Consume(Ctx(m, ct));
 
-        // A19/GC-03/AC-7: ONE atomic both-key DEL whose operands contain BOTH the source data key AND the index.
+        // req 8: exactly ONE single-key DEL of L2[entryId] — NOT the both-key RedisKey[] overload.
         await db.Received(1).KeyDeleteAsync(
-            Arg.Is<RedisKey[]>(ks => ks.Length == 2
-                && ks.Contains((RedisKey)L2ProjectionKeys.ExecutionData(m.EntryId))
-                && ks.Contains((RedisKey)L2ProjectionKeys.MessageIndex(m.MessageId))),
-            Arg.Any<CommandFlags>());
+            (RedisKey)L2ProjectionKeys.ExecutionData(m.EntryId), Arg.Any<CommandFlags>());
+        await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+
+        // req 8: DELETE sends nothing to the orchestrator.
+        Assert.Empty(send.Sent);
     }
 
     [Fact]
-    [Trait("Phase", "52")]
+    [Trait("Phase", "70")]
     public async Task Delete_absent_key_no_throws()
     {
         var ct = TestContext.Current.CancellationToken;
         var db = RecoveryTestKit.Db();
-        // KeyDeleteAsync returns 0 (no keys removed) for absent keys — drop-on-absent (GC-03/AC-7).
-        db.KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>()).Returns(0L);
+        // KeyDeleteAsync returns false (no key removed) for an absent key — drop-on-absent (no throw).
+        db.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(false);
         var send = new RecoveryTestKit.CapturingSendProvider();
 
         var consumer = new DeleteConsumer(
@@ -71,9 +72,11 @@ public sealed class DeleteConsumerFacts
 
         var m = NewDelete();
 
-        // No throw on an absent key — the consume completes cleanly.
+        // No throw on an absent key — the consume completes cleanly; the single-key DEL is still issued once.
         await consumer.Consume(Ctx(m, ct));
 
-        await db.Received(1).KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+        await db.Received(1).KeyDeleteAsync(
+            (RedisKey)L2ProjectionKeys.ExecutionData(m.EntryId), Arg.Any<CommandFlags>());
+        Assert.Empty(send.Sent);
     }
 }

@@ -13,9 +13,10 @@ using Xunit;
 namespace BaseApi.Tests.Keeper;
 
 /// <summary>
-/// Phase 52 / KEEP-01: the Keeper REINJECT state reads L2[entryId]; present → re-injects a reconstructed
-/// EntryStepDispatch carrying the D-01 Payload to queue:{ProcessorId}; absent/empty (STRLEN==0, no Redis
-/// exception) → BY-DESIGN silent drop (no throw, no send) + keeper_reinject_dropped counter (D-06/D-07).
+/// Phase 70 / req 6 (D-12): the Keeper REINJECT state reads L2[entryId]; present → re-injects a
+/// reconstructed EntryStepDispatch carrying the Payload to queue:{ProcessorId} with the outbound envelope
+/// MessageId overridden to the carried m.MessageId; absent/empty (STRLEN==0, no Redis exception) →
+/// BY-DESIGN silent drop (no throw, no send) + keeper_reinject_dropped counter (D-06/D-07).
 /// </summary>
 public sealed class ReinjectConsumerFacts
 {
@@ -28,8 +29,8 @@ public sealed class ReinjectConsumerFacts
     }
 
     [Fact]
-    [Trait("Phase", "52")]
-    public async Task Reinject_present_sends_EntryStepDispatch_with_Payload()
+    [Trait("Phase", "70")]
+    public async Task Reinject_present_sends_EntryStepDispatch_with_envelope_messageId_override()
     {
         var ct = TestContext.Current.CancellationToken;
         var m = new KeeperReinject(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid())
@@ -37,6 +38,7 @@ public sealed class ReinjectConsumerFacts
             CorrelationId = Guid.NewGuid(),
             ExecutionId = Guid.NewGuid(),
             EntryId = Guid.NewGuid(),
+            MessageId = Guid.NewGuid(),   // req 6/A3: re-inject with the SAME messageId on the envelope
             Payload = "{\"cfg\":7}",
         };
         var db = RecoveryTestKit.Db();
@@ -62,10 +64,13 @@ public sealed class ReinjectConsumerFacts
         Assert.Equal(m.WorkflowId, dispatch.WorkflowId);
         Assert.Equal(m.StepId, dispatch.StepId);
         Assert.Equal(m.ProcessorId, dispatch.ProcessorId);
+
+        // req 6: the outbound envelope MessageId is overridden to the carried m.MessageId.
+        Assert.Equal(m.MessageId, Assert.Single(send.SentMessageIds));
     }
 
     [Fact]
-    [Trait("Phase", "52")]
+    [Trait("Phase", "70")]
     public async Task Reinject_absent_drops_no_throw_no_send_and_increments_counter()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -74,6 +79,7 @@ public sealed class ReinjectConsumerFacts
             CorrelationId = Guid.NewGuid(),
             ExecutionId = Guid.NewGuid(),
             EntryId = Guid.NewGuid(),
+            MessageId = Guid.NewGuid(),
             Payload = "{\"cfg\":7}",
         };
         // IN-04: STRLEN==0 covers BOTH a missing key AND an empty value (the absent-OR-empty drop case).
