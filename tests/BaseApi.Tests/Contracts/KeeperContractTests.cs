@@ -64,19 +64,20 @@ public sealed class KeeperContractTests
     }
 
     [Fact]
-    public void KeeperInject_carries_the_A18_id_set_EntryId_Data_DeleteEntryId()
+    public void KeeperInject_embeds_DataResult_and_DeleteEntryId_no_EntryId_or_Data()
     {
-        // D-08: INJECT is forward-only — it carries its own data on the envelope (no composite read).
-        var entryId = typeof(KeeperInject).GetProperty("EntryId");
-        Assert.NotNull(entryId);
-        Assert.Equal(typeof(Guid), entryId!.PropertyType);
-
-        var data = typeof(KeeperInject).GetProperty("Data");
-        Assert.NotNull(data);
-        Assert.Equal(typeof(string), data!.PropertyType);
+        // Phase 70 (D-13): INJECT is forward-only and DataResult-driven — it embeds the whole self-contained
+        // DataResult (data in-hand on the envelope, never recomputed — req 7) plus the source DeleteEntryId.
+        var dataResult = typeof(KeeperInject).GetProperty("DataResult");
+        Assert.NotNull(dataResult);
+        Assert.Equal(typeof(DataResult), dataResult!.PropertyType);
 
         var deleteEntryId = typeof(KeeperInject).GetProperty("DeleteEntryId");
         Assert.NotNull(deleteEntryId);
         Assert.Equal(typeof(Guid), deleteEntryId!.PropertyType);
+
+        // The retired A18 flat operands are gone (the slot/two-key model is retired — 70-01).
+        Assert.Null(typeof(KeeperInject).GetProperty("EntryId"));
+        Assert.Null(typeof(KeeperInject).GetProperty("Data"));
     }
 }

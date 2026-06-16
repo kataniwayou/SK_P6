@@ -19,9 +19,9 @@ namespace BaseApi.Tests.Resilience;
 ///     <c>KeeperUpdate</c> or <c>KeeperCleanup</c> (the retired Model-B state contracts).</item>
 ///   <item>FACT 3 (SC-2) — TYPE ABSENCE: the <c>Keeper</c> assembly has no type named <c>BackupOptions</c>
 ///     (the retired composite-backup TTL options).</item>
-///   <item>FACT 4 (SC-2 positive survivor): <c>L2ProjectionKeys</c> DOES retain a single-Guid-overload
-///     <c>MessageIndex</c> (the A18 slot-array index, added Plan 01) and a single-Guid-overload
-///     <c>ExecutionData</c> — so the guard cannot silently pass on a wholesale builder rename.</item>
+///   <item>FACT 4 (SC-2 positive survivor): <c>L2ProjectionKeys</c> DOES retain single-Guid-overload
+///     <c>ExecutionData</c> + <c>OutputData</c> (the Phase-70 output blob key) AND <c>MessageIndex</c> is now
+///     ABSENT (Phase 70 retired the slot index) — so the guard cannot silently pass on a wholesale rename.</item>
 /// </list>
 /// </summary>
 public sealed class ModelBContractsRetiredFacts
@@ -72,17 +72,23 @@ public sealed class ModelBContractsRetiredFacts
     }
 
     /// <summary>
-    /// FACT 4 (SC-2 positive survivor) — REFLECTION. <see cref="L2ProjectionKeys"/> DOES retain the A18
-    /// slot-array index builder <c>MessageIndex</c> (single Guid overload, added Plan 01) and the GUID data
-    /// builder <c>ExecutionData</c> (single Guid overload) — a wholesale builder rename/removal trips
-    /// <see cref="Assert.Single{T}"/>, so the absence facts above cannot pass vacuously.
+    /// FACT 4 (SC-2 positive survivor) — REFLECTION. Phase 70 (D-10) RETIRED the slot-array index builder
+    /// <c>MessageIndex</c> (the two-key/slot model is gone — 70-01) and added the per-message output blob key
+    /// <c>OutputData</c>. <see cref="L2ProjectionKeys"/> DOES retain the GUID data builder <c>ExecutionData</c>
+    /// and the new <c>OutputData</c> (each a single-Guid overload) — a wholesale builder rename/removal trips
+    /// <see cref="Assert.Single{T}"/>, so the absence facts above cannot pass vacuously — AND <c>MessageIndex</c>
+    /// is now ABSENT (the slot index is retired).
     /// </summary>
     [Fact]
     [Trait("Phase", "50")]
-    public void L2ProjectionKeys_retains_MessageIndex_and_ExecutionData_single_guid_overloads()
+    public void L2ProjectionKeys_retains_OutputData_and_ExecutionData_and_drops_MessageIndex()
     {
-        AssertSingleGuidOverload("MessageIndex");
         AssertSingleGuidOverload("ExecutionData");
+        AssertSingleGuidOverload("OutputData");
+        // Phase 70: the slot-array MessageIndex builder is retired (no public-static overload remains).
+        Assert.DoesNotContain(
+            typeof(L2ProjectionKeys).GetMethods(BindingFlags.Public | BindingFlags.Static),
+            m => m.Name == "MessageIndex");
     }
 
     private static void AssertSingleGuidOverload(string name)

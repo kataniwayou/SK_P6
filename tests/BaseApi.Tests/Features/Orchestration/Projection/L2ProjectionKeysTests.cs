@@ -67,12 +67,14 @@ public sealed class L2ProjectionKeysTests
             L2ProjectionKeys.ExecutionData(Guid.Parse("55555555-5555-5555-5555-555555555555")));
     }
 
+    // Phase 70 (D-10): the slot-array index builder MessageIndex was RETIRED (the two-key/slot model is
+    // gone — 70-01); the per-message OUTPUT blob key OutputData(messageId) = skp:out:{messageId:D} replaced it.
     [Fact]
-    public void MessageIndex_Produces_Prefix_Msg_Discriminator_Plus_HyphenatedGuid()
+    public void OutputData_Produces_Prefix_Out_Discriminator_Plus_HyphenatedGuid()
     {
         Assert.Equal(
-            "skp:msg:55555555-5555-5555-5555-555555555555",
-            L2ProjectionKeys.MessageIndex(Guid.Parse("55555555-5555-5555-5555-555555555555")));
+            "skp:out:55555555-5555-5555-5555-555555555555",
+            L2ProjectionKeys.OutputData(Guid.Parse("55555555-5555-5555-5555-555555555555")));
     }
 
     [Fact]

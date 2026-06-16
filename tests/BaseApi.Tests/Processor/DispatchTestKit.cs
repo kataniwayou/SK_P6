@@ -111,6 +111,33 @@ internal static class DispatchTestKit
             Data          = data,
         };
 
+    // ===== StringSetAsync received-call inspection (overload-agnostic) =====
+    // In SE.Redis 2.13 the ONLY virtual IDatabase.StringSetAsync overload is the
+    // (RedisKey, RedisValue, Expiration, ValueCondition, CommandFlags) form; the TimeSpan?/keepTtl/When
+    // shorthands are EXTENSION methods NSubstitute cannot intercept (using them in Received()/DidNotReceive()
+    // leaks argument matchers — RedundantArgumentMatcherException). So inspect ReceivedCalls() by method name.
+
+    /// <summary>All recorded StringSetAsync calls on the fake db (overload-agnostic).</summary>
+    public static IReadOnlyList<(RedisKey Key, RedisValue Value, object?[] Args, System.Reflection.ParameterInfo[] Parameters)>
+        ReceivedStringSets(IDatabase db) =>
+        db.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == nameof(IDatabase.StringSetAsync))
+            .Select(c =>
+            {
+                var args = c.GetArguments();
+                return ((RedisKey)args[0]!, (RedisValue)args[1]!, args, c.GetMethodInfo().GetParameters());
+            })
+            .ToList();
+
+    /// <summary>True if any recorded StringSetAsync call carried a non-null TTL (TimeSpan? or Expiration).</summary>
+    public static bool HasNonNullTtl(object?[] args, System.Reflection.ParameterInfo[] parameters)
+    {
+        var tsIdx = Array.FindIndex(parameters, p => p.ParameterType == typeof(TimeSpan?));
+        if (tsIdx >= 0) return ((TimeSpan?)args[tsIdx]).HasValue;
+        var expIdx = Array.FindIndex(parameters, p => p.ParameterType.Name == "Expiration");
+        return expIdx >= 0;   // an Expiration arg is always a concrete (non-null) relative expiry here
+    }
+
     // ===== Redis multiplexer fakes (linear Pre flow + OutputTail fault surfaces) =====
 
     private static IConnectionMultiplexer Wrap(IDatabase db)
@@ -125,40 +152,39 @@ internal static class DispatchTestKit
         db.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(ci => values.TryGetValue(((RedisKey)ci[0]).ToString(), out var v) ? (RedisValue)v : RedisValue.Null);
 
-    /// <summary>Stubs the OutputData write (StringSetAsync, all bindable overloads) to SUCCEED.</summary>
-    private static void StubWriteOk(IDatabase db)
-    {
+    /// <summary>Stubs the OutputData write to SUCCEED. The production tail calls the 3-arg
+    /// <c>StringSetAsync(key, value, ttl)</c>, which binds to the REAL (virtual) keepTtl 6-arg interface
+    /// overload (the <c>TimeSpan?</c>/<c>When</c> shorthands are extension methods NSubstitute cannot
+    /// intercept — using them here leaks argument matchers, RedundantArgumentMatcherException). Stub ONLY the
+    /// real virtual overloads (the 6-arg keepTtl + the SE.Redis 2.13 Expiration/ValueCondition form).</summary>
+    private static void StubWriteOk(IDatabase db) =>
+        // The real virtual IDatabase.StringSetAsync overload in SE.Redis 2.13 is the keepTtl 6-arg form; the
+        // 3-arg write the production tail calls binds to it. (The Expiration/ValueCondition and bare TimeSpan?
+        // forms are extension methods — stubbing them leaks NSubstitute matchers.)
         db.StringSetAsync(
                 Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(),
                 Arg.Any<bool>(), Arg.Any<When>(), Arg.Any<CommandFlags>())
             .Returns(true);
-#pragma warning disable CS0618 // obsolete When-overloads still bindable
-        db.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
-#pragma warning restore CS0618
-    }
 
-    /// <summary>Throws <see cref="RedisConnectionException"/> on EVERY StringSetAsync overload the compiler
-    /// may bind (SE.Redis carries TimeSpan?/keepTtl/When/Expiration overloads) — the OutputData-write fault
-    /// surface (Pitfall 1: a single-overload stub false-greens). KeyDeleteAsync stays a no-op success.</summary>
+    /// <summary>Throws <see cref="RedisConnectionException"/> on the REAL (virtual) StringSetAsync overloads
+    /// the 3-arg write may bind to (the keepTtl 6-arg AND the 2.13 Expiration/ValueCondition form) — the
+    /// OutputData-write fault surface (Pitfall 1/T-70-11: a single-overload stub false-greens). The
+    /// <c>TimeSpan?</c>/<c>When</c> shorthands are extension methods and are deliberately NOT stubbed (they
+    /// would leak NSubstitute argument matchers).</summary>
     private static void StubWriteFault(IDatabase db, string why)
     {
         var boom = new RedisConnectionException(ConnectionFailureType.UnableToConnect, why);
-        db.When(x => x.StringSetAsync(
-                Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(),
-                Arg.Any<bool>(), Arg.Any<When>(), Arg.Any<CommandFlags>()))
-            .Do(_ => throw boom);
-#pragma warning disable CS0618
-        db.When(x => x.StringSetAsync(
-                Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(),
-                Arg.Any<When>(), Arg.Any<CommandFlags>()))
-            .Do(_ => throw boom);
-        db.When(x => x.StringSetAsync(
-                Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>()))
-            .Do(_ => throw boom);
-#pragma warning restore CS0618
+        // The 3-arg write StringSetAsync(key, value, ttl) binds to the Expiration/ValueCondition overload
+        // (TimeSpan? implicitly converts to Expiration). Throw on BOTH real virtual overloads it could bind to
+        // (Pitfall 1 / T-70-11: a single-overload stub false-greens — an unstubbed Task<bool> returns a
+        // completed false and the write looks like it "succeeded").
         db.When(x => x.StringSetAsync(
                 Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<Expiration>(),
                 Arg.Any<ValueCondition>(), Arg.Any<CommandFlags>()))
+            .Do(_ => throw boom);
+        db.When(x => x.StringSetAsync(
+                Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(),
+                Arg.Any<bool>(), Arg.Any<When>(), Arg.Any<CommandFlags>()))
             .Do(_ => throw boom);
     }
 
@@ -332,18 +358,19 @@ internal static class DispatchTestKit
             endpoint.Send(Arg.Any<object>(), Arg.Any<CancellationToken>())
                 .Returns(ci => { Record(address, ci.ArgAt<object>(0)); return Task.CompletedTask; });
 
-            // Phase-70 envelope-override overload: Send(object, Action<SendContext>, ct). Materialize the
-            // callback against a substituted SendContext and record the set MessageId (req 11 SpawnToPost).
-            endpoint.Send(Arg.Any<object>(), Arg.Any<Action<SendContext>>(), Arg.Any<CancellationToken>())
-                .Returns(ci =>
+            // Phase-70 envelope override: the production calls the EXTENSION Send(object, Action<SendContext>, ct),
+            // which forwards to the REAL virtual ISendEndpoint.Send(object, IPipe<SendContext>, ct). NSubstitute
+            // can only intercept the real method (stubbing the extension leaks argument matchers). Materialize
+            // the pipe against a real SendContext and record the MessageId the override set (req 6/11).
+            endpoint.Send(Arg.Any<object>(), Arg.Any<IPipe<SendContext>>(), Arg.Any<CancellationToken>())
+                .Returns(async ci =>
                 {
                     var msg = ci.ArgAt<object>(0);
-                    var callback = ci.ArgAt<Action<SendContext>>(1);
+                    var pipe = ci.ArgAt<IPipe<SendContext>>(1);
                     var sendCtx = Substitute.For<SendContext>();
-                    callback(sendCtx);                          // applies ctx.MessageId = carried id
+                    await pipe.Send(sendCtx);                    // applies ctx.MessageId = carried id
                     SentMessageIds.Add(sendCtx.MessageId ?? Guid.Empty);
                     Record(address, msg);
-                    return Task.CompletedTask;
                 });
 
             return Task.FromResult(endpoint);

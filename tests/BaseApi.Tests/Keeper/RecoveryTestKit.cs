@@ -98,18 +98,34 @@ internal static class RecoveryTestKit
             endpoint.Send(Arg.Any<StepCompleted>(), Arg.Any<CancellationToken>())
                 .Returns(ci => { Sent.Add((address, ci[0]!)); return Task.CompletedTask; });
 
-            // Phase 70 envelope-override overload: Send(object, Action<SendContext>, CancellationToken).
-            // Materialize the callback against a substituted SendContext and record the set MessageId.
-            endpoint.Send(Arg.Any<object>(), Arg.Any<Action<SendContext>>(), Arg.Any<CancellationToken>())
-                .Returns(ci =>
+            // Phase 70 envelope override: the consumer calls the EXTENSION Send(object, Action<SendContext>, ct),
+            // which forwards to the REAL virtual ISendEndpoint.Send(object, IPipe<SendContext>, ct). NSubstitute
+            // can only intercept the real method (stubbing the extension leaks argument matchers). Materialize
+            // the pipe against a substituted SendContext and record the MessageId the override set (req 6/11).
+            endpoint.Send(Arg.Any<object>(), Arg.Any<IPipe<SendContext>>(), Arg.Any<CancellationToken>())
+                .Returns(async ci =>
                 {
                     var msg = ci.ArgAt<object>(0);
-                    var callback = ci.ArgAt<Action<SendContext>>(1);
+                    var pipe = ci.ArgAt<IPipe<SendContext>>(1);
                     var sendCtx = Substitute.For<SendContext>();
-                    callback(sendCtx);                  // applies ctx.MessageId = carried id
+                    await pipe.Send(sendCtx);           // applies ctx.MessageId = carried id
                     Sent.Add((address, msg));
                     SentMessageIds.Add(sendCtx.MessageId ?? Guid.Empty);
-                    return Task.CompletedTask;
+                });
+
+            // REINJECT calls the TYPED extension Send(dispatch, Action<SendContext<EntryStepDispatch>>, ct) →
+            // the real generic Send<EntryStepDispatch>(T, IPipe<SendContext<EntryStepDispatch>>, ct). Capture
+            // that closed-generic real method too (SendContext<T> : SendContext, so MessageId is readable).
+            endpoint.Send(Arg.Any<EntryStepDispatch>(),
+                          Arg.Any<IPipe<SendContext<EntryStepDispatch>>>(), Arg.Any<CancellationToken>())
+                .Returns(async ci =>
+                {
+                    var msg = ci.ArgAt<EntryStepDispatch>(0);
+                    var pipe = ci.ArgAt<IPipe<SendContext<EntryStepDispatch>>>(1);
+                    var sendCtx = Substitute.For<SendContext<EntryStepDispatch>>();
+                    await pipe.Send(sendCtx);           // applies ctx.MessageId = carried id
+                    Sent.Add((address, msg));
+                    SentMessageIds.Add(sendCtx.MessageId ?? Guid.Empty);
                 });
 
             return Task.FromResult(endpoint);

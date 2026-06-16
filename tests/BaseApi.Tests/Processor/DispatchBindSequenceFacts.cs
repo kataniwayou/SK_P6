@@ -35,11 +35,15 @@ public sealed class DispatchBindSequenceFacts
     /// </summary>
     private sealed class RecordingConnector(List<string> log) : IReceiveEndpointConnector
     {
-        public string? BoundQueueName { get; private set; }
+        /// <summary>The FIRST queue bound (the entry endpoint {id:D}); kept for the legacy single-bind assertions.</summary>
+        public string? BoundQueueName => BoundQueueNames.Count > 0 ? BoundQueueNames[0] : null;
+
+        /// <summary>Every queue bound, in bind order — Phase 70 binds TWO: {id:D} then {id:D}-post.</summary>
+        public List<string> BoundQueueNames { get; } = new();
 
         public HostReceiveEndpointHandle ConnectReceiveEndpoint(string queueName, Action<IBusRegistrationContext, IReceiveEndpointConfigurator> configure)
         {
-            BoundQueueName = queueName;
+            BoundQueueNames.Add(queueName);
             log.Add("connect");
             return new RecordingHandle(log);
         }
@@ -104,19 +108,26 @@ public sealed class DispatchBindSequenceFacts
     {
         var (log, connector, foundId) = await DriveOrchestratorToHealthy();
 
-        // The bind happened, its Ready was awaited, and MarkHealthy ran STRICTLY after — in that order.
-        Assert.Equal(new[] { "connect", "ready", "markhealthy" }, log);
+        // Phase 70 (req 11 / D-16): BOTH the entry endpoint and the -post endpoint bind, BOTH .Ready awaits
+        // complete, and MarkHealthy runs STRICTLY AFTER both — the ordered log is exactly
+        // [connect, ready, connect, ready, markhealthy].
+        Assert.Equal(new[] { "connect", "ready", "connect", "ready", "markhealthy" }, log);
         Assert.NotNull(connector.BoundQueueName);
     }
 
     [Fact]
-    public async Task Binds_Bare_IdFormat_QueueName()
+    public async Task Binds_Entry_And_Post_Queues_BeforeMarkHealthy()
     {
-        var (_, connector, foundId) = await DriveOrchestratorToHealthy();
+        var (log, connector, foundId) = await DriveOrchestratorToHealthy();
 
-        // The bound queue name is the bare Id "D" format — NO "queue:" prefix (the scheme is sender-only).
-        Assert.Equal(foundId.ToString("D"), connector.BoundQueueName);
-        Assert.DoesNotContain("queue:", connector.BoundQueueName!);
+        // Both queues are bound: the bare {id:D} entry queue AND its {id:D}-post sibling (req 11 / D-16).
+        Assert.Equal(2, connector.BoundQueueNames.Count);
+        Assert.Equal(foundId.ToString("D"), connector.BoundQueueNames[0]);          // entry: bare id, no "queue:" prefix
+        Assert.Equal($"{foundId:D}-post", connector.BoundQueueNames[1]);            // sibling -post endpoint
+        Assert.DoesNotContain("queue:", connector.BoundQueueNames[0]);
+        Assert.DoesNotContain("queue:", connector.BoundQueueNames[1]);
+        // MarkHealthy is the LAST event — strictly after both binds + ready awaits.
+        Assert.Equal("markhealthy", log[^1]);
     }
 
     /// <summary>
@@ -204,7 +215,8 @@ public sealed class DispatchBindSequenceFacts
             configSchemaId: null,
             definitions: new Dictionary<Guid, string>());
 
-        Assert.Equal(new[] { "connect", "ready", "markhealthy" }, log);
+        // Phase 70: both endpoints bind on the null-config skip path → [connect, ready, connect, ready, markhealthy].
+        Assert.Equal(new[] { "connect", "ready", "connect", "ready", "markhealthy" }, log);
         Assert.NotNull(connector.BoundQueueName);
         Assert.True(context.IsHealthy);
     }
