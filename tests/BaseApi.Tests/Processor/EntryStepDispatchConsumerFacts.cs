@@ -24,11 +24,13 @@ public sealed class EntryStepDispatchConsumerFacts
         // A real-ish pipeline so the ctor is satisfied; it is NEVER reached — the null-MessageId guard fires
         // BEFORE RunAsync (the metric line, which reads context.Id, runs first and needs a non-null Id, which
         // FakeProcessorContext supplies by default).
-        var redis = DispatchTestKit.ForwardOkL2(new Dictionary<string, string>(), out _);
-        var processor = new DispatchTestKit.FakeProcessor(new List<ProcessItem>());
+        var redis = DispatchTestKit.ReadWriteDeleteOkL2(new Dictionary<string, string>(), out _);
+        var processor = new DispatchTestKit.FakeProcessor((DataResult?)null);
         var send = new DispatchTestKit.CapturingSendProvider();
+        var outputTail = new OutputTail(redis, context, send, DispatchTestKit.Retry(3),
+            DispatchTestKit.Options(300), DispatchTestKit.Metrics());
         var pipeline = new ProcessorPipeline(
-            redis, context, processor, send, DispatchTestKit.Retry(3), DispatchTestKit.Options(300),
+            redis, context, processor, send, DispatchTestKit.Retry(3), outputTail,
             DispatchTestKit.Metrics(), NullLogger<ProcessorPipeline>.Instance);
 
         var consumer = new EntryStepDispatchConsumer(pipeline, context, DispatchTestKit.Metrics());
