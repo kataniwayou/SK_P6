@@ -5,10 +5,10 @@ milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: Not started
 status: completed
 stopped_at: Phase 70 context gathered
-last_updated: "2026-06-16T20:22:45.804Z"
+last_updated: "2026-06-16T20:56:17.648Z"
 last_activity: "2026-06-15 - Completed quick task 260615-kgz: per-(correlationId,executionId) multi-execution scoring"
 progress:
-  total_phases: 29
+  total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -1578,4 +1578,4 @@ Resume file: --resume-file
 
 **Previous Phase:** 11 (migrate-prometheus-and-elastic-containers-from-compose-stack) — 10/10 plans — verified 2026-05-28 (3 consecutive GREEN dotnet test runs at 142/142 facts each; byte-identical psql `\l` SHA-256 `0d98b0de…0aac127`; OBSERV-12 superseded; INFRA-06 amendment locked in)
 
-**Planned Phase:** 68 (Live Resilience Proof — 7 Scenarios (Capstone)) — 2 plans — 2026-06-15T04:04:41.648Z
+**Planned Phase:** 70 (two-consumer-processor-design-pre-process-post-process-with-) — 5 plans — 2026-06-16T20:56:17.632Z
