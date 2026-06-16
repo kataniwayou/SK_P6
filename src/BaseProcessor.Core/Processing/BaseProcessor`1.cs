@@ -1,5 +1,6 @@
 using System.Text.Json;
 using BaseProcessor.Core.Configuration;
+using Messaging.Contracts;   // DataResult
 
 namespace BaseProcessor.Core.Processing;
 
@@ -16,7 +17,7 @@ namespace BaseProcessor.Core.Processing;
 public abstract class BaseProcessor<TConfig> : BaseProcessor
     where TConfig : ProcessorConfig   // reference-type/marker constraint → null representable (D-04, Pattern 4)
 {
-    internal sealed override Task<List<ProcessItem>> ExecuteAsync(
+    internal sealed override Task<DataResult?> ExecuteAsync(
         string validatedData, string payload, Guid executionId, CancellationToken ct)
     {
         TConfig? config = string.IsNullOrWhiteSpace(payload)              // D-04 guard BEFORE deserialize
@@ -34,6 +35,6 @@ public abstract class BaseProcessor<TConfig> : BaseProcessor
     /// DOWNSTREAM (reuse it unchanged to preserve the instance lineage). May THROW a
     /// <c>ProcessStatusException</c> to abort the batch.
     /// </summary>
-    protected abstract Task<List<ProcessItem>> ProcessAsync(
+    protected abstract Task<DataResult?> ProcessAsync(
         string validatedData, TConfig? config, Guid executionId, CancellationToken ct);
 }
