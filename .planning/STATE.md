@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
-status: executing
-stopped_at: Completed 70-03-PLAN.md
-last_updated: "2026-06-16T21:36:55.039Z"
+status: verifying
+stopped_at: Completed 70-04-PLAN.md
+last_updated: "2026-06-16T22:48:22.802Z"
 last_activity: 2026-06-16
 progress:
   total_phases: 4
@@ -33,7 +33,7 @@ Phase: 70 (two-consumer-processor-design) — EXECUTING
 Current Plan: 1
 Total Plans: 2
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-16
 
 > Phase 68 (capstone live proof) — ✅ COMPLETE 2026-06-15. The live 7-scenario fault sweep ran end-to-end (`scripts/phase-68-sweep.ps1`, ~1h, windows ~04:30→05:25 UTC): **6/7 PASS** (TEST-01..05 + TEST-07, each zero-missing + effect-once); wrapper exit 1. The lone **TEST-06 (rabbitmq) VERDICT_FAIL** (MISSING:2, 7/9 complete; effect-once held) was traced — `KeeperReinjectDroppedDelta:2 == Missing:2` → the by-design `ReinjectConsumer.cs:37` silent-DROP (`STRLEN L2[entryId]==0`): the 5s `Processor__ExecutionDataTtl` (compose:285) self-expired across the 45s outage so keeper REINJECT correctly dropped already-gone keys. Corroborated by TEST-07 (strictly-harder redis+rabbitmq superset) PASS 8/8 — a deterministic rabbitmq-recovery defect would have failed TEST-07 too. **Spec-owner disposition: ACCEPT AS TEST-ENV TTL ARTIFACT** (accept-with-rationale; NO code/TTL/dwell/retry change, D-01b/D-04 honoured). Recovery machinery **PROVEN across all 7 fault classes**; TEST-06's miss documented as a known test-env TTL artifact. TEST-01..07 all complete (TEST-06 proven-with-documented-artifact). Roll-up `analyzer-reports/phase-68-summary.json` (`098f36a`). Summary: `.planning/phases/68-live-resilience-proof-7-scenarios-capstone/68-02-SUMMARY.md`.
@@ -1018,6 +1018,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 70 P70-05 | ~2 min | 1 tasks | 1 files |
 | Phase 70 P70-02 | 35min | 2 tasks | 8 files |
 | Phase 70 P70-03 | 7 | 2 tasks | 11 files |
+| Phase 70 P70-04 | 63 | 2 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -1475,6 +1476,7 @@ Recent decisions affecting current work:
 - Phase 70-02: keeper L2[messageId] TTL knob added as RecoveryOptions.ExecutionDataTtlSeconds (300 default) — smallest addition vs threading ProcessorLivenessOptions into Keeper
 - 70-03: ProcessAsync seam returns Task<DataResult?>; SpawnToPost swallows on exhaust, DeleteEntry escalates DELETE; shared OutputTail is the single output-tail source of truth
 - 70-03: Step* sends carry EntryId=Guid.Empty (A1 — orchestrator entryId↔messageId threading SPEC-deferred)
+- Phase 70-04: real virtual ISendEndpoint.Send overload is the IPipe<SendContext> form — the Action<SendContext> envelope-override is an extension method NSubstitute can't intercept; fixed both DispatchTestKit + RecoveryTestKit doubles. Whole hermetic suite green (615/0/0).
 
 ### Roadmap Milestone Log
 
@@ -1580,8 +1582,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-16T21:36:46.289Z
-Stopped at: Completed 70-03-PLAN.md
+Last session: 2026-06-16T22:48:22.782Z
+Stopped at: Completed 70-04-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
