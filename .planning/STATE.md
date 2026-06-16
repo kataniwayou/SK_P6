@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 70-02-PLAN.md
-last_updated: "2026-06-16T21:25:08.667Z"
+stopped_at: Completed 70-03-PLAN.md
+last_updated: "2026-06-16T21:36:55.039Z"
 last_activity: 2026-06-16
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove per
 Phase: 70 (two-consumer-processor-design) — EXECUTING
 Current Plan: 1
 Total Plans: 2
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-06-16
 
@@ -1017,6 +1017,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 70 P01 | 8min | 2 tasks | 5 files |
 | Phase 70 P70-05 | ~2 min | 1 tasks | 1 files |
 | Phase 70 P70-02 | 35min | 2 tasks | 8 files |
+| Phase 70 P70-03 | 7 | 2 tasks | 11 files |
 
 ## Accumulated Context
 
@@ -1472,6 +1473,8 @@ Recent decisions affecting current work:
 - Phase 70-01: keeper contracts reshaped — Inject embeds whole DataResult + DeleteEntryId; Delete is entryId-only (MessageId dropped); Reinject gains Guid MessageId (same-messageId re-inject); all keep the 4-tuple partition fields
 - Phase 70-02: A4 resolved — MT 8.5.5 Send(object/T, Action<SendContext>, ct) envelope-override overload compiles (no IPipe fallback); used by keeper INJECT + REINJECT for the MessageId override
 - Phase 70-02: keeper L2[messageId] TTL knob added as RecoveryOptions.ExecutionDataTtlSeconds (300 default) — smallest addition vs threading ProcessorLivenessOptions into Keeper
+- 70-03: ProcessAsync seam returns Task<DataResult?>; SpawnToPost swallows on exhaust, DeleteEntry escalates DELETE; shared OutputTail is the single output-tail source of truth
+- 70-03: Step* sends carry EntryId=Guid.Empty (A1 — orchestrator entryId↔messageId threading SPEC-deferred)
 
 ### Roadmap Milestone Log
 
@@ -1577,8 +1580,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-16T21:25:08.651Z
-Stopped at: Completed 70-02-PLAN.md
+Last session: 2026-06-16T21:36:46.289Z
+Stopped at: Completed 70-03-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
