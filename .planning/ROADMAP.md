@@ -679,13 +679,17 @@ Plans:
 
 ### Phase 70: Two-consumer processor design (Pre-Process + Post-Process) with keeper recovery
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Replace the single-consumer `ProcessorPipeline` slot-array model in-place with the pinned two-consumer design — a Pre-Process consumer gating on `L2[entryId]` whose `ProcessAsync` seam returns one `DataResult` (downstream) or spawns N to a new Post-Process consumer and returns null (entry), output keyed by `messageId` and written only when `result == completed`, with keeper states `REINJECT`/`INJECT`/`DELETE` redefined accordingly. (Source of truth: `70-SPEC.md` — 12 requirements + pinned pseudocode; D-01..D-17.)
+**Requirements**: SPEC-req-1 .. SPEC-req-12 (the 12 numbered requirements in 70-SPEC.md)
 **Depends on:** Phase 69
-**Plans:** 0 plans
+**Plans:** 5 plans (3 waves)
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 70 to break down)
+- [ ] 70-01-PLAN.md — Contract foundation: DataResult record + L2ProjectionKeys.OutputData (delete MessageIndex) + reshape KeeperInject/Delete/Reinject (SPEC-req-6/7/8/11) [Wave 1]
+- [ ] 70-05-PLAN.md — Mark `docs/design/processor-keeper-recovery-spec.md` superseded-by-Phase-70 (SPEC-req-12) [Wave 1]
+- [ ] 70-02-PLAN.md — Reshape keeper consumers (INJECT DataResult-driven + OutputData write; DELETE single-key; REINJECT envelope MessageId override) + keeper facts (SPEC-req-6/7/8/11/12) [Wave 2]
+- [ ] 70-03-PLAN.md — Processor core rewrite: seam->DataResult? + SpawnToPost/DeleteEntry + shared OutputTail + PostProcessConsumer + linear Pre flow (gate L2[entryId], no-delete-on-invalid) + -post bind + two-mode Sample + delete ProcessItem/ProcessOutcome (SPEC-req-1/2/3/4/5/9/10/11) [Wave 2]
+- [ ] 70-04-PLAN.md — Processor test migration: DataResult? doubles + MessageId-capture + Pre/Post/OutputTail/Seam/Sample facts; whole-suite green + 0-warning dual-config (SPEC-req-1..12) [Wave 3]
 
 ---
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
