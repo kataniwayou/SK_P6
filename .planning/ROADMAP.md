@@ -685,7 +685,7 @@ Plans:
 **Plans:** 5 plans (3 waves)
 
 Plans:
-- [ ] 70-01-PLAN.md — Contract foundation: DataResult record + L2ProjectionKeys.OutputData (delete MessageIndex) + reshape KeeperInject/Delete/Reinject (SPEC-req-6/7/8/11) [Wave 1]
+- [x] 70-01-PLAN.md — Contract foundation: DataResult record + L2ProjectionKeys.OutputData (delete MessageIndex) + reshape KeeperInject/Delete/Reinject (SPEC-req-6/7/8/11) [Wave 1] ✓ DataResult.cs (new) + OutputData/MessageIndex-removed + KeeperInject embeds DataResult + KeeperDelete entryId-only + KeeperReinject gains MessageId; Messaging.Contracts 0/0 Release+Debug; commits e5b752c, e149d88
 - [ ] 70-05-PLAN.md — Mark `docs/design/processor-keeper-recovery-spec.md` superseded-by-Phase-70 (SPEC-req-12) [Wave 1]
 - [ ] 70-02-PLAN.md — Reshape keeper consumers (INJECT DataResult-driven + OutputData write; DELETE single-key; REINJECT envelope MessageId override) + keeper facts (SPEC-req-6/7/8/11/12) [Wave 2]
 - [ ] 70-03-PLAN.md — Processor core rewrite: seam->DataResult? + SpawnToPost/DeleteEntry + shared OutputTail + PostProcessConsumer + linear Pre flow (gate L2[entryId], no-delete-on-invalid) + -post bind + two-mode Sample + delete ProcessItem/ProcessOutcome (SPEC-req-1/2/3/4/5/9/10/11) [Wave 2]

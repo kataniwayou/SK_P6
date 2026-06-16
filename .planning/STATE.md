@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: Not started
-status: completed
-stopped_at: Phase 70 context gathered
-last_updated: "2026-06-16T20:56:17.648Z"
-last_activity: "2026-06-15 - Completed quick task 260615-kgz: per-(correlationId,executionId) multi-execution scoring"
+current_plan: 1
+status: executing
+stopped_at: Completed 70-01-PLAN.md
+last_updated: "2026-06-16T21:13:12.071Z"
+last_activity: 2026-06-16
 progress:
   total_phases: 4
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
-  percent: 99
+  percent: 0
 ---
 
 # Project State
@@ -21,7 +21,7 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** No active milestone — v8.0.0 shipped (7-scenario live resilience capstone 7/7 PASS). Next: `/gsd-new-milestone`. ⚠ Before the next milestone's phase work, run `/gsd-cleanup` to archive the still-in-place phase dirs 01-62.1 from prior milestones.
+**Current focus:** Phase 70 — two-consumer-processor-design
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
@@ -29,12 +29,12 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 68
-Current Plan: Not started
+Phase: 70 (two-consumer-processor-design) — EXECUTING
+Current Plan: 1
 Total Plans: 2
-Plan: 2 of 2
-Status: Milestone complete
-Last activity: 2026-06-15 - Completed quick task 260615-kgz: per-(correlationId,executionId) multi-execution scoring
+Plan: 2 of 5
+Status: Ready to execute
+Last activity: 2026-06-16
 
 > Phase 68 (capstone live proof) — ✅ COMPLETE 2026-06-15. The live 7-scenario fault sweep ran end-to-end (`scripts/phase-68-sweep.ps1`, ~1h, windows ~04:30→05:25 UTC): **6/7 PASS** (TEST-01..05 + TEST-07, each zero-missing + effect-once); wrapper exit 1. The lone **TEST-06 (rabbitmq) VERDICT_FAIL** (MISSING:2, 7/9 complete; effect-once held) was traced — `KeeperReinjectDroppedDelta:2 == Missing:2` → the by-design `ReinjectConsumer.cs:37` silent-DROP (`STRLEN L2[entryId]==0`): the 5s `Processor__ExecutionDataTtl` (compose:285) self-expired across the 45s outage so keeper REINJECT correctly dropped already-gone keys. Corroborated by TEST-07 (strictly-harder redis+rabbitmq superset) PASS 8/8 — a deterministic rabbitmq-recovery defect would have failed TEST-07 too. **Spec-owner disposition: ACCEPT AS TEST-ENV TTL ARTIFACT** (accept-with-rationale; NO code/TTL/dwell/retry change, D-01b/D-04 honoured). Recovery machinery **PROVEN across all 7 fault classes**; TEST-06's miss documented as a known test-env TTL artifact. TEST-01..07 all complete (TEST-06 proven-with-documented-artifact). Roll-up `analyzer-reports/phase-68-summary.json` (`098f36a`). Summary: `.planning/phases/68-live-resilience-proof-7-scenarios-capstone/68-02-SUMMARY.md`.
 
@@ -705,7 +705,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [██████████] 99%
+Progress: [░░░░░░░░░░] 0%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1014,6 +1014,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 66 P03 | 9min | 2 tasks | 2 files |
 | Phase 67 P02 | 5min | 2 tasks | 1 files |
 | Phase 68 P01 | 3min | 3 tasks | 3 files |
+| Phase 70 P01 | 8min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1464,6 +1465,9 @@ Recent decisions affecting current work:
 - 66-03: AnalyzerE2ETests write-then-assert (JSON report written before verdict assert -> exists on red); scenarioId path-traversal guarded
 - 67-02: harness adds a clean-orchestrator restart (STEP B1) + MTP --filter-method to bake in the three 67-01 live findings
 - Phase 68-01: 5 harness scenario rows TEST-03..07 (uniform D-01 recipe: stop-start/N=4/45s), phase-68-sweep.ps1 one-shot driver (run-all, exit 0 iff 7/7 PASS), fixture renamed Analyze_Window_Yields_Pass synced to both --filter-method literals
+- Phase 70-01: DataResult is a single self-contained spine record (seam return + Post IConsumer<DataResult> wire + KeeperInject embedded body, D-01/D-02); reuses 4-value StepOutcome (D-04); does NOT implement IKeeperRecoverable
+- Phase 70-01: L2 namespace split — skp:out:{messageId:D} (OutputData, output blobs by messageId) vs skp:data:{entryId:D} (ExecutionData, input blobs by entryId); MessageIndex/skp:msg retired
+- Phase 70-01: keeper contracts reshaped — Inject embeds whole DataResult + DeleteEntryId; Delete is entryId-only (MessageId dropped); Reinject gains Guid MessageId (same-messageId re-inject); all keep the 4-tuple partition fields
 
 ### Roadmap Milestone Log
 
@@ -1569,9 +1573,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: --stopped-at
-Stopped at: Phase 70 context gathered
-Resume file: --resume-file
+Last session: 2026-06-16T21:12:38.358Z
+Stopped at: Completed 70-01-PLAN.md
+Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
 **Phase 29 (Structured Execution-Scope Logging):** 5/5 plans complete — close gate GATE_EXIT=0 (405 Passed ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held; live scopeProof passes on a `processor-sample` Completed log); LOG-01..06 all complete. Awaiting orchestrator phase verification + `phase.complete`. Milestone v3.5.0 = 17/17 plans across phases 25-29.
