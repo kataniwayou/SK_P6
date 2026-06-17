@@ -71,6 +71,7 @@ Downstream agents MUST read `71-SPEC.md` before planning or implementing. Requir
 - **D-16:** All new L2 ops run through **`BaseConsole.Core`'s `RetryLoop`** (the same bounded helper the processor + Keeper use): read→`REINJECT`, write→`INJECT`, delete→`DELETE`, send→throw.
 - **D-17:** The `data:` write carries the jittered **`L2ProjectionKeys.OutputDataTtl`** policy (single source of truth), floor from the orchestrator's own option (default 300, consistent with `ProcessorLivenessOptions`/`RecoveryOptions`).
 - **D-18:** **Trip-end signal** = a counter on the existing `OrchestratorMetrics` with **two reasons** (`completed-terminal` vs `completed-unresolved`), each paired with a **distinct structured log line** (consistent with `TypedResultConsumer`'s current business-ack log + the v8.0.0-verified metric style). No new bus event. This makes the no-silent-loss property falsifiable (every trip-end is counted/traced).
+  - **⚠ SCOPE UPDATE (2026-06-17, user):** the **metric counter is DEFERRED** to a later phase (see [Deferred Ideas](#deferred-ideas)). For Phase 71 the trip-end signal is realized by the **two distinct structured log lines only** (`completed-terminal` / `completed-unresolved`) plus the behavior (ack, never throw/park/keeper). No-silent-loss (SPEC req 2) stays falsifiable via the distinct logs + behavior; tests assert the log signatures, not a counter. The `orchestrator_trip_ended` instrument lands when the deferred metric phase runs.
 
 ### Claude's Discretion
 - Exact C# names/namespaces/nullability for `NextStepHandoff`, the orchestrator keeper contracts, the Pre-pipeline class, the relocate-tail helper, and the Post consumer/definition (keep consistent with existing `Step*`/`DataResult`/`OutputTail` conventions).
@@ -152,7 +153,9 @@ Downstream agents MUST read `71-SPEC.md` before planning or implementing. Requir
 <deferred>
 ## Deferred Ideas
 
-None — discussion stayed within phase scope. (Fan-in / merge / AND-join is already SPEC-declared out of scope, owned by a future phase; the processor's statelessness makes OR-join / fire-per-edge the model.)
+- **Trip-end metric counter (`orchestrator_trip_ended`, two-reason `Reason` tag) — DEFERRED (2026-06-17, user).** D-18 originally paired a metric counter WITH the two distinct structured log lines. The user deferred **only the metric counter** to a later phase. Phase 71 ships the **two distinct trip-end log lines** (`completed-terminal` / `completed-unresolved`) + the behavior (ack, never throw/park/keeper), which keeps SPEC req 2's no-silent-loss property falsifiable (tests assert the log signatures + ack + no-keeper/no-throw). When the deferred phase runs, add the `orchestrator_trip_ended` counter on `OrchestratorMetrics` alongside the existing logs — no behavior change, purely additive observability. **Note:** SPEC req 2 / its acceptance criterion mention an "orchestration-completed metric"; that metric clause is the deferred slice — the requirement's *guarantee* (clean trip-completion with a distinct, countable-by-log reason) is still delivered this phase.
+
+- Fan-in / merge / AND-join is already SPEC-declared out of scope, owned by a future phase; the processor's statelessness makes OR-join / fire-per-edge the model.
 
 </deferred>
 
