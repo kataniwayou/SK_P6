@@ -32,5 +32,7 @@ public sealed class ProcessorMetricsFacts
 
         Assert.NotNull(metrics.DispatchConsumed);
         Assert.NotNull(metrics.ResultSent);
+        Assert.NotNull(metrics.DispatchDeduped);
+        Assert.NotNull(metrics.SpawnDropped);   // IN-03: spawn-drop has its own counter
     }
 }

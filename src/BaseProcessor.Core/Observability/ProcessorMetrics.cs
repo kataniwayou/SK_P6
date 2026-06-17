@@ -39,11 +39,18 @@ public sealed class ProcessorMetrics
     /// </summary>
     public Counter<long> DispatchDeduped { get; }
 
+    /// <summary>IN-03 (Phase 70): <c>processor_spawn_dropped</c> — incremented when a Mode-2
+    /// <c>SpawnToPost</c> send EXHAUSTS the bounded RetryLoop and is swallowed (best-effort spawn; the
+    /// scheduler re-fires the whole entry). Its OWN counter so the spawn-drop rate is observable and is not
+    /// conflated with the unrelated dispatch-dedup signal. Tagged <c>ProcessorId</c> at the increment site.</summary>
+    public Counter<long> SpawnDropped { get; }
+
     public ProcessorMetrics(IMeterFactory meterFactory)
     {
         var meter = meterFactory.Create(MeterName);
         DispatchConsumed  = meter.CreateCounter<long>("processor_dispatch_consumed");   // D-03 — collector appends the suffix
         ResultSent        = meter.CreateCounter<long>("processor_result_sent");         // D-03 — collector appends the suffix
         DispatchDeduped   = meter.CreateCounter<long>("processor_dispatch_deduped");    // Phase 32 D-10 — collector appends the suffix
+        SpawnDropped      = meter.CreateCounter<long>("processor_spawn_dropped");       // IN-03 — collector appends the suffix
     }
 }
