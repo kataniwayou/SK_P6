@@ -45,7 +45,7 @@ public sealed class SampleProcessor(ILogger<SampleProcessor> logger) : BaseProce
 
         if (executionId == Guid.Empty)
         {
-            // ENTRY/seed (Mode-2): generate 2 numbers, log the line, spawn 2 to Post (distinct minted execIds,
+            // ENTRY/seed (Mode-2): seed 2 fixed numbers, log the line, spawn 2 to Post (distinct minted execIds,
             // swallow on exhaust), delete the inbound entry, return null.
             // D-01/D-02: seed the two FIXED execution values (100, 200). Every step's payload number = 1
             // (seeder data change, Plan 04) so each downstream hop increments by exactly +1, making the L2
