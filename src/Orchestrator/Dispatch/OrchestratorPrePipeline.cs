@@ -65,7 +65,7 @@ public sealed class OrchestratorPrePipeline(
 
         // 2) SelectNext (REQ-71-03): a resolved-but-terminal step (empty match set) is the other graceful
         //    trip-end — a DISTINCT "completed-terminal" line + ack (NO throw, NO keeper).
-        var matches = advancement.SelectNext(outcome, completed, wf.Steps).ToList();
+        var matches = advancement.SelectNext(outcome, completed, wf.Steps).Matches;
         if (matches.Count == 0)
         {
             logger.LogInformation(

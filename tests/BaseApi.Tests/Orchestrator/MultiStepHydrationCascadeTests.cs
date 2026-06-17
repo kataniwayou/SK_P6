@@ -128,16 +128,16 @@ public sealed class MultiStepHydrationCascadeTests
             // hydration the S1->S2 edge is a TryGetValue miss (graceful skip) and the cascade dies at S1.
             var advancement = new StepAdvancement();
 
-            var afterS1 = advancement.SelectNext(StepOutcome.Completed, entry.Steps[s1], entry.Steps).ToList();
+            var afterS1 = advancement.SelectNext(StepOutcome.Completed, entry.Steps[s1], entry.Steps).Matches;
             Assert.Single(afterS1);
             Assert.Equal(s2, afterS1[0].stepId);
 
-            var afterS2 = advancement.SelectNext(StepOutcome.Completed, entry.Steps[s2], entry.Steps).ToList();
+            var afterS2 = advancement.SelectNext(StepOutcome.Completed, entry.Steps[s2], entry.Steps).Matches;
             Assert.Single(afterS2);
             Assert.Equal(s3, afterS2[0].stepId);
 
             // S3 is terminal — no successors.
-            var afterS3 = advancement.SelectNext(StepOutcome.Completed, entry.Steps[s3], entry.Steps).ToList();
+            var afterS3 = advancement.SelectNext(StepOutcome.Completed, entry.Steps[s3], entry.Steps).Matches;
             Assert.Empty(afterS3);
         }
         finally
@@ -200,25 +200,25 @@ public sealed class MultiStepHydrationCascadeTests
             var adv = new StepAdvancement();
 
             // Pipeline A walks independently to its own terminal.
-            Assert.Equal(a2, adv.SelectNext(StepOutcome.Completed, entry.Steps[a1], entry.Steps).Single().stepId);
-            Assert.Equal(a3, adv.SelectNext(StepOutcome.Completed, entry.Steps[a2], entry.Steps).Single().stepId);
-            Assert.Empty(adv.SelectNext(StepOutcome.Completed, entry.Steps[a3], entry.Steps));
+            Assert.Equal(a2, adv.SelectNext(StepOutcome.Completed, entry.Steps[a1], entry.Steps).Matches.Single().stepId);
+            Assert.Equal(a3, adv.SelectNext(StepOutcome.Completed, entry.Steps[a2], entry.Steps).Matches.Single().stepId);
+            Assert.Empty(adv.SelectNext(StepOutcome.Completed, entry.Steps[a3], entry.Steps).Matches);
 
             // Pipeline B walks independently to its own terminal.
-            Assert.Equal(b2, adv.SelectNext(StepOutcome.Completed, entry.Steps[b1], entry.Steps).Single().stepId);
-            Assert.Equal(b3, adv.SelectNext(StepOutcome.Completed, entry.Steps[b2], entry.Steps).Single().stepId);
-            Assert.Equal(b4, adv.SelectNext(StepOutcome.Completed, entry.Steps[b3], entry.Steps).Single().stepId);
-            Assert.Empty(adv.SelectNext(StepOutcome.Completed, entry.Steps[b4], entry.Steps));
+            Assert.Equal(b2, adv.SelectNext(StepOutcome.Completed, entry.Steps[b1], entry.Steps).Matches.Single().stepId);
+            Assert.Equal(b3, adv.SelectNext(StepOutcome.Completed, entry.Steps[b2], entry.Steps).Matches.Single().stepId);
+            Assert.Equal(b4, adv.SelectNext(StepOutcome.Completed, entry.Steps[b3], entry.Steps).Matches.Single().stepId);
+            Assert.Empty(adv.SelectNext(StepOutcome.Completed, entry.Steps[b4], entry.Steps).Matches);
 
             // SEPARATION: the two pipelines are disjoint and no step advances across the boundary.
             var pipelineA = new HashSet<Guid> { a1, a2, a3 };
             var pipelineB = new HashSet<Guid> { b1, b2, b3, b4 };
             Assert.Empty(pipelineA.Intersect(pipelineB));
             foreach (var id in pipelineA)
-                foreach (var (next, _) in adv.SelectNext(StepOutcome.Completed, entry.Steps[id], entry.Steps))
+                foreach (var (next, _) in adv.SelectNext(StepOutcome.Completed, entry.Steps[id], entry.Steps).Matches)
                     Assert.DoesNotContain(next, pipelineB);
             foreach (var id in pipelineB)
-                foreach (var (next, _) in adv.SelectNext(StepOutcome.Completed, entry.Steps[id], entry.Steps))
+                foreach (var (next, _) in adv.SelectNext(StepOutcome.Completed, entry.Steps[id], entry.Steps).Matches)
                     Assert.DoesNotContain(next, pipelineA);
         }
         finally
@@ -284,22 +284,22 @@ public sealed class MultiStepHydrationCascadeTests
             var adv = new StepAdvancement();
 
             // s1 -> s2 (single successor).
-            Assert.Equal(s2, adv.SelectNext(StepOutcome.Completed, entry.Steps[s1], entry.Steps).Single().stepId);
+            Assert.Equal(s2, adv.SelectNext(StepOutcome.Completed, entry.Steps[s1], entry.Steps).Matches.Single().stepId);
 
             // (2) FAN-OUT: s2 yields BOTH successors (the multi-successor case the linear facts never hit).
-            var afterS2 = adv.SelectNext(StepOutcome.Completed, entry.Steps[s2], entry.Steps)
+            var afterS2 = adv.SelectNext(StepOutcome.Completed, entry.Steps[s2], entry.Steps).Matches
                 .Select(n => n.stepId).ToHashSet();
             Assert.Equal(2, afterS2.Count);
             Assert.Contains(bMain, afterS2);
             Assert.Contains(bSide, afterS2);
 
             // Each branch walks independently to its own terminal.
-            Assert.Equal(bMainTerm, adv.SelectNext(StepOutcome.Completed, entry.Steps[bMain], entry.Steps).Single().stepId);
-            Assert.Equal(bSideTerm, adv.SelectNext(StepOutcome.Completed, entry.Steps[bSide], entry.Steps).Single().stepId);
+            Assert.Equal(bMainTerm, adv.SelectNext(StepOutcome.Completed, entry.Steps[bMain], entry.Steps).Matches.Single().stepId);
+            Assert.Equal(bSideTerm, adv.SelectNext(StepOutcome.Completed, entry.Steps[bSide], entry.Steps).Matches.Single().stepId);
 
             // Both leaves terminate (no successors).
-            Assert.Empty(adv.SelectNext(StepOutcome.Completed, entry.Steps[bMainTerm], entry.Steps));
-            Assert.Empty(adv.SelectNext(StepOutcome.Completed, entry.Steps[bSideTerm], entry.Steps));
+            Assert.Empty(adv.SelectNext(StepOutcome.Completed, entry.Steps[bMainTerm], entry.Steps).Matches);
+            Assert.Empty(adv.SelectNext(StepOutcome.Completed, entry.Steps[bSideTerm], entry.Steps).Matches);
         }
         finally
         {
@@ -370,12 +370,12 @@ public sealed class MultiStepHydrationCascadeTests
 
             // (2) NO JOIN: each predecessor independently advances to the merge node — so at runtime
             // m is dispatched once per completed predecessor (intended duplicate execution).
-            Assert.Equal(m, adv.SelectNext(StepOutcome.Completed, entry.Steps[p1], entry.Steps).Single().stepId);
-            Assert.Equal(m, adv.SelectNext(StepOutcome.Completed, entry.Steps[p2], entry.Steps).Single().stepId);
+            Assert.Equal(m, adv.SelectNext(StepOutcome.Completed, entry.Steps[p1], entry.Steps).Matches.Single().stepId);
+            Assert.Equal(m, adv.SelectNext(StepOutcome.Completed, entry.Steps[p2], entry.Steps).Matches.Single().stepId);
 
             // The merge node continues to its terminal; terminal has no successors.
-            Assert.Equal(mTerm, adv.SelectNext(StepOutcome.Completed, entry.Steps[m], entry.Steps).Single().stepId);
-            Assert.Empty(adv.SelectNext(StepOutcome.Completed, entry.Steps[mTerm], entry.Steps));
+            Assert.Equal(mTerm, adv.SelectNext(StepOutcome.Completed, entry.Steps[m], entry.Steps).Matches.Single().stepId);
+            Assert.Empty(adv.SelectNext(StepOutcome.Completed, entry.Steps[mTerm], entry.Steps).Matches);
         }
         finally
         {

@@ -59,7 +59,7 @@ public sealed class StepAdvancementTests
     {
         var map = BuildMap();
 
-        var selectedIds = _sut.SelectNext(outcome, Completed(), map)
+        var selectedIds = _sut.SelectNext(outcome, Completed(), map).Matches
             .Select(s => s.stepId)
             .ToHashSet();
 
@@ -75,7 +75,7 @@ public sealed class StepAdvancementTests
     {
         var map = BuildMap();
 
-        var selected = _sut.SelectNext(outcome, Completed(), map).ToList();
+        var selected = _sut.SelectNext(outcome, Completed(), map).Matches;
 
         Assert.DoesNotContain(selected, s => s.stepId == IdFor(Never));
         Assert.DoesNotContain(selected, s => s.step.EntryCondition == Never);
@@ -90,7 +90,7 @@ public sealed class StepAdvancementTests
     {
         var map = BuildMap();
 
-        var selectedIds = _sut.SelectNext(outcome, Completed(), map)
+        var selectedIds = _sut.SelectNext(outcome, Completed(), map).Matches
             .Select(s => s.stepId)
             .ToHashSet();
 
@@ -101,15 +101,17 @@ public sealed class StepAdvancementTests
     }
 
     [Fact]
-    public void DanglingNextStepId_IsSkipped_NoThrow()
+    public void DanglingNextStepId_IsSurfacedInUnresolvedIds_NotInMatches_NoThrow()
     {
         var map = BuildMap(); // does NOT contain DanglingId
 
-        var selectedIds = _sut.SelectNext(StepOutcome.Completed, Completed(), map)
-            .Select(s => s.stepId)
-            .ToHashSet();
+        var result = _sut.SelectNext(StepOutcome.Completed, Completed(), map);
+        var selectedIds = result.Matches.Select(s => s.stepId).ToHashSet();
 
+        // Phase 72 / D-01: the dangling id is NO LONGER silently dropped — it surfaces in UnresolvedIds
+        // (the new observability signal Plan 03 increments off), and stays OUT of Matches.
         Assert.DoesNotContain(DanglingId, selectedIds);
+        Assert.Contains(DanglingId, result.UnresolvedIds);
         Assert.Contains(IdFor(1), selectedIds);      // matched (Completed == 1)
         Assert.Contains(IdFor(Always), selectedIds); // Always(4)
     }
@@ -123,20 +125,22 @@ public sealed class StepAdvancementTests
         var map = BuildMap();
         var terminal = new StepProjection(EntryCondition: 7, ProcessorId: Guid.NewGuid(), Payload: "{}", NextStepIds: null!);
 
-        var selected = _sut.SelectNext(StepOutcome.Completed, terminal, map).ToList();
+        var result = _sut.SelectNext(StepOutcome.Completed, terminal, map);
 
-        Assert.Empty(selected);
+        // Terminal ≠ unresolved: a null NextStepIds yields NO matches AND NO unresolved ids (no NRE).
+        Assert.Empty(result.Matches);
+        Assert.Empty(result.UnresolvedIds);
     }
 
     [Fact]
     public void HelperPerformsNoIo_TakesStepMapAsArgument()
     {
-        // The signature proves no I/O: SelectNext takes the step map as an argument and returns
-        // synchronously (IEnumerable, not Task). No Redis / store dependency is constructed.
+        // The signature proves no I/O: SelectNext takes the step map as an argument and returns a
+        // synchronous SelectNextResult (not Task). No Redis / store dependency is constructed.
         var map = BuildMap();
         var completed = new StepProjection(7, Guid.NewGuid(), "{}", [IdFor(1)]);
 
-        var selected = _sut.SelectNext(StepOutcome.Completed, completed, map).ToList();
+        var selected = _sut.SelectNext(StepOutcome.Completed, completed, map).Matches;
 
         Assert.Single(selected);
         Assert.Equal(IdFor(1), selected[0].stepId);
