@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: Not started
-status: completed
-stopped_at: Phase 71 context gathered
-last_updated: "2026-06-17T05:11:43.134Z"
+current_plan: 1
+status: executing
+stopped_at: Completed 71-01-PLAN.md
+last_updated: "2026-06-17T06:35:46.804Z"
 last_activity: 2026-06-17
 progress:
   total_phases: 4
@@ -21,7 +21,7 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase 70 — two-consumer-processor-design
+**Current focus:** Phase 71 — orchestrator-two-consumer-design-pre-process-post-process-wi
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 70
-Current Plan: Not started
+Phase: 71 (orchestrator-two-consumer-design-pre-process-post-process-wi) — EXECUTING
+Current Plan: 1
 Total Plans: 2
-Plan: 5 of 5
-Status: Milestone complete
+Plan: 2 of 3
+Status: Ready to execute
 Last activity: 2026-06-17
 
 > Phase 68 (capstone live proof) — ✅ COMPLETE 2026-06-15. The live 7-scenario fault sweep ran end-to-end (`scripts/phase-68-sweep.ps1`, ~1h, windows ~04:30→05:25 UTC): **6/7 PASS** (TEST-01..05 + TEST-07, each zero-missing + effect-once); wrapper exit 1. The lone **TEST-06 (rabbitmq) VERDICT_FAIL** (MISSING:2, 7/9 complete; effect-once held) was traced — `KeeperReinjectDroppedDelta:2 == Missing:2` → the by-design `ReinjectConsumer.cs:37` silent-DROP (`STRLEN L2[entryId]==0`): the 5s `Processor__ExecutionDataTtl` (compose:285) self-expired across the 45s outage so keeper REINJECT correctly dropped already-gone keys. Corroborated by TEST-07 (strictly-harder redis+rabbitmq superset) PASS 8/8 — a deterministic rabbitmq-recovery defect would have failed TEST-07 too. **Spec-owner disposition: ACCEPT AS TEST-ENV TTL ARTIFACT** (accept-with-rationale; NO code/TTL/dwell/retry change, D-01b/D-04 honoured). Recovery machinery **PROVEN across all 7 fault classes**; TEST-06's miss documented as a known test-env TTL artifact. TEST-01..07 all complete (TEST-06 proven-with-documented-artifact). Roll-up `analyzer-reports/phase-68-summary.json` (`098f36a`). Summary: `.planning/phases/68-live-resilience-proof-7-scenarios-capstone/68-02-SUMMARY.md`.
@@ -1021,6 +1021,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 70 P70-02 | 35min | 2 tasks | 8 files |
 | Phase 70 P70-03 | 7 | 2 tasks | 11 files |
 | Phase 70 P70-04 | 63 | 2 tasks | 13 files |
+| Phase 71 P01 | 26min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -1479,6 +1480,8 @@ Recent decisions affecting current work:
 - 70-03: ProcessAsync seam returns Task<DataResult?>; SpawnToPost swallows on exhaust, DeleteEntry escalates DELETE; shared OutputTail is the single output-tail source of truth
 - 70-03: Step* sends carry EntryId=Guid.Empty (A1 — orchestrator entryId↔messageId threading SPEC-deferred)
 - Phase 70-04: real virtual ISendEndpoint.Send overload is the IPipe<SendContext> form — the Action<SendContext> envelope-override is an extension method NSubstitute can't intercept; fixed both DispatchTestKit + RecoveryTestKit doubles. Whole hermetic suite green (615/0/0).
+- Phase 71-01: orchestrator keeper contracts (Reinject/Inject/Delete) mirror Phase-70 Keeper* via IKeeperRecoverable; A1 closed at both StepCompleted sites (OutputTail + InjectConsumer stamp EntryId = dr.MessageId on Completed)
+- Phase 71 test runner is Microsoft.Testing.Platform (xUnit v3): VSTest --filter is ignored; use -- --filter-class. 287 pre-existing full-suite failures are a baseline, not a 71-01 regression (deferred-items.md)
 
 ### Roadmap Milestone Log
 
@@ -1584,13 +1587,13 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-17T05:11:43.117Z
-Stopped at: Phase 71 context gathered
-Resume file: .planning/phases/71-orchestrator-two-consumer-design-pre-process-post-process-wi/71-CONTEXT.md
+Last session: 2026-06-17T06:35:46.789Z
+Stopped at: Completed 71-01-PLAN.md
+Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
 **Phase 29 (Structured Execution-Scope Logging):** 5/5 plans complete — close gate GATE_EXIT=0 (405 Passed ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held; live scopeProof passes on a `processor-sample` Completed log); LOG-01..06 all complete. Awaiting orchestrator phase verification + `phase.complete`. Milestone v3.5.0 = 17/17 plans across phases 25-29.
 
 **Previous Phase:** 11 (migrate-prometheus-and-elastic-containers-from-compose-stack) — 10/10 plans — verified 2026-05-28 (3 consecutive GREEN dotnet test runs at 142/142 facts each; byte-identical psql `\l` SHA-256 `0d98b0de…0aac127`; OBSERV-12 superseded; INFRA-06 amendment locked in)
 
-**Planned Phase:** 70 (two-consumer-processor-design-pre-process-post-process-with-) — 5 plans — 2026-06-16T20:56:17.632Z
+**Planned Phase:** 71 (Orchestrator two-consumer design (Pre-Process + Post-Process) with keeper recovery) — 3 plans — 2026-06-17T05:49:01.779Z
