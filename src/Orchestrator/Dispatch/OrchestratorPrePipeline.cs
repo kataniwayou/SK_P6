@@ -96,18 +96,21 @@ public sealed class OrchestratorPrePipeline(
         var limit = retryOptions.Value.Limit;
 
         // 3) Relocation (UNIFORM, three-way, D-09/D-10): the out: read runs for EVERY outcome (the processor
-        //    now always writes a terminal out: blob, Phase 72 Plan 01). The read lambda returns null on a
-        //    clean-absent value so a success-with-absent is distinguishable from a thrown RedisException
-        //    (Pitfall 2). (a) read-fault (exhausted) -> REINJECT + return. (b) clean-absent (no fault) ->
-        //    idempotent ack-skip: NO fan-out, NO keeper, NO delete (this is how a Processing result — which
-        //    wrote no out: blob — stops advancing for free, D-05). (c) present -> relocate.
+        //    now always writes a terminal out: blob, Phase 72 Plan 01). WR-01: discriminate key-MISSING from
+        //    present-but-EMPTY — the read lambda returns null ONLY when the key is truly absent (HasValue ==
+        //    false) so a present-but-empty terminal payload (e.g. NewResult(Completed, "")) still relocates
+        //    instead of being silently collapsed into the clean-absent skip and dropping a genuine fan-out. A
+        //    thrown RedisException still propagates out of the lambda (Pitfall 2). (a) read-fault (exhausted) ->
+        //    REINJECT + return. (b) truly-absent key (no fault, no blob — e.g. a Processing result that wrote
+        //    nothing) -> idempotent ack-skip: NO fan-out, NO keeper, NO delete (D-05). (c) present (incl. "")
+        //    -> relocate.
         var read = await RetryLoop.ExecuteAsync(async () =>
         {
             var raw = await db.StringGetAsync(L2ProjectionKeys.OutputData(m.EntryId));
-            return raw.IsNullOrEmpty ? null : raw.ToString();
+            return raw.HasValue ? raw.ToString() : null;   // null == key truly absent; "" == present-empty (relocates)
         }, limit, ct);
         if (!read.Succeeded) { await SendKeeper(BuildReinject(m, outcome, messageId), limit, ct); return; }
-        if (string.IsNullOrEmpty(read.Value))
+        if (read.Value is null)   // only a truly-absent key is the idempotent skip (a present "" relocates)
         {
             logger.LogInformation(
                 "Trip ended (clean-absent out: blob): no out: blob for ({WorkflowId}, {StepId}) — acking idempotent skip",
@@ -134,15 +137,19 @@ public sealed class OrchestratorPrePipeline(
         }
 
         // stage-3: each dangling next-step id in selection.UnresolvedIds logs + increments
-        //    orchestrator_step_unresolved + continue (graceful, NEVER throws — D-02). Sits AFTER the
-        //    clean-absent gate so a skipped message never counts stage-3.
+        //    orchestrator_step_unresolved (graceful, NEVER throws — D-02). IN-01: this loop sits AFTER the
+        //    clean-absent gate DELIBERATELY — dangling-edge counting is intentionally suppressed for
+        //    clean-absent / Processing messages (a Processing result that also has a dangling edge does NOT
+        //    surface it on the metric). This is a conscious contract, NOT an accident: do NOT "fix" it by
+        //    moving the loop above the clean-absent gate (that would break Processing_rides_clean_absent_skip).
         foreach (var unresolvedId in selection.UnresolvedIds)
         {
             logger.LogInformation(
                 "Dangling next-step id {NextStepId} for ({WorkflowId}, {StepId}) — skipping (business)",
                 unresolvedId, m.WorkflowId, m.StepId);
             metrics.StepUnresolved.Add(1, new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")));
-            continue;   // graceful business skip — never throw (D-02 / T-72-08)
+            // IN-02: graceful business skip — never throw (D-02 / T-72-08). No explicit `continue` needed:
+            // this is the last statement of the loop body, so the iteration falls through naturally.
         }
 
         // 5) Delete (REQ-71-05, send-before-delete, UNIFORM): AFTER all sends land, delete L2[out:EntryId]
