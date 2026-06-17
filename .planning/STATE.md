@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 3
-status: verifying
+status: milestone_complete
 stopped_at: Completed 72-03-PLAN.md
 last_updated: "2026-06-17T11:41:40.612Z"
 last_activity: 2026-06-17 -- Phase 72 Plan 03 complete (uniform branch-free OrchestratorPrePipeline + clean-absent skip + stage-1/stage-3 orchestrator_step_unresolved increments; 15/15 + affected 40/40 hermetic GREEN, 0-warning Debug+Release). Phase 72 COMPLETE (3/3) — ready for verification
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 0
   completed_plans: 0
-  percent: 0
+  percent: 25
 ---
 
 # Project State
@@ -29,12 +29,12 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 72 (processor-always-write-to-l2-and-uniform-orchestrator-pre-pi) — EXECUTING
-Current Plan: 3
+Phase: 72
+Current Plan: Not started
 Total Plans: 3
 Plan: 3 of 3
-Status: Phase 72 COMPLETE (3/3 plans) — ready for verification
-Last activity: 2026-06-17 -- Phase 72 Plan 03 complete (uniform branch-free OrchestratorPrePipeline; 15/15 + affected 40/40 hermetic GREEN, 0-warning Debug+Release)
+Status: Milestone complete
+Last activity: 2026-06-17
 
 > Phase 72 Plan 03 — ✅ COMPLETE 2026-06-17 (Wave 2: the payoff — all four `TypedResultConsumer<T>` shells now run ONE uniform branch-free pre-pipeline flow + the Phase-71-deferred D-18 trip-end metric lands). **2 atomic feat commits** (`b501557` dropped BOTH `if (outcome == StepOutcome.Completed)` gates — the `out:` read and the delete now run for every outcome (D-09, riding Plan-01's always-write); consumed `SelectNext`'s `{Matches, UnresolvedIds}`; three-way read (read lambda returns null on clean-absent to split absent from fault, Pitfall 2): present → fan-out+delete / clean-absent → idempotent ack-skip (Processing rides it for free, D-05) / Redis fault → REINJECT (D-10); ExecutionId threaded unchanged D-13; `88dbd3f` `OrchestratorMetrics` ctor-injected (singleton→scoped, no Program.cs edit) + BOTH increments in the same change (no CS9113): stage-1 L1-miss + stage-3 `foreach` over `UnresolvedIds` (continue, never throws, D-02), `workflowId` label only; rewrote `OrchestratorPrePipelineFacts` in place D-12 — Failed/Cancelled present-blob fan-out+delete like Completed, clean-absent + Processing-rides-skip facts, dangling-next-step (resolvable still fans out + 1 increment), condition-skip + normal-fanout no-increment, `MeterCollector` tag-set assertions). SPEC-4/5/6. **2 deviations:** (1) Rule 3 (blocking) — migrated 3 other test ctor sites (`TypedResultConsumerFacts`/`ResultAckTests`/`StopConsumerLifecycleTests`) to `OrchestratorTestStubs.Metrics()` (the ctor-param add broke them); (2) Rule 1 (test) — `TypedResultConsumerFacts` Failed-gated sub-call now passes the SAME `entryId` whose `out:` blob is present (the Failed read is now uniform post-D-09). Hermetic: `OrchestratorPrePipelineFacts` **15/15** + affected orchestrator facts **40/40 GREEN**; **0-warning Debug + Release** (full solution). Full `dotnet test` shows 288 failures — ALL pre-existing Docker-bound E2E/Integration tests (sandbox lacks Redis/RabbitMQ/Postgres); none in the hermetic dispatch surface. Live-stack proof deferred-automated (SPEC AC #10). Summary: `.planning/phases/72-processor-always-write-to-l2-and-uniform-orchestrator-pre-pi/72-03-SUMMARY.md` (Self-Check PASSED). **Phase 72 ready for verification.**
 
@@ -741,7 +741,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 
 **Velocity:**
 
-- Total plans completed: 233
+- Total plans completed: 236
 - Average duration: —
 - Total execution time: —
 
@@ -815,6 +815,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | 68 | 2 | - | - |
 | 70 | 5 | - | - |
 | 71 | 3 | - | - |
+| 72 | 3 | - | - |
 
 **Recent Trend:**
 
