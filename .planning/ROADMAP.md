@@ -720,7 +720,7 @@ Plans:
 **Goal:** Prove and instrument end-to-end L2 data delivery across the DAG `A→B→C→{D1→E1→F1, D2→E2→F2}→G` (G = one shared, per-arrival non-joining terminal) per `(correlationId, executionId)` via (a) a hermetic zero-Docker harness proving fan-in `entryId` correctness + deterministic per-hop value integrity, and (b) a live-stack per-`executionId` ES auditor asserting the deterministic value chain (each hop +1 from fixed seeds 100/200), `Step_G` ×2 convergence at the expected terminal value, terminal `skp:out:` anchor, and per-exec/per-corr trip duration — with one production-code edit (deterministic seed + value-clarifying log inside `SampleProcessor.ProcessAsync`). Locked in 73-SPEC.md (7 requirements; sha256 → deterministic value tracking; metrics deferred; live Docker run deferred-automated).
 **Requirements**: SPEC-R1..SPEC-R7 (locked in 73-SPEC.md)
 **Depends on:** Phase 72
-**Plans:** 4 plans (3 waves)
+**Plans:** 4/4 plans complete
 
 Plans:
 - [x] 73-01-PLAN.md — Wave 1: the single src/ edit — SampleProcessor.ProcessAsync deterministic seed (100/200) + Mode-1 received→produced value log (SPEC-R3, R4) — complete 2026-06-17; fixed 100/200 seed (random removed), Mode-1 `{StepLabel} received {Received} produced {Produced}` ES-attribute contract locked, Debug+Release 0-warning. Commits f8dbcfa, 60e4200, 5285a5f.
