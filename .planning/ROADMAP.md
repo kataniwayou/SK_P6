@@ -706,12 +706,14 @@ Plans:
 ### Phase 72: Processor always-write to L2 and uniform orchestrator pre-pipeline with unresolved-step metric
 
 **Goal:** Make every *business* processor result write its `DataResult.Data` blob to L2 — output-definition validation only flips `result`→`Failed`, it never gates the write (`OutputTail.cs:60`); a thrown `ExecuteAsync` is caught into a `DataResult{failed}` carrying the read `validatedData` (`ProcessorPipeline.cs:79`) as fallback — so `StepFailed`/`StepCancelled` carry a real `EntryId` instead of `Guid.Empty` (`:199,202`). With every outcome guaranteed a blob, drop the Completed-only `out:` read/delete branches in `OrchestratorPrePipeline` (`:84,114`) so all four `TypedResultConsumer<T>` shells are uniform: exists-gate `L2[entryId]` → read → resolve `L1[stepId]` → terminal check → per next step (read `L1[nextStepId]` + entry-condition + send handoff) → delete `L2[entryId]`; clean-absent L2 → idempotent skip; `ExecutionId` threading preserved (D-13). Folds in the Phase-71-deferred trip-end metric: a new `orchestrator_step_unresolved` counter (label `workflowId` only) incremented at the two L1-resolution misses (stage-1 `L1[stepId]` miss → return; stage-3 `L1[nextStepId]` miss → continue), injecting `OrchestratorMetrics` into `OrchestratorPrePipeline`. Distinct from the imported Phase-72 metrics SPEC (uniform two-counter reshape) — that lands separately via /gsd-import.
-**Requirements**: TBD (run /gsd-spec-phase 72)
+**Requirements**: SPEC-1..6 (see 72-SPEC.md) - always-write tail; real EntryId; thrown-ExecuteAsync->validatedData; orchestrator_step_unresolved counter; uniform pre-pipeline; naming/DI conventions
 **Depends on:** Phase 71
-**Plans:** 0 plans
+**Plans:** 3 plans (2 waves)
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 72 to break down)
+- [ ] 72-01-PLAN.md - Processor always-write: OutputTail writes the out: blob for all 3 terminal outcomes + real EntryId on Failed/Cancelled; ProcessorPipeline catch+input-fail paths route through OutputTail carrying validatedData (SPEC-1,2,3,6) [wave 1]
+- [ ] 72-02-PLAN.md - Orchestrator foundation: Wave-0 MeterListener capture seam + SelectNext->{Matches,UnresolvedIds} reshape + orchestrator_step_unresolved counter definition (SPEC-4,5,6) [wave 1]
+- [ ] 72-03-PLAN.md - Uniform branch-free OrchestratorPrePipeline + clean-absent skip + stage-1/stage-3 metric increments (SPEC-4,5,6) [wave 2, depends 72-02]
 
 ---
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
