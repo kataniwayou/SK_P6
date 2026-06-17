@@ -159,6 +159,7 @@ public sealed class StopConsumerLifecycleTests
             var send = new CapturingHandoffSendProvider();
             var pipeline = new OrchestratorPrePipeline(store, advancement, redis, send,
                 Microsoft.Extensions.Options.Options.Create(new Messaging.Contracts.Configuration.RetryOptions { Limit = 3 }),
+                OrchestratorTestStubs.Metrics(),
                 NullLogger<OrchestratorPrePipeline>.Instance);
             var resultConsumer = new StepCompletedConsumer(
                 pipeline, OrchestratorTestStubs.Metrics(), NullLogger<StepCompleted>.Instance);

@@ -1,12 +1,15 @@
+using System.Diagnostics.Metrics;
 using MassTransit;
 using Messaging.Contracts;
 using Messaging.Contracts.Configuration;
 using Messaging.Contracts.Projections;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orchestrator.Dispatch;
 using Orchestrator.L1;
+using Orchestrator.Observability;
 using StackExchange.Redis;
 using Xunit;
 
@@ -154,14 +157,36 @@ public sealed class OrchestratorPrePipelineFacts
         return store;
     }
 
+    /// <summary>A real <see cref="OrchestratorMetrics"/> built from a real <see cref="IMeterFactory"/>
+    /// (mirror OrchestratorMetricsFacts:26-31) so the in-process <c>Orchestrator</c> meter emits real
+    /// measurements a <see cref="MeterCollector"/> can capture.</summary>
+    private static OrchestratorMetrics NewMetrics()
+    {
+        var provider = new ServiceCollection().AddMetrics().BuildServiceProvider();
+        return new OrchestratorMetrics(provider.GetRequiredService<IMeterFactory>());
+    }
+
     private static OrchestratorPrePipeline Build(
         WorkflowL1Store store, IConnectionMultiplexer redis, ISendEndpointProvider send,
-        ILogger<OrchestratorPrePipeline>? logger = null) =>
+        ILogger<OrchestratorPrePipeline>? logger = null, OrchestratorMetrics? metrics = null) =>
         new(store, new StepAdvancement(), redis, send,
             Options.Create(new RetryOptions { Limit = 3 }),
+            metrics ?? NewMetrics(),
             logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<OrchestratorPrePipeline>.Instance);
 
     private static StepCompleted Completed(Guid workflowId, Guid stepId, Guid entryId, Guid? executionId = null) =>
+        new(workflowId, stepId, Guid.NewGuid())
+        { CorrelationId = Guid.NewGuid(), ExecutionId = executionId ?? Guid.NewGuid(), EntryId = entryId };
+
+    private static StepFailed Failed(Guid workflowId, Guid stepId, Guid entryId, Guid? executionId = null) =>
+        new(workflowId, stepId, Guid.NewGuid())
+        { CorrelationId = Guid.NewGuid(), ExecutionId = executionId ?? Guid.NewGuid(), EntryId = entryId };
+
+    private static StepCancelled Cancelled(Guid workflowId, Guid stepId, Guid entryId, Guid? executionId = null) =>
+        new(workflowId, stepId, Guid.NewGuid())
+        { CorrelationId = Guid.NewGuid(), ExecutionId = executionId ?? Guid.NewGuid(), EntryId = entryId };
+
+    private static StepProcessing Processing(Guid workflowId, Guid stepId, Guid entryId, Guid? executionId = null) =>
         new(workflowId, stepId, Guid.NewGuid())
         { CorrelationId = Guid.NewGuid(), ExecutionId = executionId ?? Guid.NewGuid(), EntryId = entryId };
 
@@ -229,6 +254,37 @@ public sealed class OrchestratorPrePipelineFacts
     }
 
     [Fact]
+    public async Task Normal_multimatch_fanout_does_not_increment()
+    {
+        // A fully-resolved multi-match fan-out (every successor resolves, all match) → NO increment.
+        var ct = TestContext.Current.CancellationToken;
+        var workflowId = Guid.NewGuid();
+        var completedStepId = Guid.NewGuid();
+        var next1 = Guid.NewGuid();
+        var next2 = Guid.NewGuid();
+        var entryId = Guid.NewGuid();
+
+        var steps = new Dictionary<Guid, StepProjection>
+        {
+            [completedStepId] = Step(0, Guid.NewGuid(), "{}", next1, next2),
+            [next1] = Step((int)StepOutcome.Completed, Guid.NewGuid(), "{}"),
+            [next2] = Step((int)StepOutcome.Completed, Guid.NewGuid(), "{}"),
+        };
+        var store = Seed(workflowId, steps);
+        var redis = OutPresentL2(
+            new Dictionary<string, string> { [L2ProjectionKeys.OutputData(entryId)] = "the-output" }, out _);
+        var send = new CapturingSendProvider();
+        var metrics = NewMetrics();
+        using var mc = new MeterCollector(OrchestratorMetrics.MeterName, "orchestrator_step_unresolved");
+
+        await Build(store, redis, send, metrics: metrics).RunAsync(
+            Completed(workflowId, completedStepId, entryId), StepOutcome.Completed, Guid.NewGuid(), ct);
+
+        Assert.Equal(2, send.Handoffs.Count);
+        Assert.Equal(0, mc.Total);                                // a normal fan-out does NOT increment
+    }
+
+    [Fact]
     public async Task Redis_fault_on_read_produces_one_REINJECT_and_no_fanout()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -276,13 +332,45 @@ public sealed class OrchestratorPrePipelineFacts
         var redis = OutPresentL2(new Dictionary<string, string>(), out _);
         var send = new CapturingSendProvider();
         var logger = new CapturingLogger<OrchestratorPrePipeline>();
+        var metrics = NewMetrics();
+        using var mc = new MeterCollector(OrchestratorMetrics.MeterName, "orchestrator_step_unresolved");
 
-        await Build(store, redis, send, logger).RunAsync(
+        await Build(store, redis, send, logger, metrics).RunAsync(
             Completed(workflowId, completedStepId, Guid.NewGuid()), StepOutcome.Completed, Guid.NewGuid(), ct);
 
         Assert.Contains(logger.Messages, msg => msg.Contains("completed-terminal"));
         Assert.Empty(send.Handoffs);
         Assert.Empty(send.SentKeeper);                            // no keeper, no throw
+        Assert.Equal(0, mc.Total);                                // completed-terminal does NOT increment (D-03)
+    }
+
+    [Fact]
+    public async Task Condition_skip_does_not_increment()
+    {
+        // A successor resolvable in L1 but with a NON-matching EntryCondition is a deliberate business no-op
+        // (D-03) — collected NOWHERE by SelectNext (neither Matches nor UnresolvedIds) → NO increment. With no
+        // matches AND no unresolved ids this is a completed-terminal trip-end.
+        var ct = TestContext.Current.CancellationToken;
+        var workflowId = Guid.NewGuid();
+        var completedStepId = Guid.NewGuid();
+        var failGatedStepId = Guid.NewGuid();
+
+        var steps = new Dictionary<Guid, StepProjection>
+        {
+            [completedStepId] = Step(0, Guid.NewGuid(), "{}", failGatedStepId),
+            [failGatedStepId] = Step((int)StepOutcome.Failed, Guid.NewGuid(), "{}"),   // resolvable, non-matching
+        };
+        var store = Seed(workflowId, steps);
+        var redis = OutPresentL2(new Dictionary<string, string>(), out _);
+        var send = new CapturingSendProvider();
+        var metrics = NewMetrics();
+        using var mc = new MeterCollector(OrchestratorMetrics.MeterName, "orchestrator_step_unresolved");
+
+        await Build(store, redis, send, metrics: metrics).RunAsync(
+            Completed(workflowId, completedStepId, Guid.NewGuid()), StepOutcome.Completed, Guid.NewGuid(), ct);
+
+        Assert.Empty(send.Handoffs);
+        Assert.Equal(0, mc.Total);                                // a condition mismatch is NOT an unresolved miss
     }
 
     [Fact]
@@ -293,42 +381,183 @@ public sealed class OrchestratorPrePipelineFacts
         var redis = OutPresentL2(new Dictionary<string, string>(), out _);
         var send = new CapturingSendProvider();
         var logger = new CapturingLogger<OrchestratorPrePipeline>();
+        var workflowId = Guid.NewGuid();
+        var metrics = NewMetrics();
+        using var mc = new MeterCollector(OrchestratorMetrics.MeterName, "orchestrator_step_unresolved");
 
-        await Build(store, redis, send, logger).RunAsync(
-            Completed(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid()), StepOutcome.Completed, Guid.NewGuid(), ct);
+        await Build(store, redis, send, logger, metrics).RunAsync(
+            Completed(workflowId, Guid.NewGuid(), Guid.NewGuid()), StepOutcome.Completed, Guid.NewGuid(), ct);
 
         Assert.Contains(logger.Messages, msg => msg.Contains("completed-unresolved"));
         Assert.Empty(send.Handoffs);
         Assert.Empty(send.SentKeeper);
+        // stage-1: exactly one orchestrator_step_unresolved increment, tagged workflowId ONLY.
+        Assert.Equal(1, mc.Total);
+        var tag = Assert.Single(mc.Tags[0]);                       // exactly one tag key
+        Assert.Equal("workflowId", tag.Key);
+        Assert.Equal(workflowId.ToString("D"), tag.Value);
     }
 
     [Fact]
-    public async Task Failed_continuation_writes_no_data_and_dispatches_empty()
+    public async Task Dangling_next_step_increments_once_and_resolvable_successor_still_fans_out()
     {
+        // stage-3 (D-01/D-02/T-72-08): a step whose NextStepIds = [resolvable, dangling]. The resolvable
+        // successor still fans out (1 Handoff); the dangling id increments the counter exactly once and is
+        // skipped via continue (NEVER throws).
+        var ct = TestContext.Current.CancellationToken;
+        var workflowId = Guid.NewGuid();
+        var completedStepId = Guid.NewGuid();
+        var resolvableId = Guid.NewGuid();
+        var danglingId = Guid.NewGuid();   // deliberately NOT seeded into the L1 step map
+        var entryId = Guid.NewGuid();
+
+        var steps = new Dictionary<Guid, StepProjection>
+        {
+            [completedStepId] = Step(0, Guid.NewGuid(), "{}", resolvableId, danglingId),
+            [resolvableId] = Step((int)StepOutcome.Completed, Guid.NewGuid(), "{}"),
+            // danglingId intentionally absent → SelectNext surfaces it in UnresolvedIds
+        };
+        var store = Seed(workflowId, steps);
+        var redis = OutPresentL2(
+            new Dictionary<string, string> { [L2ProjectionKeys.OutputData(entryId)] = "the-output" }, out _);
+        var send = new CapturingSendProvider();
+        var metrics = NewMetrics();
+        using var mc = new MeterCollector(OrchestratorMetrics.MeterName, "orchestrator_step_unresolved");
+
+        await Build(store, redis, send, metrics: metrics).RunAsync(
+            Completed(workflowId, completedStepId, entryId), StepOutcome.Completed, Guid.NewGuid(), ct);
+
+        var resolvableHandoff = Assert.Single(send.Handoffs);      // the resolvable successor still fans out
+        Assert.Equal(resolvableId, resolvableHandoff.StepId);
+        Assert.Empty(send.SentKeeper);                             // dangling id is a graceful skip, NOT a keeper
+        // exactly one increment for the single dangling id, tagged workflowId ONLY.
+        Assert.Equal(1, mc.Total);
+        var tag = Assert.Single(mc.Tags[0]);
+        Assert.Equal("workflowId", tag.Key);
+        Assert.Equal(workflowId.ToString("D"), tag.Value);
+    }
+
+    [Fact]
+    public async Task Failed_with_present_out_blob_fans_out_and_deletes_like_Completed()
+    {
+        // Phase 72 / REQ-5 / D-09: the read+fan-out+delete now run for a Failed result IDENTICALLY to a
+        // Completed one — there is no outcome branch. The processor always-writes the terminal out: blob.
         var ct = TestContext.Current.CancellationToken;
         var workflowId = Guid.NewGuid();
         var failedStepId = Guid.NewGuid();
         var nextStepId = Guid.NewGuid();
+        var nextProcessorId = Guid.NewGuid();
+        var entryId = Guid.NewGuid();
 
-        // a Failed-gated successor advances on a Failed outcome — no out: blob is read (non-completed).
+        var steps = new Dictionary<Guid, StepProjection>
+        {
+            [failedStepId] = Step(0, Guid.NewGuid(), "{}", nextStepId),
+            [nextStepId] = Step((int)StepOutcome.Failed, nextProcessorId, "{\"next\":true}"),
+        };
+        var store = Seed(workflowId, steps);
+        var redis = OutPresentL2(
+            new Dictionary<string, string> { [L2ProjectionKeys.OutputData(entryId)] = "the-fail-output" }, out var db);
+        var send = new CapturingSendProvider();
+
+        await Build(store, redis, send).RunAsync(
+            Failed(workflowId, failedStepId, entryId), StepOutcome.Failed, Guid.NewGuid(), ct);
+
+        var handoff = Assert.Single(send.Handoffs);
+        Assert.Equal(nextStepId, handoff.StepId);
+        Assert.Equal("the-fail-output", handoff.Data);                  // relocated blob carried inline (uniform)
+        await db.Received(1).StringGetAsync(                            // the out: read ran for a Failed
+            (RedisKey)L2ProjectionKeys.OutputData(entryId), Arg.Any<CommandFlags>());
+        await db.Received(1).KeyDeleteAsync(                            // and the out: delete ran for a Failed
+            (RedisKey)L2ProjectionKeys.OutputData(entryId), Arg.Any<CommandFlags>());
+        Assert.Empty(send.SentKeeper);
+    }
+
+    [Fact]
+    public async Task Cancelled_with_present_out_blob_fans_out_and_deletes_like_Completed()
+    {
+        // D-09: a Cancelled terminal result relocates identically — outcome is consumed ONLY by SelectNext.
+        var ct = TestContext.Current.CancellationToken;
+        var workflowId = Guid.NewGuid();
+        var cancelledStepId = Guid.NewGuid();
+        var nextStepId = Guid.NewGuid();
+        var entryId = Guid.NewGuid();
+
+        var steps = new Dictionary<Guid, StepProjection>
+        {
+            [cancelledStepId] = Step(0, Guid.NewGuid(), "{}", nextStepId),
+            [nextStepId] = Step((int)StepOutcome.Cancelled, Guid.NewGuid(), "{}"),
+        };
+        var store = Seed(workflowId, steps);
+        var redis = OutPresentL2(
+            new Dictionary<string, string> { [L2ProjectionKeys.OutputData(entryId)] = "the-cancel-output" }, out var db);
+        var send = new CapturingSendProvider();
+
+        await Build(store, redis, send).RunAsync(
+            Cancelled(workflowId, cancelledStepId, entryId), StepOutcome.Cancelled, Guid.NewGuid(), ct);
+
+        var handoff = Assert.Single(send.Handoffs);
+        Assert.Equal("the-cancel-output", handoff.Data);
+        await db.Received(1).KeyDeleteAsync(
+            (RedisKey)L2ProjectionKeys.OutputData(entryId), Arg.Any<CommandFlags>());
+        Assert.Empty(send.SentKeeper);
+    }
+
+    [Fact]
+    public async Task Clean_absent_out_blob_acks_without_fanout_keeper_or_delete()
+    {
+        // D-10: a cleanly-absent out: blob (empty L2, no Redis fault) → idempotent ack-skip: NO Handoffs,
+        // NO keeper, NO delete. A Failed result with a matching successor still rides the skip.
+        var ct = TestContext.Current.CancellationToken;
+        var workflowId = Guid.NewGuid();
+        var failedStepId = Guid.NewGuid();
+        var nextStepId = Guid.NewGuid();
+        var entryId = Guid.NewGuid();
+
         var steps = new Dictionary<Guid, StepProjection>
         {
             [failedStepId] = Step(0, Guid.NewGuid(), "{}", nextStepId),
             [nextStepId] = Step((int)StepOutcome.Failed, Guid.NewGuid(), "{}"),
         };
         var store = Seed(workflowId, steps);
-        var redis = OutPresentL2(new Dictionary<string, string>(), out var db);
+        var redis = OutPresentL2(new Dictionary<string, string>(), out var db);   // empty dict → clean-absent
+        var send = new CapturingSendProvider();
+        var logger = new CapturingLogger<OrchestratorPrePipeline>();
+
+        await Build(store, redis, send, logger).RunAsync(
+            Failed(workflowId, failedStepId, entryId), StepOutcome.Failed, Guid.NewGuid(), ct);
+
+        Assert.Contains(logger.Messages, msg => msg.Contains("clean-absent"));
+        Assert.Empty(send.Handoffs);                                                  // NO fan-out
+        Assert.Empty(send.SentKeeper);                                                // NO keeper (not a fault)
+        await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());   // NO delete
+    }
+
+    [Fact]
+    public async Task Processing_rides_clean_absent_skip_no_fanout()
+    {
+        // D-05: a Processing result wrote no out: blob → it hits the clean-absent gate and does NOT advance,
+        // for free (no special Processing branch). Use a Processing-gated successor so SelectNext matches.
+        var ct = TestContext.Current.CancellationToken;
+        var workflowId = Guid.NewGuid();
+        var procStepId = Guid.NewGuid();
+        var nextStepId = Guid.NewGuid();
+        var entryId = Guid.NewGuid();
+
+        var steps = new Dictionary<Guid, StepProjection>
+        {
+            [procStepId] = Step(0, Guid.NewGuid(), "{}", nextStepId),
+            [nextStepId] = Step((int)StepOutcome.Processing, Guid.NewGuid(), "{}"),
+        };
+        var store = Seed(workflowId, steps);
+        var redis = OutPresentL2(new Dictionary<string, string>(), out var db);   // empty → clean-absent
         var send = new CapturingSendProvider();
 
-        var failed = new StepFailed(workflowId, failedStepId, Guid.NewGuid())
-        { CorrelationId = Guid.NewGuid(), ExecutionId = Guid.NewGuid(), EntryId = Guid.Empty };
+        await Build(store, redis, send).RunAsync(
+            Processing(workflowId, procStepId, entryId), StepOutcome.Processing, Guid.NewGuid(), ct);
 
-        await Build(store, redis, send).RunAsync(failed, StepOutcome.Failed, Guid.NewGuid(), ct);
-
-        var handoff = Assert.Single(send.Handoffs);
-        Assert.Equal("", handoff.Data);                          // non-completed → no relocated data
-        await db.DidNotReceive().StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());   // no out: read
-        await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());   // no out: delete
+        Assert.Empty(send.Handoffs);                                                  // no advance
+        Assert.Empty(send.SentKeeper);
+        await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
     }
 
     [Fact]

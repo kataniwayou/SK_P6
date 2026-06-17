@@ -82,6 +82,7 @@ public sealed class TypedResultConsumerFacts
         WorkflowL1Store store, IConnectionMultiplexer redis, ISendEndpointProvider send) =>
         new(store, new StepAdvancement(), redis, send,
             Options.Create(new RetryOptions { Limit = 3 }),
+            OrchestratorTestStubs.Metrics(),
             NullLogger<OrchestratorPrePipeline>.Instance);
 
     /// <summary>Builds the matching typed consumer for <paramref name="outcome"/> and feeds it a typed result
@@ -199,9 +200,11 @@ public sealed class TypedResultConsumerFacts
         Assert.Empty(completedSend.Handoffs);
 
         // StepFailedConsumer (Outcome=Failed) over the SAME L1 DOES fan it out — the only knob is Outcome.
+        // Phase 72 / D-09: the Failed result now reads its out: blob too (uniform, branch-free), so it carries
+        // the SAME entryId whose out: blob is present (the processor always-writes a terminal out: blob).
         var failedSend = new CapturingSendProvider();
         await ConsumeFor(StepOutcome.Failed, store, redis, failedSend, workflowId, completedStepId, Guid.NewGuid(),
-            Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.Empty, ct);
+            Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), entryId, ct);
         Assert.Single(failedSend.Handoffs);
     }
 

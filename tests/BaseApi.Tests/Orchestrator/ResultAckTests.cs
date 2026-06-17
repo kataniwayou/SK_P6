@@ -103,6 +103,7 @@ public sealed class ResultAckTests
         ILogger<OrchestratorPrePipeline>? logger = null) =>
         new(store, new StepAdvancement(), redis, send,
             Options.Create(new RetryOptions { Limit = 3 }),
+            OrchestratorTestStubs.Metrics(),
             logger ?? NullLogger<OrchestratorPrePipeline>.Instance);
 
     private static StepCompletedConsumer Build(

@@ -6,6 +6,7 @@ using Messaging.Contracts.Projections;    // L2ProjectionKeys
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orchestrator.L1;
+using Orchestrator.Observability;        // OrchestratorMetrics (StepUnresolved counter)
 using StackExchange.Redis;
 
 namespace Orchestrator.Dispatch;
@@ -26,7 +27,7 @@ namespace Orchestrator.Dispatch;
 /// <list type="number">
 ///   <item><b>Resolution</b> (REQ-71-02/03, PURE L1 — cannot infra-fail): an L1 miss (workflow or step
 ///   absent) logs a DISTINCT <c>completed-unresolved</c> trip-end line, increments
-///   <c>orchestrator_step_unresolved</c> (stage-1 — wired in Task 2), and acks (NO throw, NO keeper).</item>
+///   <c>orchestrator_step_unresolved</c> (stage-1), and acks (NO throw, NO keeper).</item>
 ///   <item><b>SelectNext</b> (REQ-71-03): a resolved step with NO matches AND NO unresolved ids (a true
 ///   terminal) logs a DISTINCT <c>completed-terminal</c> trip-end line and acks (NO throw, NO keeper, NO
 ///   increment — D-03). Empty matches but non-empty <c>UnresolvedIds</c> falls THROUGH so stage-3 counts.</item>
@@ -38,8 +39,8 @@ namespace Orchestrator.Dispatch;
 ///   <item><b>Fan-out</b> (REQ-71-05): one <see cref="NextStepHandoff"/> per match to
 ///   <see cref="OrchestratorQueues.ResultPost"/> (fresh envelope MessageId — NO override, D-11) carrying the
 ///   read blob as <see cref="NextStepHandoff.Data"/>. Each entry in <c>UnresolvedIds</c> (a dangling next-step
-///   edge) logs + increments <c>orchestrator_step_unresolved</c> (stage-3 — wired in Task 2) + <c>continue</c>s
-///   — NEVER throws (D-02 graceful business skip).</item>
+///   edge) logs + increments <c>orchestrator_step_unresolved</c> (stage-3) + <c>continue</c>s — NEVER throws
+///   (D-02 graceful business skip).</item>
 ///   <item><b>Delete</b> (REQ-71-05, send-before-delete): AFTER all sends land, delete <c>L2[out:EntryId]</c>
 ///   (for every outcome, past the clean-absent gate); a delete-exhaust → one DELETE keeper + return; a
 ///   send-exhaust THROWS (NO delete).</item>
@@ -48,9 +49,9 @@ namespace Orchestrator.Dispatch;
 /// <para>
 /// No-silent-loss (REQ-71-02 / D-18) is realized HERE by the two DISTINCT trip-end LOG lines + behavior
 /// (ack, no throw, no keeper) AND the <c>orchestrator_step_unresolved</c> counter (Phase-71 D-18 deferral
-/// realized, wired in Task 2): it increments at stage-1 (consumed step/workflow missing from L1) and once per
-/// dangling next-step id at stage-3 — labeled <c>workflowId</c> only. A completed-terminal, an
-/// entry-condition skip, and a normal fan-out do NOT increment. The <see cref="Orchestrator.Observability.OrchestratorMetrics"/> holder
+/// realized): it increments at stage-1 (consumed step/workflow missing from L1) and once per dangling
+/// next-step id at stage-3 — labeled <c>workflowId</c> only. A completed-terminal, an
+/// entry-condition skip, and a normal fan-out do NOT increment. The <see cref="OrchestratorMetrics"/> holder
 /// is constructor-injected (singleton-into-scoped — no Program.cs edit). <see cref="NextStepHandoff.ExecutionId"/>
 /// is carried from the inbound result onto each handoff unchanged (D-13). Trip-end / drop logs reference ids
 /// only — never the relocated-input or author-payload tokens (T-70-10).
@@ -62,6 +63,7 @@ public sealed class OrchestratorPrePipeline(
     IConnectionMultiplexer redis,
     ISendEndpointProvider sendProvider,
     IOptions<RetryOptions> retryOptions,
+    OrchestratorMetrics metrics,
     ILogger<OrchestratorPrePipeline> logger)
 {
     public async Task RunAsync(IStepResult m, StepOutcome outcome, Guid messageId, CancellationToken ct)
@@ -73,6 +75,7 @@ public sealed class OrchestratorPrePipeline(
             logger.LogInformation(
                 "Trip ended (completed-unresolved): no L1 entry for ({WorkflowId}, {StepId}) — acking (business)",
                 m.WorkflowId, m.StepId);
+            metrics.StepUnresolved.Add(1, new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")));
             return;
         }
 
@@ -130,9 +133,17 @@ public sealed class OrchestratorPrePipeline(
             if (!sent.Succeeded) throw sent.Error!;    // send-exhaust → throw → broker redelivery (NO delete)
         }
 
-        // stage-3 (Task 2): each dangling next-step id in selection.UnresolvedIds logs + increments
+        // stage-3: each dangling next-step id in selection.UnresolvedIds logs + increments
         //    orchestrator_step_unresolved + continue (graceful, NEVER throws — D-02). Sits AFTER the
-        //    clean-absent gate so a skipped message never counts stage-3. (Increment wired in Task 2.)
+        //    clean-absent gate so a skipped message never counts stage-3.
+        foreach (var unresolvedId in selection.UnresolvedIds)
+        {
+            logger.LogInformation(
+                "Dangling next-step id {NextStepId} for ({WorkflowId}, {StepId}) — skipping (business)",
+                unresolvedId, m.WorkflowId, m.StepId);
+            metrics.StepUnresolved.Add(1, new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")));
+            continue;   // graceful business skip — never throw (D-02 / T-72-08)
+        }
 
         // 5) Delete (REQ-71-05, send-before-delete, UNIFORM): AFTER all sends land, delete L2[out:EntryId]
         //    for every outcome (past the clean-absent gate). A delete-exhaust → one DELETE keeper + return.
