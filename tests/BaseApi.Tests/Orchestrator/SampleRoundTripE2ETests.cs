@@ -74,6 +74,11 @@ public sealed class SampleRoundTripE2ETests
 {
     private const string StartReloadMessage = "Start reload for WorkflowId=";
 
+    // The branch-free OrchestratorPrePipeline (Phase 72) logs this DISTINCT line when it reads a real
+    // terminal out: blob for a step with no matching successor and acks — the durable round-trip-output proof
+    // (see clause (a)). Substring match (the full template carries the WorkflowId/StepId/Outcome too).
+    private const string CompletedTerminalMessage = "Trip ended (completed-terminal)";
+
     // ---- Gate-A (CFG-09) compatible config-schema seed primitives (D-09a / D-13) ----
     // Shared by Plan 03's Gate-A CFG-09 E2E and Plan 04's close script so all three reuse the SAME
     // sentinel Name (schemas have NO uniqueness constraint, so a fixed Name is the idempotency key the
@@ -89,10 +94,6 @@ public sealed class SampleRoundTripE2ETests
     // The live processor-sample container resolves identity + binds + MarkHealthy after the DB row is
     // seeded (compose start_period 30s + identity-resolve latency); allow a generous budget.
     private const int LivenessPollTimeoutMs = 90_000;
-
-    // The orchestrator fires the dispatch at the next "* * * * *" occurrence (top of the next minute),
-    // then the processor round-trips and writes output; allow > 60s plus round-trip slack.
-    private const int OutputPollTimeoutMs = 120_000;
 
     // otel/log export is async; tolerate flush + ingest latency on the orchestrator-advance ES proof.
     private const int EsPollTimeoutMs = 120_000;
@@ -126,10 +127,6 @@ public sealed class SampleRoundTripE2ETests
         // caught it) OR the container is down — fail with a clear message.
         await PollForHealthyLivenessAsync(procId, ct);
 
-        // Snapshot the skp:data:* keys present BEFORE Start so we can detect the round-trip's fresh output
-        // key (the server mints the entryId via NewId.NextGuid(), so the key name is unknown a priori).
-        var dataKeysBefore = ScanExecutionDataKeys();
-
         // Drive Start. 204 NoContent means the L2 root was written, the body Guid minted + published, and
         // the processor-liveness gate PASSED — and it passed ONLY because the live container's heartbeat
         // is fresh (truthful SC#4 gate; no synthetic seed backs it).
@@ -144,15 +141,21 @@ public sealed class SampleRoundTripE2ETests
         factory.L2KeysToCleanup.Add($"skp:{wfId}");
         factory.L2KeysToCleanup.Add($"skp:{wfId}:{stepId}");
 
-        // ---- Round-trip clause (a): OUTPUT WRITTEN TO L2 ----
-        // The orchestrator fires the dispatch at the next minute; the live processor consumes it, runs
-        // ProcessAsync, and writes the output to skp:data:{newEntryId}. Poll for a NEW skp:data:* key.
-        var newDataKey = await PollForNewExecutionDataKeyAsync(dataKeysBefore, ct);
-        Assert.NotNull(newDataKey);
-        // Net-zero teardown (Pitfall 4): clean up the run's minted execution-data key. (The container's
-        // short ExecutionDataTtl also self-expires it, but delete explicitly so the close gate holds even
-        // within the TTL window.)
-        factory.L2KeysToCleanup.Add(newDataKey!.Value);
+        // ---- Round-trip clause (a): OUTPUT ROUND-TRIPPED + CONSUMED ----
+        // Phase 70/72 reshaped the output path: the processor writes its terminal output to the transient
+        // out: blob (skp:out:{messageId}), and the branch-free OrchestratorPrePipeline reads it, fans out to
+        // any successors, then DELETES it. For THIS single-step (no-successor) workflow nothing is relocated
+        // to skp:data, and the out: blob is reclaimed within the same trip — so neither key is observable by a
+        // black-box Redis poll (the legacy "poll for a fresh skp:data key" proof is obsolete under the
+        // always-write model). The DURABLE proof that output was produced AND consumed is the orchestrator
+        // pre-pipeline's terminal trip-end log "Trip ended (completed-terminal): ... outcome=Completed —
+        // acking", emitted ONLY when a real terminal out: blob is read for a step with no successor. It
+        // carries attributes.WorkflowId (the message template + the IExecutionCorrelated inbound scope), so it
+        // round-trips to ES exactly like the clause-(b)/(c) logs.
+        using var es = new ElasticsearchTestClient();
+        var completedTerminal =
+            await PollForOrchestratorLogContainingAsync(es, wfId, CompletedTerminalMessage, ct);
+        Assert.NotNull(completedTerminal);   // processor output round-tripped → orchestrator consumed the Completed result
 
         // ---- Round-trip clause (b): ORCHESTRATOR ADVANCES ----
         // The orchestrator CONTAINER consumed the published StartOrchestration and logged the seam
@@ -160,24 +163,11 @@ public sealed class SampleRoundTripE2ETests
         // scheduled the workflow whose fire drove the dispatch we just observed land in L2. Read it back
         // from Elasticsearch via the proven otel→ES precedent (term on the seeded WorkflowId attribute,
         // scoped to the orchestrator service; the distinct message text asserted in C#).
-        using var es = new ElasticsearchTestClient();
-        var advanceQuery = $$"""
-          {
-            "size": 5,
-            "sort": [ { "@timestamp": { "order": "desc" } } ],
-            "query": {
-              "bool": {
-                "must": [
-                  { "term": { "attributes.WorkflowId": "{{wfId}}" } },
-                  { "term": { "resource.attributes.service.name": "orchestrator" } }
-                ]
-              }
-            }
-          }
-          """;
-        var advance = await es.PollEsForLog(advanceQuery, timeoutMs: EsPollTimeoutMs, ct: ct);
-        Assert.NotNull(advance);
-        Assert.Contains(StartReloadMessage, advance!.Value.GetRawText());
+        // Robust against hits[0] aliasing: the orchestrator emits MULTIPLE logs for this WorkflowId (the
+        // start-reload seam AND a per-fire completed-terminal trip-end), so a hits[0]-only query can return a
+        // terminal log instead of the start-reload one. Search ALL hits for the start-reload fragment.
+        var advance = await PollForOrchestratorLogContainingAsync(es, wfId, StartReloadMessage, ct);
+        Assert.NotNull(advance);   // orchestrator hydrated + scheduled the workflow (StartOrchestrationConsumer seam)
 
         // ---- Round-trip clause (c): WorkflowId reached ES FROM A SCOPE on a PROCESSOR-side log (LOG-06 / L1) ----
         // LOG-06 / L1: prove WorkflowId reached ES FROM A SCOPE, not from a template. The processor-sample
@@ -280,21 +270,42 @@ public sealed class SampleRoundTripE2ETests
         factory.InstanceIndexMembersToSrem.Add((procId, instanceId)); // net-zero: SREM the index member
     }
 
-    // ---- Round-trip output poll: a NEW skp:data:* key appears after Start ----
-
-    private static async Task<RedisKey?> PollForNewExecutionDataKeyAsync(
-        HashSet<string> before, CancellationToken ct)
+    // ---- Round-trip output proof (clause a): the branch-free OrchestratorPrePipeline logged a terminal
+    // trip-end for THIS workflow — the durable signal that the processor produced an out: blob the
+    // orchestrator read + consumed. The out: blob (and, in a multi-step flow, the relocated skp:data) are
+    // reclaimed within the trip, so neither is reliably observable by a black-box Redis poll under the
+    // Phase-70/72 always-write model; the orchestrator's trip-end log is the stable artifact. ----
+    private static async Task<JsonElement?> PollForOrchestratorLogContainingAsync(
+        ElasticsearchTestClient es, Guid wfId, string messageFragment, CancellationToken ct)
     {
-        var deadline = DateTime.UtcNow.AddMilliseconds(OutputPollTimeoutMs);
+        // otel maps the log message under a nested, non-phrase-searchable "body" object, so we term-filter on
+        // the WorkflowId attribute + the orchestrator service and string-match the fragment in C# across ALL
+        // hits (the start-reload log shares the same term filter — SearchAllHits returns the full set, so the
+        // terminal log is never lost behind hits[0]). Poll-to-stable until the fragment appears or timeout.
+        var query = $$"""
+          {
+            "size": 50,
+            "sort": [ { "@timestamp": { "order": "desc" } } ],
+            "query": {
+              "bool": {
+                "must": [
+                  { "term": { "attributes.WorkflowId": "{{wfId}}" } },
+                  { "term": { "resource.attributes.service.name": "orchestrator" } }
+                ]
+              }
+            }
+          }
+          """;
+        var deadline = DateTime.UtcNow.AddMilliseconds(EsPollTimeoutMs);
         var delay = 1_000;
         while (DateTime.UtcNow < deadline)
         {
             ct.ThrowIfCancellationRequested();
-            foreach (var key in ScanExecutionDataKeys())
+            foreach (var hit in await es.SearchAllHits(query, ct: ct))
             {
-                if (!before.Contains(key))
+                if (hit.GetRawText().Contains(messageFragment, StringComparison.Ordinal))
                 {
-                    return key; // the round-trip's output landed in L2 (EntryStepDispatchConsumer write).
+                    return hit;   // the round-trip output reached the orchestrator pre-pipeline and acked terminal
                 }
             }
 
@@ -303,37 +314,10 @@ public sealed class SampleRoundTripE2ETests
         }
 
         Assert.Fail(
-            $"No new skp:data:* execution-data key appeared within {OutputPollTimeoutMs}ms — the live " +
-            $"round-trip (orchestrator fire → dispatch → ProcessAsync → output write) did not complete. " +
-            $"Confirm the processor-sample container bound queue:{{id:D}} and the workflow cron fired.");
+            $"No orchestrator log containing \"{messageFragment}\" for WorkflowId={wfId} reached ES within " +
+            $"{EsPollTimeoutMs}ms — the live round-trip (fire → dispatch → ProcessAsync → out: blob → " +
+            $"orchestrator pre-pipeline consume) did not complete.");
         return null; // unreachable (Assert.Fail throws) — keeps the compiler happy.
-    }
-
-    /// <summary>
-    /// SCAN host Redis for all keys under the execution-data discriminator
-    /// (<c>skp:data:*</c> = <see cref="L2ProjectionKeys.ExecutionData"/>). The entryId is server-minted
-    /// (<c>NewId.NextGuid()</c>), so we cannot address the key directly — enumerate the family.
-    /// </summary>
-    private static HashSet<string> ScanExecutionDataKeys()
-    {
-        using var mux = ConnectionMultiplexer.Connect(HostRedis);
-        var endpoints = mux.GetEndPoints();
-        var keys = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var ep in endpoints)
-        {
-            var server = mux.GetServer(ep);
-            if (!server.IsConnected || server.IsReplica)
-            {
-                continue;
-            }
-
-            foreach (var key in server.Keys(pattern: $"{L2ProjectionKeys.Prefix}data:*"))
-            {
-                keys.Add(key.ToString());
-            }
-        }
-
-        return keys;
     }
 
     // ---- HTTP seeding helpers (Processor → Step → Workflow) — mirrors CorrelationPropagationE2ETests ----
