@@ -700,7 +700,7 @@ Plans:
 
 Plans:
 - [x] 71-01-PLAN.md — Shared contracts (NextStepHandoff + 3 orchestrator keeper contracts + ResultPost queue const) + A1 close at both stamp sites (OutputTail + keeper InjectConsumer) ✅ 2026-06-17 (44da475, a0a5631, c39d0e3) — REQ-71-07, REQ-71-10; touched slice 9/9 green
-- [ ] 71-02-PLAN.md — Orchestrator Pre/Post core: OrchestratorPrePipeline (gate/read out: -> SelectNext -> fan-out -> delete out:) + RelocateTail + Post consumer + two-reason trip-end metric + TypedResultConsumer reshape + test migration
+- [x] 71-02-PLAN.md — Orchestrator Pre/Post core: OrchestratorPrePipeline (gate/read out: -> SelectNext -> fan-out -> delete out:) + RelocateTail + Post consumer + two distinct trip-end LOG lines (metric DEFERRED) + TypedResultConsumer reshape + test migration ✅ 2026-06-17 (bc47286, 9e464ce, a691771) — REQ-71-01..06, REQ-71-11, REQ-71-12; touched slice 29/29 green
 - [ ] 71-03-PLAN.md — Keeper orchestrator recovery consumers (REINJECT/INJECT/DELETE) + binder/Program wiring + partition/firewall facts
 
 ---
