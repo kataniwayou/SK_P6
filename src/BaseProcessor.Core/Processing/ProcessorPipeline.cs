@@ -188,9 +188,15 @@ public sealed class ProcessorPipeline(
 
     private async Task SendKeeper(IKeeperRecoverable msg, int limit, CancellationToken ct)
     {
-        var ep = await sendProvider.GetSendEndpoint(new Uri($"queue:{KeeperQueues.Recovery}"));   // A2: keeper-recovery
-        var sent = await RetryLoop.ExecuteAsync(
-            async () => { await ep.Send((object)msg, CancellationToken.None); return true; }, limit, ct);
+        // IN-04: resolve GetSendEndpoint INSIDE the RetryLoop (keeper Guard parity) so a transient
+        // endpoint-resolution fault is retried like the send — matching OutputTail.SendKeeper and
+        // OrchestratorPrePipeline.SendKeeper. A2: keeper-recovery. An exhaust still throws → broker redelivery.
+        var sent = await RetryLoop.ExecuteAsync(async () =>
+        {
+            var ep = await sendProvider.GetSendEndpoint(new Uri($"queue:{KeeperQueues.Recovery}"));
+            await ep.Send((object)msg, CancellationToken.None);
+            return true;
+        }, limit, ct);
         if (!sent.Succeeded) throw sent.Error!;   // propagate → throw → broker redelivery (Phase-53 D-01)
     }
 
