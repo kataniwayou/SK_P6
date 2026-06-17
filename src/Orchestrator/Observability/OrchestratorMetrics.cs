@@ -41,11 +41,19 @@ public sealed class OrchestratorMetrics
     /// </summary>
     public Counter<long> ResultDeduped { get; }
 
+    /// <summary>
+    /// <c>orchestrator_step_unresolved</c> — incremented (Plan 03) at each L1-resolution miss: a dangling
+    /// next-step id from <c>SelectNext</c>'s <c>UnresolvedIds</c>. Tagged <c>workflowId</c> only (label-minimal,
+    /// bounded cardinality — T-72-05). snake_case, NO <c>_total</c> in the name (the collector appends it, D-03).
+    /// </summary>
+    public Counter<long> StepUnresolved { get; }
+
     public OrchestratorMetrics(IMeterFactory meterFactory)
     {
         var meter = meterFactory.Create(MeterName);
         DispatchSent   = meter.CreateCounter<long>("orchestrator_dispatch_sent");       // D-03 — collector appends the suffix
         ResultConsumed = meter.CreateCounter<long>("orchestrator_result_consumed");     // D-03 — collector appends the suffix
         ResultDeduped  = meter.CreateCounter<long>("orchestrator_result_deduped");      // Phase 32 D-10 — collector appends the suffix
+        StepUnresolved = meter.CreateCounter<long>("orchestrator_step_unresolved");     // Phase 72 D-03 — collector appends the suffix
     }
 }

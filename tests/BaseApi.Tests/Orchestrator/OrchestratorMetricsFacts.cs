@@ -32,5 +32,6 @@ public sealed class OrchestratorMetricsFacts
 
         Assert.NotNull(metrics.DispatchSent);
         Assert.NotNull(metrics.ResultConsumed);
+        Assert.NotNull(metrics.StepUnresolved);
     }
 }
