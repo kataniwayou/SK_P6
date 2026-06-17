@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 3
-status: executing
-stopped_at: Completed 72-02-PLAN.md
-last_updated: "2026-06-17T11:19:28.152Z"
-last_activity: 2026-06-17 -- Phase 72 Plan 02 complete (orchestrator foundation: SelectNext->{Matches,UnresolvedIds} + orchestrator_step_unresolved counter + MeterListener seam; 17/17 hermetic GREEN, 0-warning Debug+Release)
+status: verifying
+stopped_at: Completed 72-03-PLAN.md
+last_updated: "2026-06-17T11:41:40.612Z"
+last_activity: 2026-06-17 -- Phase 72 Plan 03 complete (uniform branch-free OrchestratorPrePipeline + clean-absent skip + stage-1/stage-3 orchestrator_step_unresolved increments; 15/15 + affected 40/40 hermetic GREEN, 0-warning Debug+Release). Phase 72 COMPLETE (3/3) — ready for verification
 progress:
   total_phases: 4
   completed_phases: 0
@@ -33,8 +33,10 @@ Phase: 72 (processor-always-write-to-l2-and-uniform-orchestrator-pre-pi) — EXE
 Current Plan: 3
 Total Plans: 3
 Plan: 3 of 3
-Status: Executing Phase 72 (72-01 + 72-02 COMPLETE; 72-03 next)
-Last activity: 2026-06-17 -- Phase 72 Plan 02 complete (orchestrator foundation; 17/17 hermetic GREEN, 0-warning Debug+Release)
+Status: Phase 72 COMPLETE (3/3 plans) — ready for verification
+Last activity: 2026-06-17 -- Phase 72 Plan 03 complete (uniform branch-free OrchestratorPrePipeline; 15/15 + affected 40/40 hermetic GREEN, 0-warning Debug+Release)
+
+> Phase 72 Plan 03 — ✅ COMPLETE 2026-06-17 (Wave 2: the payoff — all four `TypedResultConsumer<T>` shells now run ONE uniform branch-free pre-pipeline flow + the Phase-71-deferred D-18 trip-end metric lands). **2 atomic feat commits** (`b501557` dropped BOTH `if (outcome == StepOutcome.Completed)` gates — the `out:` read and the delete now run for every outcome (D-09, riding Plan-01's always-write); consumed `SelectNext`'s `{Matches, UnresolvedIds}`; three-way read (read lambda returns null on clean-absent to split absent from fault, Pitfall 2): present → fan-out+delete / clean-absent → idempotent ack-skip (Processing rides it for free, D-05) / Redis fault → REINJECT (D-10); ExecutionId threaded unchanged D-13; `88dbd3f` `OrchestratorMetrics` ctor-injected (singleton→scoped, no Program.cs edit) + BOTH increments in the same change (no CS9113): stage-1 L1-miss + stage-3 `foreach` over `UnresolvedIds` (continue, never throws, D-02), `workflowId` label only; rewrote `OrchestratorPrePipelineFacts` in place D-12 — Failed/Cancelled present-blob fan-out+delete like Completed, clean-absent + Processing-rides-skip facts, dangling-next-step (resolvable still fans out + 1 increment), condition-skip + normal-fanout no-increment, `MeterCollector` tag-set assertions). SPEC-4/5/6. **2 deviations:** (1) Rule 3 (blocking) — migrated 3 other test ctor sites (`TypedResultConsumerFacts`/`ResultAckTests`/`StopConsumerLifecycleTests`) to `OrchestratorTestStubs.Metrics()` (the ctor-param add broke them); (2) Rule 1 (test) — `TypedResultConsumerFacts` Failed-gated sub-call now passes the SAME `entryId` whose `out:` blob is present (the Failed read is now uniform post-D-09). Hermetic: `OrchestratorPrePipelineFacts` **15/15** + affected orchestrator facts **40/40 GREEN**; **0-warning Debug + Release** (full solution). Full `dotnet test` shows 288 failures — ALL pre-existing Docker-bound E2E/Integration tests (sandbox lacks Redis/RabbitMQ/Postgres); none in the hermetic dispatch surface. Live-stack proof deferred-automated (SPEC AC #10). Summary: `.planning/phases/72-processor-always-write-to-l2-and-uniform-orchestrator-pre-pi/72-03-SUMMARY.md` (Self-Check PASSED). **Phase 72 ready for verification.**
 
 > Phase 72 Plan 02 — ✅ COMPLETE 2026-06-17 (Wave 1: orchestrator-side foundation for Plan 03). **3 atomic commits** (`c362835` test: zero-dep BCL `MeterListener` `MeterCollector` seam capturing a named counter's Total/Count/Tags — no `Microsoft.Extensions.Diagnostics.Testing` package, A1 Option B; `5555427` feat: `SelectNext` reshaped to a pure `readonly record struct SelectNextResult(Matches, UnresolvedIds)` — dangling next-step ids now surface in `UnresolvedIds` (D-01, was silently dropped), condition-mismatch/`Never(5)` collected nowhere (D-03), terminal guard preserved, helper stays pure D-02; all `SelectNext` call sites migrated to `.Matches`; `7d3e390` feat: `orchestrator_step_unresolved` `Counter<long>` added to `OrchestratorMetrics` via existing `IMeterFactory.Create("Orchestrator")` — snake_case, no `_total`, no static Meter, meter name unchanged). SPEC-4/5/6. **1 deviation (Rule 3 - blocking):** migrated additional `SelectNext` call sites beyond the plan's listed 6 (`OrchestratorPrePipeline.cs:68` + ~16 `MultiStepHydrationCascadeTests` sites) to `.Matches` — the return-type change broke every caller; required to hold the 0-warning gate (pure mechanical `.Matches` substitution, no behavior change). Hermetic: StepAdvancementTests 15/15 + OrchestratorMetricsFacts 2/2 = **17/17 GREEN**; **0-warning Debug + Release**. Summary: `.planning/phases/72-processor-always-write-to-l2-and-uniform-orchestrator-pre-pi/72-02-SUMMARY.md` (Self-Check PASSED). Plan 03 next.
 
@@ -1031,6 +1033,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 71 P03 | 6min | 3 tasks | 9 files |
 | Phase 72 P01 | 25 | 2 tasks | 5 files |
 | Phase 72 P02 | 13min | 3 tasks | 6 files |
+| Phase 72 P03 | 18min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1496,6 +1499,9 @@ Recent decisions affecting current work:
 - 71-03: orchestrator keeper recovery trio reuses the shared KeeperMetrics.ReinjectDropped counter (no new instrument) per plan preference
 - 71-03: INJECT relocate body re-implemented INLINE in Keeper (cross-assembly firewall held — no Keeper->Orchestrator ProjectReference; shared policy in L2ProjectionKeys only)
 - Phase 72 Plan 02: SelectNext returns pure SelectNextResult{Matches,UnresolvedIds} — dangling next-step ids surface in UnresolvedIds (D-01), condition-mismatch/Never collected nowhere (D-03); helper stays pure (D-02). orchestrator_step_unresolved counter via existing IMeterFactory (no static Meter). Zero-dep BCL MeterListener seam (A1 Option B, no new NuGet).
+- 72-03: OrchestratorPrePipeline is branch-free — read/fan-out/delete run for every outcome (D-09); outcome is consumed only by SelectNext for entry-condition matching
+- 72-03: three-way out: read (D-10) — present -> fan-out+delete / clean-absent (no fault) -> idempotent ack-skip (Processing rides this for free, D-05) / Redis fault -> REINJECT; read lambda returns null on clean-absent to split absent from fault
+- 72-03: orchestrator_step_unresolved wired — stage-1 L1 miss + once per dangling next-step id at stage-3 (continue, never throws), workflowId label only; terminal/condition-skip/normal-fanout do not increment
 
 ### Roadmap Milestone Log
 
@@ -1602,8 +1608,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-17T11:19:27.645Z
-Stopped at: Completed 72-02-PLAN.md
+Last session: 2026-06-17T11:41:31.004Z
+Stopped at: Completed 72-03-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
