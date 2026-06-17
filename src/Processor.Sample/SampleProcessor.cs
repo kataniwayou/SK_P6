@@ -46,11 +46,13 @@ public sealed class SampleProcessor(ILogger<SampleProcessor> logger) : BaseProce
         {
             // ENTRY/seed (Mode-2): generate 2 numbers, log the line, spawn 2 to Post (distinct minted execIds,
             // swallow on exhaust), delete the inbound entry, return null.
-            var numbers = new int[2];
-            for (var i = 0; i < 2; i++)
-                numbers[i] = baseNumber + Random.Shared.Next(0, 100);   // 0..99 inclusive; independent per execution
+            // D-01/D-02: seed the two FIXED execution values (100, 200). Every step's payload number = 1
+            // (seeder data change, Plan 04) so each downstream hop increments by exactly +1, making the L2
+            // value at each step deterministically seed + hop-count. Synthetic deterministic proof values
+            // (D-03) — no real/sensitive payload is logged.
+            var numbers = new[] { 100, 200 };
 
-            logger.LogInformation("{StepLabel} had the following numbers: {Numbers}",
+            logger.LogInformation("{StepLabel} seeded the following numbers: {Numbers}",
                 label, string.Join(", ", numbers));
 
             foreach (var number in numbers)
