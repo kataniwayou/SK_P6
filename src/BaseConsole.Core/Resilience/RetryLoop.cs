@@ -3,8 +3,9 @@ namespace BaseConsole.Core.Resilience;
 /// <summary>D-08 / A3: the shared bounded retry helper. Runs <c>limit</c> IMMEDIATE attempts
 /// (no backoff) and SURFACES exhaustion (returns the last exception in <see cref="RetryOutcome{T}"/>
 /// rather than throwing) so the pipeline routes the correct terminal per op: read-exhaust → REINJECT,
-/// write-exhaust → INJECT, delete-exhaust → DELETE, send-exhaust → re-throw (→ bus _error, D-10). One
-/// place for the A3 semantics — no per-site duplication.</summary>
+/// write-exhaust → INJECT, delete-exhaust → DELETE, send-exhaust → re-throw → broker nack-requeue (no
+/// <c>_error</c>, no dead-letter — the retired Phase-53 D-01 model). One place for the A3 semantics — no
+/// per-site duplication.</summary>
 public static class RetryLoop
 {
     public static async Task<RetryOutcome<T>> ExecuteAsync<T>(
