@@ -18,17 +18,19 @@ namespace BaseApi.Tests.Processor;
 /// <list type="bullet">
 ///   <item><b>ENTRY</b> (<c>executionId == Guid.Empty</c>, Mode-2): spawns EXACTLY TWO completed
 ///   <see cref="DataResult"/>s to the <c>-post</c> queue with DISTINCT executionIds, DELETES the inbound entry,
-///   and the seam returns NULL (the Pre consumer writes/sends/deletes nothing inline). Logs the
-///   <c>"{label} had the following numbers: …"</c> line.</item>
+///   and the seam returns NULL (the Pre consumer writes/sends/deletes nothing inline). Seeds the TWO FIXED
+///   deterministic values <c>100</c> and <c>200</c> (Phase 73, D-01) and logs the
+///   <c>"{label} seeded the following numbers: 100, 200"</c> line.</item>
 ///   <item><b>DOWNSTREAM</b> (<c>executionId != Guid.Empty</c>, Mode-1): returns ONE completed
 ///   <see cref="DataResult"/> reusing the inbound executionId (the inline tail runs it), no spawn, no delete.
-///   Logs the same line.</item>
+///   Logs the value-clarifying <c>"{label} received {Received} produced {Produced}"</c> line (Phase 73,
+///   D-03/D-11 — the ES <c>attributes.Received</c>/<c>attributes.Produced</c> contract).</item>
 /// </list>
 /// </summary>
 public sealed class SampleProcessorFacts
 {
-    /// <summary>Records every log entry's level + formatted message so the "had the following numbers" line
-    /// is observable hermetically.</summary>
+    /// <summary>Records every log entry's level + formatted message so the Mode-2 "seeded the following
+    /// numbers" / Mode-1 "received … produced …" line is observable hermetically.</summary>
     private sealed class CapturingLogger : ILogger<SampleProcessor>
     {
         public List<(LogLevel Level, string Message)> Entries { get; } = new();
@@ -82,10 +84,16 @@ public sealed class SampleProcessorFacts
         Assert.All(send.SentDataToUri, t => Assert.EndsWith($"{processorId:D}-post", t.Uri.ToString()));
         Assert.All(send.SentData, x => Assert.Equal(StepOutcome.Completed, x.Result));
         Assert.Empty(send.Sent);                                   // no inline Step* on the entry path
+        // Mode-2 seeds the TWO FIXED deterministic values (Phase 73, D-01) — NO random, config.number ignored.
+        var seededNumbers = send.SentData
+            .Select(x => JsonDocument.Parse(x.Data).RootElement.GetProperty("number").GetInt32())
+            .OrderBy(n => n)
+            .ToArray();
+        Assert.Equal(new[] { 100, 200 }, seededNumbers);
         // the inbound entry was deleted (Mode-2 DeleteEntry).
         await db.Received(1).KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
-        // logs the "{label} had the following numbers: …" line.
-        Assert.Contains(logger.Entries, e => e.Message.Contains("had the following numbers"));
+        // logs the "{label} seeded the following numbers: 100, 200" line (Phase 73, D-01).
+        Assert.Contains(logger.Entries, e => e.Message.Contains("seeded the following numbers: 100, 200"));
         Assert.Single(logger.Entries);
     }
 
@@ -115,7 +123,8 @@ public sealed class SampleProcessorFacts
 
         Assert.Empty(send.SentData);                               // no spawn (Mode-1)
         await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());   // no DeleteEntry inline
-        Assert.Contains(logger.Entries, e => e.Message.Contains("had the following numbers"));
+        // value-clarifying line (Phase 73, D-03/D-11): received 7 (inbound) → produced 10 (7 + config 3).
+        Assert.Contains(logger.Entries, e => e.Message.Contains("received 7 produced 10"));
         Assert.Single(logger.Entries);
     }
 
@@ -137,11 +146,13 @@ public sealed class SampleProcessorFacts
         Assert.Null(dr);
         Assert.Equal(2, send.SentData.Count);
         Assert.Single(logger.Entries);
-        foreach (var spawn in send.SentData)
-        {
-            using var doc = JsonDocument.Parse(spawn.Data);
-            Assert.InRange(doc.RootElement.GetProperty("number").GetInt32(), 0, 99);   // baseNumber 0 + 0..99
-        }
+        // Mode-2 seeds the TWO FIXED deterministic values 100/200 (Phase 73, D-01) — independent of config,
+        // so a null config still yields exactly {100, 200} (no random, no baseNumber offset).
+        var seededNumbers = send.SentData
+            .Select(spawn => JsonDocument.Parse(spawn.Data).RootElement.GetProperty("number").GetInt32())
+            .OrderBy(n => n)
+            .ToArray();
+        Assert.Equal(new[] { 100, 200 }, seededNumbers);
     }
 
     [Fact]
