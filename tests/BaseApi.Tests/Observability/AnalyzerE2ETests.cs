@@ -145,8 +145,11 @@ public sealed class AnalyzerE2ETests
 
         var stepHits = await PollHitsToStableAsync(es, windowStartUtc, snapshotUtc, ct);
 
-        // ── 4. ES READ (OBS-01) — group Step_* hits into per-run RunTraces by attributes.CorrelationId ─
-        var traces = BuildRunTraces(stepHits);
+        // ── 4. ES READ (OBS-01 + 73 D-11/D-12) — group Step_* hits into per-run RunTraces by
+        //    attributes.CorrelationId, capturing per-label attributes.Produced values + the @timestamp
+        //    trip-duration spans (all from the same hits, no new ES query).
+        var cohort = BuildRunTraces(stepHits);
+        var traces = cohort.Traces;
 
         // ── 5. PROM SNAPSHOTS + WINDOWED DELTAS (OBS-03) ─────────────────────────────────────────────
         //    Window-pinned (harness): instant-query BOTH counter sets AT the recorded window bounds.
@@ -189,7 +192,17 @@ public sealed class AnalyzerE2ETests
         //    dispatches = cron fires = distinct correlationIds — DERIVED from the traces (the per-instance
         //    RunTraces collapse back to their correlationId), NEVER hard-coded 2.
         var spawnExtra = traces.Select(t => t.CorrelationId).Distinct(StringComparer.Ordinal).Count();
-        var report = new PassFailEngine().Analyze(traces, promSnapshot, triggerCount, scenarioId, spawnExtra);
+
+        // VALUE-CHAIN + TRIP-DURATION FEED (73, D-11/D-12): pass the per-label Produced values (already on
+        // each RunTrace via FromLabels), the @timestamp trip-duration maps, and the per-execution seed oracle
+        // into the extended engine. The value-chain check (incl. the Step_G-at-seed+6 terminal-anchor proxy)
+        // then folds into the binding verdict; the trip-duration maps land in the report. NO metric-counter
+        // assertion is added; NO Redis skp:out: blob is read (ES-read-only, D-11).
+        var report = new PassFailEngine().Analyze(
+            traces, promSnapshot, triggerCount, scenarioId, spawnExtra,
+            tripDurationMsByExecution: cohort.TripDurationMsByExecution,
+            tripDurationMsByCorrelation: cohort.TripDurationMsByCorrelation,
+            seedsByExecution: cohort.SeedsByExecution);
 
         // ── 8. WRITE-THEN-ASSERT (D-02 / OBS-04 / T-66-11) ───────────────────────────────────────────
         //    Serialize + write the JSON report FIRST so the artifact exists even on a red run, and the
@@ -266,16 +279,43 @@ public sealed class AnalyzerE2ETests
     }
 
     /// <summary>
+    /// The per-window trace cohort + the value-chain/trip-duration evidence the engine needs (73, D-11/D-12):
+    /// the per-instance <see cref="RunTrace"/>s (each carrying its per-label <c>attributes.Produced</c>
+    /// values), plus the trip-duration maps computed from the ES <c>@timestamp</c> span and the per-execution
+    /// seed map recovered from the chain. All derived from the SAME already-pulled, time-sorted hits — NO new
+    /// ES query (D-12).
+    /// </summary>
+    private sealed record TraceCohort
+    {
+        public required IReadOnlyList<RunTrace> Traces { get; init; }
+        public required IReadOnlyDictionary<string, double> TripDurationMsByExecution { get; init; } // keyed "corr|exec"
+        public required IReadOnlyDictionary<string, double> TripDurationMsByCorrelation { get; init; } // keyed "corr"
+        public required IReadOnlyDictionary<string, int> SeedsByExecution { get; init; }               // keyed "corr|exec"
+    }
+
+    /// <summary>
     /// Group raw ES hits by the <c>(_source.attributes.CorrelationId, _source.attributes.ExecutionId)</c>
     /// composite into per-INSTANCE <see cref="RunTrace"/>s (each spawned execution is its own run),
     /// collecting the <c>attributes.StepLabel</c> list (duplicates RETAINED so the engine's fail-closed
-    /// duplicate signal fires WITHIN an instance). Hits missing any of the three attributes are skipped
-    /// defensively (T-66-09 — odd-shaped JSON is dropped, never thrown).
+    /// duplicate signal fires WITHIN an instance) AND the per-label <c>attributes.Produced</c> value (73,
+    /// D-11 — threaded into the extended <see cref="RunTrace.FromLabels"/>; the convergent <c>Step_G</c>
+    /// terminal value is the LIVE terminal-anchor proxy at <c>seed+6</c>, NO Redis <c>skp:out:</c> read).
+    /// Also computes per-<c>(corr,exec)</c> + per-<c>corr</c> trip duration (ms) from the <c>@timestamp</c>
+    /// min→max span over the SAME hits (73, D-12 — no new ES query). Hits missing any of the three
+    /// attributes are skipped defensively (T-66-09 / T-73-07 — odd-shaped JSON is dropped, never thrown).
     /// </summary>
-    private static List<RunTrace> BuildRunTraces(List<JsonElement> hits)
+    private static TraceCohort BuildRunTraces(List<JsonElement> hits)
     {
         // Keyed by the (correlationId, executionId) value-tuple — one RunTrace per execution instance.
         var byInstance = new Dictionary<(string Corr, string Exec), List<string>>();
+        // Per-instance label→Produced value map (73, D-11). Step_G's two arrivals carry the same terminal
+        // value, so a last-write of the shared seed+6 is correct (both equal).
+        var valuesByInstance = new Dictionary<(string Corr, string Exec), Dictionary<string, int>>();
+        // Per-instance and per-correlation @timestamp spans (73, D-12). Hits are sorted asc on @timestamp,
+        // but min/max-tracking is order-independent and tolerant of any out-of-band hit.
+        var spanByInstance = new Dictionary<(string Corr, string Exec), (DateTimeOffset Min, DateTimeOffset Max)>();
+        var spanByCorrelation = new Dictionary<string, (DateTimeOffset Min, DateTimeOffset Max)>();
+
         foreach (var hit in hits)
         {
             if (!hit.TryGetProperty("_source", out var source)) continue;
@@ -292,21 +332,75 @@ public sealed class AnalyzerE2ETests
             var executionId = execEl.GetString()!;
             var label = labelEl.GetString()!;
 
-            // Read Sum defensively (A1) — informational only, never a completeness gate; not thrown on.
-            _ = TryReadSum(attrs, out _);
-
             var key = (correlationId, executionId);
             if (!byInstance.TryGetValue(key, out var labels))
             {
                 labels = new List<string>();
                 byInstance[key] = labels;
+                valuesByInstance[key] = new Dictionary<string, int>(StringComparer.Ordinal);
             }
             labels.Add(label);
+
+            // Read Sum defensively (A1) — informational only, never a completeness gate; not thrown on.
+            // Retained as the documented tolerant-numeric-attribute template TryReadProduced mirrors.
+            _ = TryReadSum(attrs, out _);
+
+            // Read the per-step surfaced value defensively (73, D-11) — attributes.Produced (73-01 contract).
+            // Drop-on-odd-shape (T-73-07): a missing/odd Produced just omits that label from the value map,
+            // never throws. The engine skips a run with an empty value map (legacy behaviour) and value-chain-
+            // checks any run that surfaced ≥1 value.
+            if (TryReadProduced(attrs, out var produced))
+            {
+                valuesByInstance[key][label] = produced;
+            }
+
+            // Trip-duration span (73, D-12): track @timestamp min→max per instance AND per correlationId,
+            // reusing the SAME hits (no new ES query). Defensive: an unparseable @timestamp is skipped.
+            if (TryReadTimestamp(source, out var ts))
+            {
+                spanByInstance[key] = spanByInstance.TryGetValue(key, out var s)
+                    ? (s.Min < ts ? s.Min : ts, s.Max > ts ? s.Max : ts)
+                    : (ts, ts);
+                spanByCorrelation[correlationId] = spanByCorrelation.TryGetValue(correlationId, out var c)
+                    ? (c.Min < ts ? c.Min : ts, c.Max > ts ? c.Max : ts)
+                    : (ts, ts);
+            }
         }
 
-        return byInstance
-            .Select(kv => RunTrace.FromLabels(kv.Key.Corr, kv.Key.Exec, kv.Value))
+        var traces = byInstance
+            .Select(kv => RunTrace.FromLabels(
+                kv.Key.Corr, kv.Key.Exec, kv.Value, valuesByInstance[kv.Key]))
             .ToList();
+
+        // Materialize the trip-duration maps (ms) from the min→max spans (73, D-12).
+        var tripByExec = spanByInstance.ToDictionary(
+            kv => $"{kv.Key.Corr}|{kv.Key.Exec}",
+            kv => (kv.Value.Max - kv.Value.Min).TotalMilliseconds,
+            StringComparer.Ordinal);
+        var tripByCorr = spanByCorrelation.ToDictionary(
+            kv => kv.Key,
+            kv => (kv.Value.Max - kv.Value.Min).TotalMilliseconds,
+            StringComparer.Ordinal);
+
+        // Per-execution seed map (73, D-11): recover seed = Produced[Step_B] - 1 (the +1-per-hop chain). The
+        // engine also recovers this internally when absent (ResolveSeed), so this is the explicit oracle —
+        // a run that never surfaced Step_B is simply omitted (the engine falls back to its own recovery).
+        var seedsByExec = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (key, values) in valuesByInstance)
+        {
+            if (values.TryGetValue("Step_B", out var b))
+            {
+                seedsByExec[$"{key.Corr}|{key.Exec}"] = b - 1;
+            }
+        }
+
+        return new TraceCohort
+        {
+            Traces = traces,
+            TripDurationMsByExecution = tripByExec,
+            TripDurationMsByCorrelation = tripByCorr,
+            SeedsByExecution = seedsByExec,
+        };
     }
 
     /// <summary>
@@ -322,6 +416,46 @@ public sealed class AnalyzerE2ETests
         if (sumEl.ValueKind == JsonValueKind.String
             && int.TryParse(sumEl.GetString(), out sum)) return true;
         return false;
+    }
+
+    /// <summary>
+    /// Defensive <c>attributes.Produced</c> read (73, D-11; T-73-07) — mirrors <see cref="TryReadSum"/>
+    /// verbatim. <c>Produced</c> is the per-step ACCUMULATED output value the Mode-1 processor surfaces
+    /// (<c>"{StepLabel} received {Received} produced {Produced}"</c> → ES <c>attributes.Produced</c>, the
+    /// 73-01 contract). It is the value AT that label: for the convergent <c>Step_G</c> the
+    /// <c>completed-terminal</c> log carries <c>seed+6</c> (106 for exec_a/seed 100, 206 for exec_b/seed
+    /// 200) — this ES-log terminal value IS the LIVE terminal-anchor proxy (D-11). The fixture is
+    /// ES-READ-ONLY: it does NOT read the Redis <c>skp:out:</c> blob (that durable-blob proof is owned by the
+    /// hermetic harness, Plan 02). Read tolerantly — <c>TryGetInt32</c> then <c>GetString</c>+parse — and
+    /// never throw on an odd-shaped or missing attribute (T-73-07: dropped, not fatal).
+    /// </summary>
+    private static bool TryReadProduced(JsonElement attrs, out int produced)
+    {
+        produced = 0;
+        if (!attrs.TryGetProperty("Produced", out var producedEl)) return false;
+        if (producedEl.ValueKind == JsonValueKind.Number && producedEl.TryGetInt32(out produced)) return true;
+        if (producedEl.ValueKind == JsonValueKind.String
+            && int.TryParse(producedEl.GetString(), out produced)) return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Defensive top-level <c>_source.@timestamp</c> read (73, D-12; T-73-07) for the trip-duration span.
+    /// The Step_* search sorts ASC on <see cref="EsIndexNames.WindowTimestampFieldPath"/> (<c>@timestamp</c>),
+    /// so reusing the same field here keeps the trip-duration cohort identical to the scored hits — NO new ES
+    /// query. Parses as a UTC <see cref="DateTimeOffset"/>; an odd-shaped/missing/unparseable value is dropped
+    /// (returns false), never thrown on.
+    /// </summary>
+    private static bool TryReadTimestamp(JsonElement source, out DateTimeOffset timestamp)
+    {
+        timestamp = default;
+        if (!source.TryGetProperty("@timestamp", out var tsEl)) return false;
+        if (tsEl.ValueKind != JsonValueKind.String) return false;
+        return DateTimeOffset.TryParse(
+            tsEl.GetString(),
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+            out timestamp);
     }
 
     // ── Prometheus windowed-delta counter set (OBS-03) ───────────────────────────────────────────────
