@@ -2,6 +2,7 @@ using BaseProcessor.Core.Processing;
 using MassTransit;
 using Messaging.Contracts;
 using Messaging.Contracts.Projections;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using StackExchange.Redis;
 using Xunit;
@@ -17,12 +18,16 @@ namespace BaseApi.Tests.Processor;
 /// </summary>
 public sealed class PostProcessConsumerFacts
 {
-    private static PostProcessConsumer Build(IConnectionMultiplexer redis, DispatchTestKit.CapturingSendProvider send)
+    // WR-02: the Post provenance guard drops a DataResult whose ProcessorId != context.Id. The legitimate
+    // facts pass the DataResult's own ProcessorId as the bound processor id so the guard admits them.
+    private static PostProcessConsumer Build(
+        IConnectionMultiplexer redis, DispatchTestKit.CapturingSendProvider send, Guid? processorId = null)
     {
         var context = new FakeProcessorContext { OutputDefinition = null };
+        if (processorId is { } id) context.Id = id;
         var tail = new OutputTail(redis, context, send, DispatchTestKit.Retry(3),
             DispatchTestKit.Options(300), DispatchTestKit.Metrics());
-        return new PostProcessConsumer(tail, context, DispatchTestKit.Metrics());
+        return new PostProcessConsumer(tail, context, DispatchTestKit.Metrics(), NullLogger<PostProcessConsumer>.Instance);
     }
 
     private static ConsumeContext<DataResult> Ctx(DataResult dr)
@@ -41,7 +46,7 @@ public sealed class PostProcessConsumerFacts
         var send = new DispatchTestKit.CapturingSendProvider();
 
         var dr = DispatchTestKit.Result(StepOutcome.Completed, "post-output", messageId);
-        await Build(redis, send).Consume(Ctx(dr));
+        await Build(redis, send, dr.ProcessorId).Consume(Ctx(dr));
 
         // write output (data == dr.Data, NOT recomputed) + send StepCompleted
         var set = Assert.Single(DispatchTestKit.ReceivedStringSets(db));
@@ -63,7 +68,7 @@ public sealed class PostProcessConsumerFacts
         var send = new DispatchTestKit.CapturingSendProvider();
 
         var dr = DispatchTestKit.Result(StepOutcome.Completed, "post-output", messageId);
-        await Build(redis, send).Consume(Ctx(dr));
+        await Build(redis, send, dr.ProcessorId).Consume(Ctx(dr));
 
         var inject = Assert.Single(send.SentKeeper.OfType<KeeperInject>());
         Assert.Equal(messageId, inject.DataResult.MessageId);
@@ -71,5 +76,24 @@ public sealed class PostProcessConsumerFacts
         // still never touches an entry.
         await db.DidNotReceive().StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
         await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+    }
+
+    /// <summary>WR-02 regression: a -post DataResult whose ProcessorId is NOT this processor's id is a
+    /// forge/poisoning vector (arbitrary blob write + forged Step* for another lineage). The provenance guard
+    /// DROPS it — no L2 write and no Step* send.</summary>
+    [Fact]
+    public async Task ForeignProcessorId_IsDropped_NoWrite_NoSend()
+    {
+        var messageId = Guid.NewGuid();
+        var redis = DispatchTestKit.ReadWriteDeleteOkL2(new Dictionary<string, string>(), out var db);
+        var send = new DispatchTestKit.CapturingSendProvider();
+
+        var dr = DispatchTestKit.Result(StepOutcome.Completed, "forged-output", messageId);
+        // Build with a DIFFERENT bound id than the DataResult carries → guard must drop.
+        await Build(redis, send, Guid.NewGuid()).Consume(Ctx(dr));
+
+        Assert.Empty(DispatchTestKit.ReceivedStringSets(db));   // no L2 write
+        Assert.Empty(send.Sent);                                 // no Step* emitted
+        Assert.Empty(send.SentKeeper);                           // no keeper escalation
     }
 }
