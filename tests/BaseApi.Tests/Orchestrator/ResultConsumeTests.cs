@@ -1,147 +1,118 @@
 using MassTransit;
 using MassTransit.Testing;
 using Messaging.Contracts;
-using Messaging.Contracts.Projections;
+using Messaging.Contracts.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using NSubstitute;
+using Orchestrator.Configuration;
 using Orchestrator.Consumers;
 using Orchestrator.Dispatch;
-using Orchestrator.L1;
+using StackExchange.Redis;
 using Xunit;
 
 namespace BaseApi.Tests.Orchestrator;
 
 /// <summary>
-/// ORCH-RESULT-02 / ORCH-ADVANCE-02 goal-backward proof of the result-consume continuation-dispatch
-/// path (ContinuationDispatch). Drives a <see cref="StepCompletedConsumer"/> (the D-07 replacement for
-/// the retired ResultConsumer — Outcome=Completed) against a real
-/// <see cref="WorkflowL1Store"/> + a synthetic <see cref="CapturingDispatchConsumer"/> bound to the
-/// short-name endpoint <c>{processorId:D}</c> (the queue a <c>Send</c> to <c>queue:{processorId:D}</c>
-/// lands on — RESEARCH assumption A2). Asserts, from the USER's perspective:
+/// Phase 71 (REQ-71-06/11): the Post hop of the two-consumer continuation path, exercised END-TO-END through
+/// a real in-memory MassTransit harness — a <see cref="NextStepHandoff"/> sent to
+/// <c>orchestrator-result-post</c> is consumed by the <see cref="OrchestratorPostProcessConsumer"/>, which
+/// runs <see cref="RelocateTail"/> (write data: + dispatch) and lands exactly ONE
+/// <see cref="EntryStepDispatch"/> on <c>queue:{processorId:D}</c> captured by
+/// <see cref="CapturingDispatchConsumer"/>. Asserts, from the USER's perspective:
 /// <list type="bullet">
-///   <item>a <see cref="StepCompleted"/> whose completed step has a <c>PreviousCompleted</c>-gated next
-///   step produces exactly ONE captured <see cref="EntryStepDispatch"/> on
-///   <c>queue:{nextStep.ProcessorId}</c> with CorrelationId/EntryId/WorkflowId == the result's and
-///   StepId/ProcessorId/Payload == the next-step L1 projection's (executionId propagated unchanged);</item>
-///   <item>that single dispatch is consumed exactly once (competing-consumer, not broadcast).</item>
+///   <item>the dispatched <see cref="EntryStepDispatch"/> copies the handoff's StepId/ProcessorId/Payload,
+///   threads its executionId UNCHANGED, and carries a non-empty EntryId (the data: relocation key = the
+///   handoff envelope's MessageId);</item>
+///   <item>the continuation is consumed exactly once (competing-consumer, not broadcast).</item>
 /// </list>
-/// <para>
-/// Phase 43 (D-03/D-06e/A4): straight-through — ONE StepCompleted = ONE item. No effect-first dedup gate
-/// (RETIRE-01), no content-addressed manifest unbundle (RETIRE-02), no Redis on the result path. The
-/// result's own Guid EntryId flows straight to the matched continuation.
-/// </para>
+/// The Pre fan-out + two-reason trip-end is proven directly in <c>OrchestratorPrePipelineFacts</c> /
+/// <c>TypedResultConsumerFacts</c>; this fact closes the Post→processor hop on a live bus.
 /// </summary>
 public sealed class ResultConsumeTests
 {
+    /// <summary>An <see cref="IConnectionMultiplexer"/> succeeding the data: write + out: delete.</summary>
+    private static IConnectionMultiplexer RedisOk()
+    {
+        var db = Substitute.For<IDatabase>();
+        db.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<Expiration>(),
+            Arg.Any<ValueCondition>(), Arg.Any<CommandFlags>()).Returns(true);
+        db.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(),
+            Arg.Any<bool>(), Arg.Any<When>(), Arg.Any<CommandFlags>()).Returns(true);
+        db.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
+        db.KeyDeleteAsync(Arg.Any<RedisKey>()).Returns(true);
+        var mux = Substitute.For<IConnectionMultiplexer>();
+        mux.GetDatabase(Arg.Any<int>(), Arg.Any<object?>()).Returns(db);
+        return mux;
+    }
+
     /// <summary>
-    /// Builds the in-memory MassTransit harness, binding a <see cref="CapturingDispatchConsumer"/>
-    /// short-name <c>ReceiveEndpoint($"{processorId:D}")</c> per distinct next-step processorId so a
-    /// continuation's <c>Send</c> to <c>queue:{processorId:D}</c> is captured (FireDispatchTests pattern).
+    /// Builds the in-memory harness binding the <see cref="OrchestratorPostProcessConsumer"/> on
+    /// <c>orchestrator-result-post</c> (the Pre fan-out target) AND a <see cref="CapturingDispatchConsumer"/>
+    /// short-name <c>{processorId:D}</c> per next-step processor (so the relocate-tail dispatch is captured).
     /// </summary>
-    private static ServiceProvider BuildHarness(IEnumerable<Guid> processorIds)
+    private static ServiceProvider BuildHarness(IEnumerable<Guid> processorIds, IConnectionMultiplexer redis)
     {
         var ids = processorIds.Distinct().ToArray();
         return new ServiceCollection()
             .AddLogging()
+            .AddSingleton(redis)
+            .AddSingleton(Options.Create(new RetryOptions { Limit = 3 }))
+            .AddSingleton(Options.Create(new OrchestratorOutputOptions { OutputDataTtlSeconds = 300 }))
+            .AddSingleton(OrchestratorTestStubs.Metrics())
+            .AddScoped<IStepDispatcher, StepDispatcher>()
+            .AddScoped<RelocateTail>()
             .AddMassTransitTestHarness(x =>
             {
                 x.AddConsumer<CapturingDispatchConsumer>();
+                x.AddConsumer<OrchestratorPostProcessConsumer, OrchestratorPostProcessConsumerDefinition>();
                 x.UsingInMemory((ctx, cfg) =>
                 {
                     foreach (var processorId in ids)
-                    {
                         cfg.ReceiveEndpoint($"{processorId:D}", e => e.ConfigureConsumer<CapturingDispatchConsumer>(ctx));
-                    }
-
                     cfg.ConfigureEndpoints(ctx);
                 });
             })
             .BuildServiceProvider(true);
     }
 
-    private static StepProjection Step(int entryCondition, Guid processorId, string payload, params Guid[] nextStepIds) =>
-        new(EntryCondition: entryCondition, ProcessorId: processorId, Payload: payload, NextStepIds: [.. nextStepIds]);
+    private static NextStepHandoff Handoff(Guid workflowId, Guid stepId, Guid processorId, string payload,
+        string data, Guid executionId) =>
+        new(workflowId, stepId, processorId, payload)
+        { CorrelationId = Guid.NewGuid(), ExecutionId = executionId, Data = data };
 
-    private static void SeedWorkflow(
-        WorkflowL1Store store, Guid workflowId, IReadOnlyDictionary<Guid, StepProjection> steps)
-    {
-        var entry = new WorkflowL1(
-            EntryStepIds: [],
-            Cron: "*/5 * * * *",
-            JobId: Guid.NewGuid(),
-            Steps: steps)
-        {
-            Liveness = new LivenessProjection(DateTime.UtcNow, Interval: 300, Status: "active"),
-        };
-        store.Upsert(workflowId, entry);
-    }
-
-    /// <summary>
-    /// Builds a <see cref="StepCompletedConsumer"/> over the real harness-backed <see cref="StepDispatcher"/>.
-    /// Phase 43 (D-03/D-06e): the result path is L1-only — no Redis dedup gate, no manifest read. (D-07: the
-    /// Completed arm of the TypedResultConsumer<T> family; same body as the retired ResultConsumer.)
-    /// </summary>
-    private static StepCompletedConsumer Build(WorkflowL1Store store, ISendEndpointProvider sendProvider) =>
-        new(store, new StepAdvancement(), new StepDispatcher(sendProvider, OrchestratorTestStubs.Metrics()),
-            OrchestratorTestStubs.Metrics(), NullLogger<StepCompleted>.Instance);
-
-    // ----- ContinuationDispatch: one field-copied dispatch per matched next step -----------------
+    // ----- end-to-end Post hop: one field-copied dispatch for the handoff --------------------------
 
     [Fact]
-    public async Task CompletedResult_DispatchesMatchingNextStep_WithCorrectFieldCopy()
+    public async Task PostHandoff_DispatchesMatchingNextStep_WithCorrectFieldCopy()
     {
         var ct = TestContext.Current.CancellationToken;
 
         var workflowId = Guid.NewGuid();
-        var completedStepId = Guid.NewGuid();
-        var completedProcessorId = Guid.NewGuid();
         var nextStepId = Guid.NewGuid();
         var nextProcessorId = Guid.NewGuid();
         const string nextPayload = "{\"next\":true}";
+        var executionId = Guid.NewGuid();
 
-        // completed step's only next step is Completed(1)-gated.
-        var steps = new Dictionary<Guid, StepProjection>
-        {
-            [completedStepId] = Step(0, completedProcessorId, "{}", nextStepId),
-            [nextStepId] = Step((int)StepOutcome.Completed, nextProcessorId, nextPayload),
-        };
-
-        var store = new WorkflowL1Store();
-        SeedWorkflow(store, workflowId, steps);
-
-        await using var provider = BuildHarness([nextProcessorId]);
+        var redis = RedisOk();
+        await using var provider = BuildHarness([nextProcessorId], redis);
         var harness = provider.GetRequiredService<ITestHarness>();
         await harness.Start();
         try
         {
-            var correlationId = Guid.NewGuid();
-            var executionId = Guid.NewGuid();
-            var resultEntryId = Guid.NewGuid();   // the StepCompleted's real Guid data key (D-06a)
-
-            var consumer = Build(store, harness.Bus);
-
-            var result = new StepCompleted(workflowId, completedStepId, completedProcessorId)
-            {
-                CorrelationId = correlationId,
-                ExecutionId = executionId,
-                EntryId = resultEntryId,
-            };
-
-            await consumer.Consume(OrchestratorTestStubs.Context(result, ct));
+            var post = await harness.Bus.GetSendEndpoint(new Uri($"queue:{OrchestratorQueues.ResultPost}"));
+            await post.Send(Handoff(workflowId, nextStepId, nextProcessorId, nextPayload, "the-blob", executionId), ct);
 
             Assert.True(await harness.Consumed.Any<EntryStepDispatch>(ct));
-            var dispatched = harness.Consumed.Select<EntryStepDispatch>(ct)
-                .Select(c => c.Context.Message)
-                .ToList();
+            var dispatched = harness.Consumed.Select<EntryStepDispatch>(ct).Select(c => c.Context.Message).ToList();
 
-            var msg = Assert.Single(dispatched);                 // one result item x one matched next step
-            Assert.Equal(workflowId, msg.WorkflowId);            // copied from the result
-            Assert.Equal(correlationId, msg.CorrelationId);
-            Assert.Equal(executionId, msg.ExecutionId);          // propagated UNCHANGED (not regenerated)
-            Assert.Equal(resultEntryId, msg.EntryId);            // the result's Guid EntryId flows straight through
-            Assert.Equal(nextStepId, msg.StepId);                // taken from the next-step L1 projection
+            var msg = Assert.Single(dispatched);
+            Assert.Equal(workflowId, msg.WorkflowId);
+            Assert.Equal(nextStepId, msg.StepId);                // taken from the handoff (the next-step ids)
             Assert.Equal(nextProcessorId, msg.ProcessorId);
             Assert.Equal(nextPayload, msg.Payload);
+            Assert.Equal(executionId, msg.ExecutionId);          // threaded UNCHANGED (REQ-71-11)
+            Assert.NotEqual(Guid.Empty, msg.EntryId);            // the data: relocation key (= the post envelope id)
         }
         finally
         {
@@ -149,43 +120,29 @@ public sealed class ResultConsumeTests
         }
     }
 
-    // ----- ResultConsume: a result is consumed exactly once (competing-consumer, not broadcast) ---
+    // ----- the continuation is consumed exactly once (competing-consumer, not broadcast) -----------
 
     [Fact]
-    public async Task Result_ConsumedExactlyOnce_NotBroadcast()
+    public async Task Continuation_ConsumedExactlyOnce_NotBroadcast()
     {
         var ct = TestContext.Current.CancellationToken;
 
         var workflowId = Guid.NewGuid();
-        var completedStepId = Guid.NewGuid();
         var nextStepId = Guid.NewGuid();
         var nextProcessorId = Guid.NewGuid();
 
-        var steps = new Dictionary<Guid, StepProjection>
-        {
-            [completedStepId] = Step(0, Guid.NewGuid(), "{}", nextStepId),
-            [nextStepId] = Step((int)StepOutcome.Completed, nextProcessorId, "{}"),
-        };
-
-        var store = new WorkflowL1Store();
-        SeedWorkflow(store, workflowId, steps);
-
-        await using var provider = BuildHarness([nextProcessorId]);
+        var redis = RedisOk();
+        await using var provider = BuildHarness([nextProcessorId], redis);
         var harness = provider.GetRequiredService<ITestHarness>();
         await harness.Start();
         try
         {
-            var consumer = Build(store, harness.Bus);
-            var result = new StepCompleted(workflowId, completedStepId, Guid.NewGuid())
-            {
-                CorrelationId = Guid.NewGuid(),
-                EntryId = Guid.NewGuid(),
-            };
+            var post = await harness.Bus.GetSendEndpoint(new Uri($"queue:{OrchestratorQueues.ResultPost}"));
+            await post.Send(Handoff(workflowId, nextStepId, nextProcessorId, "{}", "the-blob", Guid.NewGuid()), ct);
 
-            await consumer.Consume(OrchestratorTestStubs.Context(result, ct));
-
+            Assert.True(await harness.Consumed.Any<EntryStepDispatch>(ct));
             var dispatched = harness.Consumed.Select<EntryStepDispatch>(ct).ToList();
-            Assert.Single(dispatched); // one result item x one match -> a single continuation, consumed once
+            Assert.Single(dispatched);   // one handoff -> one continuation, consumed once
         }
         finally
         {

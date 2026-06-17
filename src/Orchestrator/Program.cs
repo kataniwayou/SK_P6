@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Orchestrator.Configuration;
 using Orchestrator.Consumers;
 using Orchestrator.Dispatch;
 using Orchestrator.Hydration;
@@ -61,6 +62,12 @@ builder.Services.AddBaseConsoleMessaging(builder.Configuration,
         x.AddConsumer<StepFailedConsumer,     StepFailedConsumerDefinition>();
         x.AddConsumer<StepCancelledConsumer,  StepCancelledConsumerDefinition>();
         x.AddConsumer<StepProcessingConsumer, StepProcessingConsumerDefinition>();
+        // Phase 71 / D-15: the Post-Process consumer on the static "orchestrator-result-post" queue —
+        // startup-bound (RESEARCH Pitfall 5: the post queue name is a static const, unlike the processor's
+        // runtime {id:D}), no bus retry (REQ-71-11; the definition is an intentional no-op). The Pre pipeline
+        // (inside the typed result consumers) fans out one NextStepHandoff per match to this queue; this
+        // consumer relocates the input into L2[data:messageId] and dispatches the next EntryStepDispatch.
+        x.AddConsumer<OrchestratorPostProcessConsumer, OrchestratorPostProcessConsumerDefinition>();
         // 24.1 / D-24.1-05: the boot gate + scheduled redelivery are removed, so the delayed message
         // scheduler (AddDelayedMessageScheduler / UseDelayedMessageScheduler) and its
         // rabbitmq_delayed_message_exchange plugin dependency are gone. No configureBus needed.
@@ -73,7 +80,19 @@ builder.Services.AddSingleton<IWorkflowL1Store, WorkflowL1Store>();
 builder.Services.AddSingleton<WorkflowScheduler>();
 builder.Services.AddSingleton<WorkflowLifecycle>();
 builder.Services.AddSingleton<IStepDispatcher, StepDispatcher>();          // Plan 03 dispatch single-owner (result + fire share it)
-builder.Services.AddSingleton<StepAdvancement>();                          // Plan 03 pure match helper (ResultConsumer dependency)
+builder.Services.AddSingleton<StepAdvancement>();                          // Plan 03 pure match helper (pipeline dependency)
+
+// Phase 71 / D-14/D-15: the orchestrator two-consumer Pre/Post core. The Pre pipeline (gate/read out: ->
+// fan out -> delete out:) is consumed by the typed result consumers; the RelocateTail (write data: +
+// dispatch) is consumed by the Post consumer. BOTH are AddScoped (mirroring the processor's ProcessorPipeline
+// / OutputTail registration): each Send must use the CONSUME-scoped ISendEndpointProvider — a root-scope
+// singleton would capture a pre-start send pipeline and the fan-out / dispatch would silently no-op.
+builder.Services.AddScoped<OrchestratorPrePipeline>();
+builder.Services.AddScoped<RelocateTail>();
+// D-17: the data: TTL floor (bound from "Orchestrator"); D-10: the retry budget the pipeline + RelocateTail
+// RetryLoop consume (mirror Keeper Program.cs — needed for the bounded-op escalation map).
+builder.Services.Configure<OrchestratorOutputOptions>(builder.Configuration.GetSection("Orchestrator"));
+builder.Services.Configure<Messaging.Contracts.Configuration.RetryOptions>(builder.Configuration.GetSection("Retry"));
 
 // METRIC-04: the code-owned "Orchestrator" meter + its two business counters. The holder is a
 // DI-singleton (IMeterFactory pattern); ConfigureOpenTelemetryMeterProvider additively attaches the

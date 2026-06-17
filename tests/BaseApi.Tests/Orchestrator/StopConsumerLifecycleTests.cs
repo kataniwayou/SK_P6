@@ -144,21 +144,24 @@ public sealed class StopConsumerLifecycleTests
             await stop.Consume(OrchestratorTestStubs.Context(new StopOrchestration([workflowId]), ct));
             Assert.True(store.TryGet(workflowId, out _)); // L1 kept (drain)
 
-            // Drive a late StepCompleted for the stopped workflow's entry step through the ResultConsumer; it
-            // resolves in the kept L1 entry and dispatches the matching next step (D-03 straight-through).
-            var dispatcher = Substitute.For<IStepDispatcher>();
+            // Drive a late StepCompleted for the stopped workflow's entry step through the two-consumer Pre
+            // pipeline; it resolves in the kept L1 entry and FANS OUT the matching next step as a
+            // NextStepHandoff to orchestrator-result-post (Phase 71 / D-15).
             var advancement = new StepAdvancement();
 
             var correlationId = Guid.NewGuid();
             var executionId = Guid.NewGuid();
-            var resultEntryId = Guid.NewGuid();   // the StepCompleted's Guid data key (D-06a)
+            var resultEntryId = Guid.NewGuid();   // the StepCompleted's out: blob key (A1)
 
-            // Phase 43 (D-03/D-06e): the result path is L1-ONLY — no Redis dedup gate, no manifest read. The
-            // late result still fans out exactly one continuation carrying the result's Guid EntryId + a
-            // regenerated executionId. (D-07: StepCompletedConsumer, the Completed arm of the
-            // TypedResultConsumer<T> family that replaced the retired ResultConsumer.)
+            // out: present so the Completed Pre read succeeds; data: write + out: delete succeed.
+            var redis = StopConsumerLifecycleTests.RedisOk(
+                new Dictionary<string, string> { [Messaging.Contracts.Projections.L2ProjectionKeys.OutputData(resultEntryId)] = "the-blob" });
+            var send = new CapturingHandoffSendProvider();
+            var pipeline = new OrchestratorPrePipeline(store, advancement, redis, send,
+                Microsoft.Extensions.Options.Options.Create(new Messaging.Contracts.Configuration.RetryOptions { Limit = 3 }),
+                NullLogger<OrchestratorPrePipeline>.Instance);
             var resultConsumer = new StepCompletedConsumer(
-                store, advancement, dispatcher, OrchestratorTestStubs.Metrics(), NullLogger<StepCompleted>.Instance);
+                pipeline, OrchestratorTestStubs.Metrics(), NullLogger<StepCompleted>.Instance);
 
             var result = new StepCompleted(workflowId, entryStepId, entryProcessorId)
             {
@@ -169,11 +172,16 @@ public sealed class StopConsumerLifecycleTests
 
             await resultConsumer.Consume(OrchestratorTestStubs.Context(result, ct));
 
-            // The continuation for the matching next step was dispatched (ids from result, step data from L1,
-            // EntryId = the result's Guid EntryId straight-through, executionId regenerated for lineage).
-            await dispatcher.Received(1).DispatchAsync(
-                workflowId, nextStepId, nextProcessorId, "{\"k\":1}",
-                correlationId, Arg.Any<Guid>(), resultEntryId, Arg.Any<CancellationToken>());
+            // Exactly one continuation fanned out for the matching next step (ids from result, step data from
+            // L1, executionId threaded UNCHANGED — REQ-71-11).
+            var handoff = Assert.Single(send.Handoffs);
+            Assert.Equal(workflowId, handoff.WorkflowId);
+            Assert.Equal(nextStepId, handoff.StepId);
+            Assert.Equal(nextProcessorId, handoff.ProcessorId);
+            Assert.Equal("{\"k\":1}", handoff.Payload);
+            Assert.Equal(correlationId, handoff.CorrelationId);
+            Assert.Equal(executionId, handoff.ExecutionId);   // threaded UNCHANGED (not regenerated)
+            Assert.Equal("the-blob", handoff.Data);
         }
         finally
         {
@@ -181,4 +189,37 @@ public sealed class StopConsumerLifecycleTests
         }
     }
 
+    /// <summary>A Redis surface resolving the out: blob (Pre read) + succeeding the data: write + out: delete.</summary>
+    private static IConnectionMultiplexer RedisOk(IReadOnlyDictionary<string, string> values)
+    {
+        var db = Substitute.For<IDatabase>();
+        db.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(ci => values.TryGetValue(((RedisKey)ci[0]).ToString(), out var v) ? (RedisValue)v : RedisValue.Null);
+        db.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
+        db.KeyDeleteAsync(Arg.Any<RedisKey>()).Returns(true);
+        var mux = Substitute.For<IConnectionMultiplexer>();
+        mux.GetDatabase(Arg.Any<int>(), Arg.Any<object?>()).Returns(db);
+        return mux;
+    }
+
+    /// <summary>Captures the fanned-out <see cref="NextStepHandoff"/> messages (the Pre fan-out target).</summary>
+    private sealed class CapturingHandoffSendProvider : MassTransit.ISendEndpointProvider
+    {
+        public List<NextStepHandoff> Handoffs { get; } = [];
+
+        public Task<MassTransit.ISendEndpoint> GetSendEndpoint(Uri address)
+        {
+            var endpoint = Substitute.For<MassTransit.ISendEndpoint>();
+            endpoint.Send(Arg.Any<object>(), Arg.Any<CancellationToken>())
+                .Returns(ci =>
+                {
+                    if (ci.ArgAt<object>(0) is NextStepHandoff h) Handoffs.Add(h);
+                    return Task.CompletedTask;
+                });
+            return Task.FromResult(endpoint);
+        }
+
+        public MassTransit.ConnectHandle ConnectSendObserver(MassTransit.ISendObserver observer) =>
+            throw new NotSupportedException();
+    }
 }
