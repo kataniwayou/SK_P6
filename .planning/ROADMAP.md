@@ -691,6 +691,16 @@ Plans:
 - [x] 70-03-PLAN.md — Processor core rewrite: seam->DataResult? + SpawnToPost/DeleteEntry + shared OutputTail + PostProcessConsumer + linear Pre flow (gate L2[entryId], no-delete-on-invalid) + -post bind + two-mode Sample + delete ProcessItem/ProcessOutcome (SPEC-req-1/2/3/4/5/9/10/11) [Wave 2]
 - [x] 70-04-PLAN.md — Processor test migration: DataResult? doubles + MessageId-capture + Pre/Post/OutputTail/Seam/Sample facts; whole-suite green + 0-warning dual-config (SPEC-req-1..12) [Wave 3]
 
+### Phase 71: Orchestrator two-consumer design (Pre-Process + Post-Process) with keeper recovery
+
+**Goal:** Mirror the Phase-70 processor two-consumer pattern on the orchestrator side and close the Phase-70-deferred `entryId`↔`messageId` threading (A1). A **Pre-Process** consumer gates on `L2[entryId]` (reads the upstream step's output from the `out` namespace), resolves next steps from the graph, fans out one **Post-Process** message per next step (carrying `payload`+`data`), then deletes `L2[entryId]`; a **Post-Process** consumer writes the next step's input `data` to `L2[messageId]` (`data` namespace, TTL'd) and dispatches `EntryStepDispatch` to the processor with `entryId=messageId`. Keeper states `REINJECT`/`INJECT`/`DELETE` redefined with envelope-`MessageId` override. Resilience identical to Phase 70 (no `_error`, `UseMessageRetry` none, send→bounded-retry→throw→broker redelivery, every L2 op→keeper on exhaustion). **Closes A1:** the processor result stamps `EntryId = its output messageId` (replacing the `Guid.Empty` placeholder). Open points to lock in SPEC: (1) resolve-next-steps failure must throw/park — **never silent-ack** (the one no-silent-loss hole); (2) `executionId` threaded unchanged; (3) REINJECT clean-absent drop; (4) namespace cross-pairing (orchestrator reads `out`, writes `data`); (5) merge/fan-in scope decision.
+**Requirements**: TBD (lock via /gsd-spec-phase 71)
+**Depends on:** Phase 70
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 71 to break down)
+
 ---
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
 
