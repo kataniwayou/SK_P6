@@ -703,6 +703,16 @@ Plans:
 - [x] 71-02-PLAN.md — Orchestrator Pre/Post core: OrchestratorPrePipeline (gate/read out: -> SelectNext -> fan-out -> delete out:) + RelocateTail + Post consumer + two distinct trip-end LOG lines (metric DEFERRED) + TypedResultConsumer reshape + test migration ✅ 2026-06-17 (bc47286, 9e464ce, a691771) — REQ-71-01..06, REQ-71-11, REQ-71-12; touched slice 29/29 green
 - [x] 71-03-PLAN.md — Keeper orchestrator recovery consumers (REINJECT/INJECT/DELETE) + binder/Program wiring + partition/firewall facts ✅ 2026-06-17 (9533aed, 382d62d, 9b12f53) — REQ-71-08, REQ-71-09, REQ-71-10, REQ-71-11; Keeper slice 21/21 green, firewall held
 
+### Phase 72: Processor always-write to L2 and uniform orchestrator pre-pipeline with unresolved-step metric
+
+**Goal:** Make every *business* processor result write its `DataResult.Data` blob to L2 — output-definition validation only flips `result`→`Failed`, it never gates the write (`OutputTail.cs:60`); a thrown `ExecuteAsync` is caught into a `DataResult{failed}` carrying the read `validatedData` (`ProcessorPipeline.cs:79`) as fallback — so `StepFailed`/`StepCancelled` carry a real `EntryId` instead of `Guid.Empty` (`:199,202`). With every outcome guaranteed a blob, drop the Completed-only `out:` read/delete branches in `OrchestratorPrePipeline` (`:84,114`) so all four `TypedResultConsumer<T>` shells are uniform: exists-gate `L2[entryId]` → read → resolve `L1[stepId]` → terminal check → per next step (read `L1[nextStepId]` + entry-condition + send handoff) → delete `L2[entryId]`; clean-absent L2 → idempotent skip; `ExecutionId` threading preserved (D-13). Folds in the Phase-71-deferred trip-end metric: a new `orchestrator_step_unresolved` counter (label `workflowId` only) incremented at the two L1-resolution misses (stage-1 `L1[stepId]` miss → return; stage-3 `L1[nextStepId]` miss → continue), injecting `OrchestratorMetrics` into `OrchestratorPrePipeline`. Distinct from the imported Phase-72 metrics SPEC (uniform two-counter reshape) — that lands separately via /gsd-import.
+**Requirements**: TBD (run /gsd-spec-phase 72)
+**Depends on:** Phase 71
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 72 to break down)
+
 ---
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
 
