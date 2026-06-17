@@ -75,4 +75,37 @@ public sealed class RecoveryPartitionFacts
             ReinjectConsumerDefinition.PartitionGuid(m),
             ReinjectConsumerDefinition.PartitionGuid(otherExec));
     }
+
+    [Fact]
+    [Trait("Phase", "71")]
+    public void Orchestrator_trio_shares_one_slot_per_exec_excluding_StepId()
+    {
+        var corr = NewGuid();
+        var wf = NewGuid();
+        var proc = NewGuid();
+        var exec = NewGuid();
+
+        // The 3 orchestrator recovery contracts with the SAME 4-tuple but DIFFERENT StepId all derive the
+        // SAME PartitionGuid (one exec → one slot, StepId excluded) — symmetric with the processor trio so
+        // REINJECT/INJECT/DELETE for one orchestrator-side exec serialize together.
+        var reinject = new OrchestratorReinject(wf, NewGuid(), proc)
+            { CorrelationId = corr, ExecutionId = exec, EntryId = NewGuid(), MessageId = NewGuid() };
+        var inject = new OrchestratorInject(wf, NewGuid(), proc)
+            { CorrelationId = corr, ExecutionId = exec, MessageId = NewGuid(), DeleteEntryId = NewGuid() };
+        var delete = new OrchestratorDelete(wf, NewGuid(), proc)
+            { CorrelationId = corr, ExecutionId = exec, EntryId = NewGuid() };
+
+        var slot = ReinjectConsumerDefinition.PartitionGuid(reinject);
+        Assert.Equal(slot, ReinjectConsumerDefinition.PartitionGuid(inject));
+        Assert.Equal(slot, ReinjectConsumerDefinition.PartitionGuid(delete));
+
+        // Guard: the StepIds really do differ (so the equality above proves StepId exclusion, not coincidence).
+        Assert.NotEqual(reinject.StepId, inject.StepId);
+        Assert.NotEqual(inject.StepId, delete.StepId);
+
+        // Different ExecutionId → different slot (a distinct orchestrator exec runs in parallel).
+        var otherExec = new OrchestratorReinject(wf, reinject.StepId, proc)
+            { CorrelationId = corr, ExecutionId = NewGuid(), EntryId = NewGuid(), MessageId = NewGuid() };
+        Assert.NotEqual(slot, ReinjectConsumerDefinition.PartitionGuid(otherExec));
+    }
 }

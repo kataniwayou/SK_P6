@@ -64,6 +64,18 @@ public sealed class RecoveryEndpointBinder(
             cfg.ConfigureConsumer<ReinjectConsumer>(ctx);
             cfg.ConfigureConsumer<InjectConsumer>(ctx);
             cfg.ConfigureConsumer<DeleteConsumer>(ctx);
+
+            // Phase 71 (req 11): the orchestrator-side recovery trio binds on the SAME partitioned
+            // gate-open-only keeper-recovery endpoint — same SHARED partitioner + same 4-tuple PartitionGuid
+            // (the 3 new contracts implement IKeeperRecoverable), so REINJECT/INJECT/DELETE for ONE exec
+            // serialize into one slot symmetric with the processor trio. No bus retry / no _error here either.
+            cfg.UsePartitioner<OrchestratorReinject>(partition, p => ReinjectConsumerDefinition.PartitionGuid(p.Message));
+            cfg.UsePartitioner<OrchestratorInject>(partition, p => ReinjectConsumerDefinition.PartitionGuid(p.Message));
+            cfg.UsePartitioner<OrchestratorDelete>(partition, p => ReinjectConsumerDefinition.PartitionGuid(p.Message));
+
+            cfg.ConfigureConsumer<OrchestratorReinjectConsumer>(ctx);
+            cfg.ConfigureConsumer<OrchestratorInjectConsumer>(ctx);
+            cfg.ConfigureConsumer<OrchestratorDeleteConsumer>(ctx);
         });
 
         await handle.Ready;                  // queue declared + consumers attached

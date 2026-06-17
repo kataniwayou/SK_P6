@@ -67,6 +67,13 @@ builder.Services.AddBaseConsoleMessaging(builder.Configuration, x =>
     x.AddConsumer<Keeper.Recovery.ReinjectConsumer>().ExcludeFromConfigureEndpoints();
     x.AddConsumer<Keeper.Recovery.InjectConsumer>().ExcludeFromConfigureEndpoints();
     x.AddConsumer<Keeper.Recovery.DeleteConsumer>().ExcludeFromConfigureEndpoints();
+
+    // Phase 71 (req 11): the orchestrator-side recovery trio — same posture as the processor trio above
+    // (registered for DI but EXCLUDED from auto endpoint config; the binder owns the single keeper-recovery
+    // endpoint). No new options: RecoveryOptions (ExecutionDataTtlSeconds) + RetryOptions are already bound.
+    x.AddConsumer<Keeper.Recovery.OrchestratorReinjectConsumer>().ExcludeFromConfigureEndpoints();
+    x.AddConsumer<Keeper.Recovery.OrchestratorInjectConsumer>().ExcludeFromConfigureEndpoints();
+    x.AddConsumer<Keeper.Recovery.OrchestratorDeleteConsumer>().ExcludeFromConfigureEndpoints();
 });
 
 // D-04 (OQ-1): the singleton holding the connected keeper-recovery handle (set by the binder after
