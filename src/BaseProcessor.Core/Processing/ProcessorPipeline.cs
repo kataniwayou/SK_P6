@@ -60,23 +60,38 @@ public sealed class ProcessorPipeline(
         var db = redis.GetDatabase();
         var limit = retryOptions.Value.Limit;
 
-        // req 1: gate on exist L2[entryId]. Exhaust → REINJECT(messageId,…) + return (no source delete,
-        // input intact). Clean-absent → return (no processing).
-        var exists = await RetryLoop.ExecuteAsync(
-            () => db.KeyExistsAsync(L2ProjectionKeys.ExecutionData(d.EntryId)), limit, ct);
-        if (!exists.Succeeded) { await SendKeeper(BuildReinject(d, messageId), limit, ct); return; }
-        if (!exists.Value) return;   // clean-absent → no processing (req 1)
-
-        // req 2: read L2[entryId]. Read-fault → REINJECT + return. Input-invalid/deserialize-fail → ONE
-        // StepFailed + return, with NO entry delete (C-2 / Pitfall 3 — left to TTL).
-        var read = await RetryLoop.ExecuteAsync(async () =>
+        // A SOURCE dispatch (entryId == Guid.Empty, SourceStep.IsSource) has NO upstream L2 input — it skips
+        // the gate (req 1) + read (req 2) entirely and runs with EMPTY validatedData (the author seam uses
+        // d.Payload for config). NOTE: the Phase-70 linear-Pre rewrite (341c1fc) dropped this source bypass,
+        // which made every organic entry-step gate on exist L2[Guid.Empty] → clean-absent → return WITHOUT
+        // processing (no result, no fault) — silently breaking every source round-trip. Restored here to the
+        // pre-Phase-70 "Forward — Pre" contract ("a SourceStep.IsSource Guid.Empty dispatch skips the L2 read
+        // with empty validatedData"). Downstream (non-source) steps still gate+read their relocated L2 input.
+        string validatedData;
+        if (SourceStep.IsSource(d.EntryId))
         {
-            var raw = await db.StringGetAsync(L2ProjectionKeys.ExecutionData(d.EntryId));
-            if (raw.IsNullOrEmpty) throw new KeyAbsentException();   // A2: unify absent/empty with a Redis fault
-            return raw.ToString();
-        }, limit, ct);
-        if (!read.Succeeded) { await SendKeeper(BuildReinject(d, messageId), limit, ct); return; }
-        var validatedData = read.Value!;
+            validatedData = string.Empty;
+        }
+        else
+        {
+            // req 1: gate on exist L2[entryId]. Exhaust → REINJECT(messageId,…) + return (no source delete,
+            // input intact). Clean-absent → return (no processing).
+            var exists = await RetryLoop.ExecuteAsync(
+                () => db.KeyExistsAsync(L2ProjectionKeys.ExecutionData(d.EntryId)), limit, ct);
+            if (!exists.Succeeded) { await SendKeeper(BuildReinject(d, messageId), limit, ct); return; }
+            if (!exists.Value) return;   // clean-absent → no processing (req 1)
+
+            // req 2: read L2[entryId]. Read-fault → REINJECT + return. Input-invalid/deserialize-fail → ONE
+            // StepFailed + return, with NO entry delete (C-2 / Pitfall 3 — left to TTL).
+            var read = await RetryLoop.ExecuteAsync(async () =>
+            {
+                var raw = await db.StringGetAsync(L2ProjectionKeys.ExecutionData(d.EntryId));
+                if (raw.IsNullOrEmpty) throw new KeyAbsentException();   // A2: unify absent/empty with a Redis fault
+                return raw.ToString();
+            }, limit, ct);
+            if (!read.Succeeded) { await SendKeeper(BuildReinject(d, messageId), limit, ct); return; }
+            validatedData = read.Value!;
+        }
 
         if (!ProcessorJsonSchemaValidator.TryValidate(context.InputDefinition, validatedData, out var inErrs))
         {
@@ -148,9 +163,14 @@ public sealed class ProcessorPipeline(
             var proceed = await outputTail.RunAsync(carried, d.EntryId, ct);
             if (!proceed) return;   // INJECT escalation already ended the round trip (no delete)
 
-            var del = await RetryLoop.ExecuteAsync(
-                () => db.KeyDeleteAsync(L2ProjectionKeys.ExecutionData(d.EntryId)), limit, ct);
-            if (!del.Succeeded) await SendKeeper(BuildDelete(d), limit, ct);   // delete-exhaust → DELETE (req 4)
+            // A source step (Guid.Empty) has NO L2 input key to reclaim — skip the delete tail for it
+            // (pre-Phase-70 "Forward — source-delete tail … Skipped on a Guid.Empty source step").
+            if (!SourceStep.IsSource(d.EntryId))
+            {
+                var del = await RetryLoop.ExecuteAsync(
+                    () => db.KeyDeleteAsync(L2ProjectionKeys.ExecutionData(d.EntryId)), limit, ct);
+                if (!del.Succeeded) await SendKeeper(BuildDelete(d), limit, ct);   // delete-exhaust → DELETE (req 4)
+            }
         }
         finally { processor.ClearSeamState(); }   // CR-01: per-consume AsyncLocal cleanup
     }
