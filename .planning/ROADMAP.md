@@ -694,12 +694,14 @@ Plans:
 ### Phase 71: Orchestrator two-consumer design (Pre-Process + Post-Process) with keeper recovery
 
 **Goal:** Mirror the Phase-70 processor two-consumer pattern on the orchestrator side and close the Phase-70-deferred `entryId`↔`messageId` threading (A1). A **Pre-Process** consumer gates on `L2[entryId]` (reads the upstream step's output from the `out` namespace), resolves next steps from the graph, fans out one **Post-Process** message per next step (carrying `payload`+`data`), then deletes `L2[entryId]`; a **Post-Process** consumer writes the next step's input `data` to `L2[messageId]` (`data` namespace, TTL'd) and dispatches `EntryStepDispatch` to the processor with `entryId=messageId`. Keeper states `REINJECT`/`INJECT`/`DELETE` redefined with envelope-`MessageId` override. Resilience identical to Phase 70 (no `_error`, `UseMessageRetry` none, send→bounded-retry→throw→broker redelivery, every L2 op→keeper on exhaustion). **Closes A1:** the processor result stamps `EntryId = its output messageId` (replacing the `Guid.Empty` placeholder). Open points to lock in SPEC: (1) resolve-next-steps failure must throw/park — **never silent-ack** (the one no-silent-loss hole); (2) `executionId` threaded unchanged; (3) REINJECT clean-absent drop; (4) namespace cross-pairing (orchestrator reads `out`, writes `data`); (5) merge/fan-in scope decision.
-**Requirements**: TBD (lock via /gsd-spec-phase 71)
+**Requirements**: REQ-71-01..REQ-71-12 (locked via 71-SPEC.md — 12 requirements; SPEC is authoritative, mapped 1:1 to SPEC requirements 1-12)
 **Depends on:** Phase 70
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 71 to break down)
+- [ ] 71-01-PLAN.md — Shared contracts (NextStepHandoff + 3 orchestrator keeper contracts + ResultPost queue const) + A1 close at both stamp sites (OutputTail + keeper InjectConsumer)
+- [ ] 71-02-PLAN.md — Orchestrator Pre/Post core: OrchestratorPrePipeline (gate/read out: -> SelectNext -> fan-out -> delete out:) + RelocateTail + Post consumer + two-reason trip-end metric + TypedResultConsumer reshape + test migration
+- [ ] 71-03-PLAN.md — Keeper orchestrator recovery consumers (REINJECT/INJECT/DELETE) + binder/Program wiring + partition/firewall facts
 
 ---
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
@@ -882,7 +884,8 @@ Plans:
  (completed 2026-06-14)
 - [x] **Phase 67: Fault-Injection Harness** — Activate via `POST /api/v1/orchestration/start`, run a 5-minute/30s-cron window, inject each scenario's mid-run fault (container kill/restart) and let the system recover — fully automated end-to-end (clean → seed → activate → inject → observe → analyze → tear down), no human step.
  (completed 2026-06-14 — harness proven live on TEST-01 baseline + TEST-02 processor-crash recovery, both Pass 10/10; FAULT-01/02/03 met)
-- [x] **Phase 68: Live Resilience Proof — 7 Scenarios (Capstone)** — Run all 7 proofs (happy path + processor / orchestrator / keeper / redis / rabbitmq / redis+rabbitmq crash) through the harness; each PASSES iff zero-missing + effect-once hold over its window; redelivery during the fault reported, not failed. (completed 2026-06-15)
+- [x] **Phase 68: Live Resilience Proof — 7 Scenarios (Capstone)** — Run all 7 proofs (happy path + processor / orchestrator / keeper / redis / rabbitmq / redis+rabbitmq crash) through the harness; each PASSES iff zero-missing + effect-once hold over its window; redelivery during the fault reported, not failed.
+ (completed 2026-06-15)
 
 ### Phase Details
 
