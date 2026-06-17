@@ -696,7 +696,7 @@ Plans:
 **Goal:** Mirror the Phase-70 processor two-consumer pattern on the orchestrator side and close the Phase-70-deferred `entryId`↔`messageId` threading (A1). A **Pre-Process** consumer gates on `L2[entryId]` (reads the upstream step's output from the `out` namespace), resolves next steps from the graph, fans out one **Post-Process** message per next step (carrying `payload`+`data`), then deletes `L2[entryId]`; a **Post-Process** consumer writes the next step's input `data` to `L2[messageId]` (`data` namespace, TTL'd) and dispatches `EntryStepDispatch` to the processor with `entryId=messageId`. Keeper states `REINJECT`/`INJECT`/`DELETE` redefined with envelope-`MessageId` override. Resilience identical to Phase 70 (no `_error`, `UseMessageRetry` none, send→bounded-retry→throw→broker redelivery, every L2 op→keeper on exhaustion). **Closes A1:** the processor result stamps `EntryId = its output messageId` (replacing the `Guid.Empty` placeholder). Open points to lock in SPEC: (1) resolve-next-steps failure must throw/park — **never silent-ack** (the one no-silent-loss hole); (2) `executionId` threaded unchanged; (3) REINJECT clean-absent drop; (4) namespace cross-pairing (orchestrator reads `out`, writes `data`); (5) merge/fan-in scope decision.
 **Requirements**: REQ-71-01..REQ-71-12 (locked via 71-SPEC.md — 12 requirements; SPEC is authoritative, mapped 1:1 to SPEC requirements 1-12)
 **Depends on:** Phase 70
-**Plans:** 3 plans
+**Plans:** 3/3 plans complete
 
 Plans:
 - [x] 71-01-PLAN.md — Shared contracts (NextStepHandoff + 3 orchestrator keeper contracts + ResultPost queue const) + A1 close at both stamp sites (OutputTail + keeper InjectConsumer) ✅ 2026-06-17 (44da475, a0a5631, c39d0e3) — REQ-71-07, REQ-71-10; touched slice 9/9 green
