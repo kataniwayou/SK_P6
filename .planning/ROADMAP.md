@@ -723,7 +723,7 @@ Plans:
 **Plans:** 4 plans (3 waves)
 
 Plans:
-- [ ] 73-01-PLAN.md — Wave 1: the single src/ edit — SampleProcessor.ProcessAsync deterministic seed (100/200) + Mode-1 received→produced value log (SPEC-R3, R4)
+- [x] 73-01-PLAN.md — Wave 1: the single src/ edit — SampleProcessor.ProcessAsync deterministic seed (100/200) + Mode-1 received→produced value log (SPEC-R3, R4) — complete 2026-06-17; fixed 100/200 seed (random removed), Mode-1 `{StepLabel} received {Received} produced {Produced}` ES-attribute contract locked, Debug+Release 0-warning. Commits f8dbcfa, 60e4200, 5285a5f.
 - [ ] 73-02-PLAN.md — Wave 2: hermetic harness — stateful dict-backed IDatabase L2 fake + full-DAG driver over the real classes + fan-in entryId + value-integrity assertions through convergent G (SPEC-R1, R2, R3)
 - [ ] 73-03-PLAN.md — Wave 2: auditor pure-model core — RunTrace/PassFailEngine/AnalyzerReport (10-label set, Step_G ×2 multiplicity, value-chain verdict, trip-duration fields) + synthetic engine facts (SPEC-R5, R6)
 - [ ] 73-04-PLAN.md — Wave 3: live wiring — seeder G + number=1 (10/10/10), RealStack fixture value-attribute read + trip duration, phase-73-sweep.ps1 (SPEC-R1, R3, R5, R6, R7)
