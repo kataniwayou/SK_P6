@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 73-01-PLAN.md
-last_updated: "2026-06-17T20:54:36.352Z"
+stopped_at: Completed 73-02-PLAN.md
+last_updated: "2026-06-17T21:29:12.471Z"
 last_activity: 2026-06-17
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove per
 Phase: 73 (verify-and-instrument-end-to-end-l2-data-delivery-across-a-f) — EXECUTING
 Current Plan: 1
 Total Plans: 3
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-06-17
 
@@ -1037,6 +1037,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 72 P02 | 13min | 3 tasks | 6 files |
 | Phase 72 P03 | 18min | 2 tasks | 5 files |
 | Phase 73 P01 | 2min | 3 tasks | 1 files |
+| Phase 73 P02 | 31min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1506,6 +1507,8 @@ Recent decisions affecting current work:
 - 72-03: three-way out: read (D-10) — present -> fan-out+delete / clean-absent (no fault) -> idempotent ack-skip (Processing rides this for free, D-05) / Redis fault -> REINJECT; read lambda returns null on clean-absent to split absent from fault
 - 72-03: orchestrator_step_unresolved wired — stage-1 L1 miss + once per dangling next-step id at stage-3 (continue, never throws), workflowId label only; terminal/condition-skip/normal-fanout do not increment
 - Phase 73 Plan 01: Locked ES-attribute contract Received/Produced (Mode-1 value log) for Plans 02+04; Mode-2 seeds fixed 100/200 (random removed)
+- Plan 73-02: stubbed the REAL virtual StringSetAsync(Expiration, ValueCondition) overload in DictBackedL2Fake — the TimeSpan?/When shorthands are extension methods NSubstitute cannot intercept (Pitfall 1 / T-70-11), which would silently false-green the L2 round-trip
+- Plan 73-02: hermetic fan-in harness drives the REAL pipeline + REAL SampleProcessor (not a FakeProcessor); G fan-in proven as two completed-terminal arrivals on distinct entryId/out: keys, order-independent (forward == reversed) = non-joining
 
 ### Roadmap Milestone Log
 
@@ -1612,8 +1615,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-17T20:54:36.334Z
-Stopped at: Completed 73-01-PLAN.md
+Last session: 2026-06-17T21:29:12.446Z
+Stopped at: Completed 73-02-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
