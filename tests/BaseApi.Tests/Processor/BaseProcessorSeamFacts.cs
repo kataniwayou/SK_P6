@@ -1,6 +1,7 @@
 using BaseProcessor.Core.Processing;
 using MassTransit;
 using Messaging.Contracts;
+using Messaging.Contracts.Projections;
 using NSubstitute;
 using StackExchange.Redis;
 using Xunit;
@@ -128,6 +129,73 @@ public sealed class BaseProcessorSeamFacts
         await processor.DeleteEntryAsync();
 
         Assert.False(escalated);   // a successful delete never escalates
+    }
+
+    /// <summary>CR-01 regression: two consumes interleave on ONE shared (Singleton-modelled)
+    /// <see cref="DispatchTestKit.FakeProcessor"/> with DIFFERENT entryId/messageId. Each consume runs on its
+    /// own async flow: it sets its seam state, yields (letting the sibling set ITS state — the clobber window),
+    /// then reads back via DeleteEntry/NewResult. With the old shared-instance-field design the second
+    /// SetSeamState overwrote the first consume's entryId/messageId, so consume A deleted B's entry and stamped
+    /// B's messageId — this fact FAILS against that design. With the AsyncLocal seam state each flow sees only
+    /// its own ids, so no cross-message bleed.</summary>
+    [Fact]
+    public async Task ConcurrentConsumes_DoNotBleed_SeamStateIsPerDispatch()
+    {
+        var send = new DispatchTestKit.CapturingSendProvider();
+
+        // Record every entryId the db was asked to delete, keyed by the RedisKey string.
+        var deletedKeys = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var db = Substitute.For<IDatabase>();
+        db.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(ci => { deletedKeys.Add(((RedisKey)ci[0]).ToString()); return true; });
+        db.KeyDeleteAsync(Arg.Any<RedisKey>())
+            .Returns(ci => { deletedKeys.Add(((RedisKey)ci[0]).ToString()); return true; });
+
+        // ONE shared processor instance — the Singleton the author registers.
+        var processor = new DispatchTestKit.FakeProcessor((DataResult?)null);
+
+        // A barrier so BOTH consumes have set their seam state BEFORE either reads it (max clobber window).
+        var bothSet = new System.Threading.Barrier(2);
+
+        async Task<(Guid entryId, Guid stampedMessageId)> Consume(Guid entryId, Guid messageId)
+        {
+            await Task.Yield();   // ensure an independent async flow per consume
+            processor.SetSeamState(
+                db, send, retryLimit: 3,
+                entryId: entryId,
+                processorId: Guid.NewGuid(),
+                messageId: messageId,
+                workflowId: Guid.NewGuid(),
+                stepId: Guid.NewGuid(),
+                correlationId: Guid.NewGuid(),
+                onSpawnDropped: _ => { },
+                escalateDelete: () => Task.CompletedTask);
+
+            bothSet.SignalAndWait();   // sibling has now clobbered the shared instance IF state were shared
+
+            // Read back through the real helpers AFTER the interleave.
+            var stamped = processor.NewResultPublic(StepOutcome.Completed, "{\"n\":1}");
+            await processor.DeleteEntryAsync();
+            processor.ClearSeamState();
+            return (entryId, stamped.MessageId);
+        }
+
+        var aEntry = Guid.NewGuid(); var aMsg = Guid.NewGuid();
+        var bEntry = Guid.NewGuid(); var bMsg = Guid.NewGuid();
+
+        var results = await Task.WhenAll(Consume(aEntry, aMsg), Consume(bEntry, bMsg));
+
+        // Each consume's NewResult must carry ITS OWN messageId (no stamp bleed).
+        foreach (var (entryId, stampedMessageId) in results)
+        {
+            var expected = entryId == aEntry ? aMsg : bMsg;
+            Assert.Equal(expected, stampedMessageId);
+        }
+
+        // Each consume must have deleted ITS OWN entry key — both distinct keys present, neither doubled.
+        Assert.Contains(L2ProjectionKeys.ExecutionData(aEntry), deletedKeys);
+        Assert.Contains(L2ProjectionKeys.ExecutionData(bEntry), deletedKeys);
+        Assert.Equal(2, deletedKeys.Count);
     }
 
     [Fact]
