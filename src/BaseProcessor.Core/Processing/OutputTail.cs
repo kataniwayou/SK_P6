@@ -13,8 +13,9 @@ using StackExchange.Redis;
 namespace BaseProcessor.Core.Processing;
 
 /// <summary>
-/// D-15: the single source of truth for the output tail (validate output → write L2[messageId]=data ONLY
-/// when <c>result == Completed</c> → send Step* by result), shared by BOTH the Pre inline tail
+/// D-15: the single source of truth for the output tail (validate output → write L2[messageId]=data for
+/// every TERMINAL outcome — Completed/Failed/Cancelled, NOT Processing (Phase 72 REQ-1/D-04/D-06) → send
+/// Step* by result), shared by BOTH the Pre inline tail
 /// (<see cref="ProcessorPipeline"/>) and <see cref="PostProcessConsumer"/>. Pre additionally deletes
 /// L2[entryId] AFTER a <c>true</c> (non-escalated) return; Post never touches entryId.
 /// <para>
@@ -57,7 +58,9 @@ public sealed class OutputTail(
             && !ProcessorJsonSchemaValidator.TryValidate(context.OutputDefinition, dr.Data, out _))
             result = StepOutcome.Failed;
 
-        if (result == StepOutcome.Completed)
+        // REQ-1 / D-04 / D-06: always write the out: blob for every TERMINAL outcome
+        // (Completed/Failed/Cancelled), NOT the transient Processing status (which keeps Guid.Empty + no blob).
+        if (result != StepOutcome.Processing)
         {
             var write = await RetryLoop.ExecuteAsync(
                 () => db.StringSetAsync(L2ProjectionKeys.OutputData(dr.MessageId), dr.Data, JitteredTtl()), limit, ct);
@@ -73,17 +76,23 @@ public sealed class OutputTail(
     }
 
     /// <summary>Mechanical switch on the (possibly output-validation-forced) outcome → one of the 4 Step*
-    /// records. A1 (req 7, Phase 71): a Completed result stamps <c>EntryId = dr.MessageId</c> — the output
-    /// blob's key — so the orchestrator Pre can gate/read <c>L2[out:EntryId]</c> off it. The
-    /// Failed/Cancelled/Processing arms keep <see cref="Guid.Empty"/> (no out: blob exists for them).</summary>
+    /// records. Phase 72 (REQ-2 / D-04): the Completed AND the Failed/Cancelled arms now stamp
+    /// <c>EntryId = dr.MessageId</c> — the out: blob key the tail just wrote — so the orchestrator Pre can
+    /// gate/read <c>L2[out:EntryId]</c> off EVERY terminal result. Only the transient <b>Processing</b> arm
+    /// keeps <see cref="Guid.Empty"/> (D-04 — no out: blob exists for it). The Failed/Cancelled diagnostics
+    /// come from <see cref="DataResult.ErrorMessage"/>/<see cref="DataResult.CancellationMessage"/> when the
+    /// upstream path supplied one (D-07 catch/input-fail routing); the Failed arm falls back to the
+    /// output-schema constant for the output-validation-forced-Failed case.</summary>
     private static IStepResult BuildStep(DataResult dr, StepOutcome result) => result switch
     {
         StepOutcome.Completed => new StepCompleted(dr.WorkflowId, dr.StepId, dr.ProcessorId)
             { CorrelationId = dr.CorrelationId, ExecutionId = dr.ExecutionId, EntryId = dr.MessageId },
         StepOutcome.Failed => new StepFailed(dr.WorkflowId, dr.StepId, dr.ProcessorId)
-            { CorrelationId = dr.CorrelationId, ExecutionId = dr.ExecutionId, EntryId = Guid.Empty, ErrorMessage = "output failed schema validation" },
+            { CorrelationId = dr.CorrelationId, ExecutionId = dr.ExecutionId, EntryId = dr.MessageId,
+              ErrorMessage = dr.ErrorMessage.Length > 0 ? dr.ErrorMessage : "output failed schema validation" },
         StepOutcome.Cancelled => new StepCancelled(dr.WorkflowId, dr.StepId, dr.ProcessorId)
-            { CorrelationId = dr.CorrelationId, ExecutionId = dr.ExecutionId, EntryId = Guid.Empty, CancellationMessage = "" },
+            { CorrelationId = dr.CorrelationId, ExecutionId = dr.ExecutionId, EntryId = dr.MessageId,
+              CancellationMessage = dr.CancellationMessage },
         _ => new StepProcessing(dr.WorkflowId, dr.StepId, dr.ProcessorId)
             { CorrelationId = dr.CorrelationId, ExecutionId = dr.ExecutionId },
     };
