@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 73-02-PLAN.md
-last_updated: "2026-06-17T21:29:12.471Z"
+stopped_at: Completed 73-03-PLAN.md
+last_updated: "2026-06-17T21:47:56.289Z"
 last_activity: 2026-06-17
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove per
 Phase: 73 (verify-and-instrument-end-to-end-l2-data-delivery-across-a-f) — EXECUTING
 Current Plan: 1
 Total Plans: 3
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-06-17
 
@@ -1038,6 +1038,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 72 P03 | 18min | 2 tasks | 5 files |
 | Phase 73 P01 | 2min | 3 tasks | 1 files |
 | Phase 73 P02 | 31min | 3 tasks | 2 files |
+| Phase 73 P03 | 15min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1509,6 +1510,9 @@ Recent decisions affecting current work:
 - Phase 73 Plan 01: Locked ES-attribute contract Received/Produced (Mode-1 value log) for Plans 02+04; Mode-2 seeds fixed 100/200 (random removed)
 - Plan 73-02: stubbed the REAL virtual StringSetAsync(Expiration, ValueCondition) overload in DictBackedL2Fake — the TimeSpan?/When shorthands are extension methods NSubstitute cannot intercept (Pitfall 1 / T-70-11), which would silently false-green the L2 round-trip
 - Plan 73-02: hermetic fan-in harness drives the REAL pipeline + REAL SampleProcessor (not a FakeProcessor); G fan-in proven as two completed-terminal arrivals on distinct entryId/out: keys, order-independent (forward == reversed) = non-joining
+- 73-03: LabelsPerRun stays 9 (inert Prom basis); the binding verdict is value-chain + completeness, never Prom (Step_G x2 not folded into dispatch math)
+- 73-03: convergent terminal Step_G has expected multiplicity 2 — HasIllegitimateDuplicate exempts Step_G x2 but fails x!=2 and every non-convergent duplicate (fail-closed preserved)
+- 73-03: live terminal-anchor PROXY = Step_G completed-terminal ES value seed+6; durable skp:out: blob proof owned by hermetic harness Plan 02 (ES-read-only auditor cannot read Redis)
 
 ### Roadmap Milestone Log
 
@@ -1615,8 +1619,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-17T21:29:12.446Z
-Stopped at: Completed 73-02-PLAN.md
+Last session: 2026-06-17T21:47:47.278Z
+Stopped at: Completed 73-03-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
