@@ -37,7 +37,8 @@ public sealed class OutputTailFacts
         var proceed = await Build(redis, send).RunAsync(dr, deleteEntryId: Guid.NewGuid(), ct);
 
         Assert.True(proceed);                                       // caller may run its own (entry-delete) tail
-        Assert.Single(send.Sent.OfType<StepCompleted>());          // one StepCompleted by result
+        var completed = Assert.Single(send.Sent.OfType<StepCompleted>());   // one StepCompleted by result
+        Assert.Equal(messageId, completed.EntryId);                // A1 closed (req 7): Completed stamps the output messageId
         Assert.Empty(send.SentKeeper);                             // no keeper on the happy path
 
         // ONE OutputData write keyed by messageId, carrying the data and a NON-NULL (jittered) TTL (req 11).

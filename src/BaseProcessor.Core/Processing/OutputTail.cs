@@ -73,12 +73,13 @@ public sealed class OutputTail(
     }
 
     /// <summary>Mechanical switch on the (possibly output-validation-forced) outcome → one of the 4 Step*
-    /// records. A1: EntryId carries <see cref="Guid.Empty"/> this phase — output is keyed by messageId
-    /// (OutputData), and the orchestrator-side entryId↔messageId threading is SPEC-deferred.</summary>
+    /// records. A1 (req 7, Phase 71): a Completed result stamps <c>EntryId = dr.MessageId</c> — the output
+    /// blob's key — so the orchestrator Pre can gate/read <c>L2[out:EntryId]</c> off it. The
+    /// Failed/Cancelled/Processing arms keep <see cref="Guid.Empty"/> (no out: blob exists for them).</summary>
     private static IStepResult BuildStep(DataResult dr, StepOutcome result) => result switch
     {
         StepOutcome.Completed => new StepCompleted(dr.WorkflowId, dr.StepId, dr.ProcessorId)
-            { CorrelationId = dr.CorrelationId, ExecutionId = dr.ExecutionId, EntryId = Guid.Empty },
+            { CorrelationId = dr.CorrelationId, ExecutionId = dr.ExecutionId, EntryId = dr.MessageId },
         StepOutcome.Failed => new StepFailed(dr.WorkflowId, dr.StepId, dr.ProcessorId)
             { CorrelationId = dr.CorrelationId, ExecutionId = dr.ExecutionId, EntryId = Guid.Empty, ErrorMessage = "output failed schema validation" },
         StepOutcome.Cancelled => new StepCancelled(dr.WorkflowId, dr.StepId, dr.ProcessorId)

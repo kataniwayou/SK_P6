@@ -20,8 +20,9 @@ namespace Keeper.Recovery;
 ///   <item>delete <c>L2[entryId]</c> (the source <see cref="KeeperInject.DeleteEntryId"/>; no-op when empty).</item>
 /// </list>
 /// Every op goes through the RetryLoop <see cref="RecoveryConsumerBase{TMessage}.Guard"/>; gating happens
-/// at the endpoint (D-04). The <c>Step*</c> <c>EntryId</c> is the <c>Guid.Empty</c> placeholder (A1 —
-/// output is keyed by messageId; orchestrator entryId↔messageId threading is SPEC-deferred).</summary>
+/// at the endpoint (D-04). A1 (req 7, Phase 71 — the SECOND A1 site): the Completed arm now stamps
+/// <c>EntryId = dr.MessageId</c> (the real out: key) so a keeper-recovered completion does NOT gate-miss
+/// out: on the orchestrator Pre; the non-completed arms keep the <c>Guid.Empty</c> placeholder.</summary>
 public sealed class InjectConsumer(
     IConnectionMultiplexer redis, ISendEndpointProvider sendProvider,
     IOptions<RetryOptions> retryOptions, IOptions<RecoveryOptions> recoveryOptions)
@@ -42,7 +43,7 @@ public sealed class InjectConsumer(
         IStepResult step = dr.Result switch
         {
             StepOutcome.Completed => new StepCompleted(dr.WorkflowId, dr.StepId, dr.ProcessorId)
-            { CorrelationId = dr.CorrelationId, ExecutionId = dr.ExecutionId, EntryId = Guid.Empty },
+            { CorrelationId = dr.CorrelationId, ExecutionId = dr.ExecutionId, EntryId = dr.MessageId },
             StepOutcome.Failed => new StepFailed(dr.WorkflowId, dr.StepId, dr.ProcessorId)
             { CorrelationId = dr.CorrelationId, ExecutionId = dr.ExecutionId, EntryId = Guid.Empty, ErrorMessage = "output failed schema validation" },
             StepOutcome.Cancelled => new StepCancelled(dr.WorkflowId, dr.StepId, dr.ProcessorId)

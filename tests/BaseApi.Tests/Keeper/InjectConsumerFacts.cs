@@ -72,7 +72,7 @@ public sealed class InjectConsumerFacts
         var completed = Assert.IsType<StepCompleted>(msg);
         Assert.Equal(dr.CorrelationId, completed.CorrelationId);
         Assert.Equal(dr.ExecutionId, completed.ExecutionId);
-        Assert.Equal(Guid.Empty, completed.EntryId);   // A1 placeholder — output keyed by messageId
+        Assert.Equal(dr.MessageId, completed.EntryId);   // A1 closed - output key on Completed (req 7)
         Assert.Equal(dr.MessageId, Assert.Single(send.SentMessageIds));   // envelope override
 
         // Strict order: write L2[messageId]=data → send Step* → delete L2[DeleteEntryId] (Pitfall 5).
