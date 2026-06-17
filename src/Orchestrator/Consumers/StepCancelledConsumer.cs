@@ -1,7 +1,6 @@
 using Messaging.Contracts;
 using Microsoft.Extensions.Logging;
 using Orchestrator.Dispatch;
-using Orchestrator.L1;
 using Orchestrator.Observability;
 
 namespace Orchestrator.Consumers;
@@ -12,12 +11,10 @@ namespace Orchestrator.Consumers;
 /// only per-type knob is <see cref="Outcome"/>, no status if/switch.
 /// </summary>
 public sealed class StepCancelledConsumer(
-    IWorkflowL1Store store,
-    StepAdvancement advancement,
-    IStepDispatcher dispatcher,
+    OrchestratorPrePipeline pipeline,
     OrchestratorMetrics metrics,
     ILogger<StepCancelled> logger)
-    : TypedResultConsumer<StepCancelled>(store, advancement, dispatcher, metrics, logger)
+    : TypedResultConsumer<StepCancelled>(pipeline, metrics, logger)
 {
     protected override StepOutcome Outcome => StepOutcome.Cancelled;
 }
