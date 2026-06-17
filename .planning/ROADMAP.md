@@ -715,6 +715,19 @@ Plans:
 - [x] 72-02-PLAN.md - Orchestrator foundation: Wave-0 MeterListener capture seam + SelectNext->{Matches,UnresolvedIds} reshape + orchestrator_step_unresolved counter definition (SPEC-4,5,6) [wave 1] ✅ 2026-06-17 (c362835, 5555427, 7d3e390) — zero-dep MeterCollector seam, SelectNext returns pure SelectNextResult (dangling ids surface in UnresolvedIds), StepUnresolved counter via existing IMeterFactory; all SelectNext call sites migrated to .Matches; 17/17 hermetic GREEN, 0-warning Debug+Release
 - [x] 72-03-PLAN.md - Uniform branch-free OrchestratorPrePipeline + clean-absent skip + stage-1/stage-3 metric increments (SPEC-4,5,6) [wave 2, depends 72-02] ✅ 2026-06-17 (b501557, 88dbd3f) — dropped both `outcome == StepOutcome.Completed` gates (read/fan-out/delete uniform for every outcome, D-09); three-way read (present/clean-absent ack-skip/fault REINJECT, Processing rides the skip, D-05/D-10); OrchestratorMetrics ctor-injected + stage-1/stage-3 orchestrator_step_unresolved increments (workflowId label, continue never throws); OrchestratorPrePipelineFacts 15/15 + affected hermetic 40/40 GREEN, 0-warning Debug+Release. **Phase 72 COMPLETE (3/3 plans).**
 
+### Phase 73: Verify and instrument end-to-end L2 data delivery across a fan-out workflow DAG per correlationId and executionId, with a hermetic zero-Docker metric-conservation proof and a live-stack per-executionId ES auditor, plus execution-trip duration measurement
+
+**Goal:** Prove and instrument end-to-end L2 data delivery across the DAG `A→B→C→{D1→E1→F1, D2→E2→F2}→G` (G = one shared, per-arrival non-joining terminal) per `(correlationId, executionId)` via (a) a hermetic zero-Docker harness proving fan-in `entryId` correctness + deterministic per-hop value integrity, and (b) a live-stack per-`executionId` ES auditor asserting the deterministic value chain (each hop +1 from fixed seeds 100/200), `Step_G` ×2 convergence at the expected terminal value, terminal `skp:out:` anchor, and per-exec/per-corr trip duration — with one production-code edit (deterministic seed + value-clarifying log inside `SampleProcessor.ProcessAsync`). Locked in 73-SPEC.md (7 requirements; sha256 → deterministic value tracking; metrics deferred; live Docker run deferred-automated).
+**Requirements**: SPEC-R1..SPEC-R7 (locked in 73-SPEC.md)
+**Depends on:** Phase 72
+**Plans:** 4 plans (3 waves)
+
+Plans:
+- [ ] 73-01-PLAN.md — Wave 1: the single src/ edit — SampleProcessor.ProcessAsync deterministic seed (100/200) + Mode-1 received→produced value log (SPEC-R3, R4)
+- [ ] 73-02-PLAN.md — Wave 2: hermetic harness — stateful dict-backed IDatabase L2 fake + full-DAG driver over the real classes + fan-in entryId + value-integrity assertions through convergent G (SPEC-R1, R2, R3)
+- [ ] 73-03-PLAN.md — Wave 2: auditor pure-model core — RunTrace/PassFailEngine/AnalyzerReport (10-label set, Step_G ×2 multiplicity, value-chain verdict, trip-duration fields) + synthetic engine facts (SPEC-R5, R6)
+- [ ] 73-04-PLAN.md — Wave 3: live wiring — seeder G + number=1 (10/10/10), RealStack fixture value-attribute read + trip duration, phase-73-sweep.ps1 (SPEC-R1, R3, R5, R6, R7)
+
 ---
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
 
