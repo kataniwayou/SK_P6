@@ -712,7 +712,7 @@ Plans:
 
 Plans:
 - [x] 72-01-PLAN.md - Processor always-write: OutputTail writes the out: blob for all 3 terminal outcomes + real EntryId on Failed/Cancelled; ProcessorPipeline catch+input-fail paths route through OutputTail carrying validatedData (SPEC-1,2,3,6) [wave 1] ✅ 2026-06-17 (c7fdbc0, e2076f2) — gate widened to `result != Processing`, Failed/Cancelled stamp `EntryId = dr.MessageId`, DataResult gains ErrorMessage/CancellationMessage, dead builders removed; 27/27 hermetic GREEN, 0-warning Debug+Release
-- [ ] 72-02-PLAN.md - Orchestrator foundation: Wave-0 MeterListener capture seam + SelectNext->{Matches,UnresolvedIds} reshape + orchestrator_step_unresolved counter definition (SPEC-4,5,6) [wave 1]
+- [x] 72-02-PLAN.md - Orchestrator foundation: Wave-0 MeterListener capture seam + SelectNext->{Matches,UnresolvedIds} reshape + orchestrator_step_unresolved counter definition (SPEC-4,5,6) [wave 1] ✅ 2026-06-17 (c362835, 5555427, 7d3e390) — zero-dep MeterCollector seam, SelectNext returns pure SelectNextResult (dangling ids surface in UnresolvedIds), StepUnresolved counter via existing IMeterFactory; all SelectNext call sites migrated to .Matches; 17/17 hermetic GREEN, 0-warning Debug+Release
 - [ ] 72-03-PLAN.md - Uniform branch-free OrchestratorPrePipeline + clean-absent skip + stage-1/stage-3 metric increments (SPEC-4,5,6) [wave 2, depends 72-02]
 
 ---

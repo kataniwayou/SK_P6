@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: 2
+current_plan: 3
 status: executing
-stopped_at: Phase 72 context gathered
-last_updated: "2026-06-17T11:12:03.874Z"
-last_activity: 2026-06-17 -- Phase 72 Plan 01 complete (processor always-write + EntryId; 27/27 hermetic GREEN, 0-warning Debug+Release)
+stopped_at: Completed 72-02-PLAN.md
+last_updated: "2026-06-17T11:19:28.152Z"
+last_activity: 2026-06-17 -- Phase 72 Plan 02 complete (orchestrator foundation: SelectNext->{Matches,UnresolvedIds} + orchestrator_step_unresolved counter + MeterListener seam; 17/17 hermetic GREEN, 0-warning Debug+Release)
 progress:
   total_phases: 4
   completed_phases: 0
@@ -21,7 +21,7 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase --phase — 72
+**Current focus:** Phase 72 — processor-always-write-to-l2-and-uniform-orchestrator-pre-pi
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
@@ -30,11 +30,13 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
 Phase: 72 (processor-always-write-to-l2-and-uniform-orchestrator-pre-pi) — EXECUTING
-Current Plan: 2
+Current Plan: 3
 Total Plans: 3
-Plan: 2 of 3
-Status: Executing Phase 72 (72-01 COMPLETE; 72-02 next)
-Last activity: 2026-06-17 -- Phase 72 Plan 01 complete (processor always-write + EntryId; 27/27 hermetic GREEN, 0-warning Debug+Release)
+Plan: 3 of 3
+Status: Executing Phase 72 (72-01 + 72-02 COMPLETE; 72-03 next)
+Last activity: 2026-06-17 -- Phase 72 Plan 02 complete (orchestrator foundation; 17/17 hermetic GREEN, 0-warning Debug+Release)
+
+> Phase 72 Plan 02 — ✅ COMPLETE 2026-06-17 (Wave 1: orchestrator-side foundation for Plan 03). **3 atomic commits** (`c362835` test: zero-dep BCL `MeterListener` `MeterCollector` seam capturing a named counter's Total/Count/Tags — no `Microsoft.Extensions.Diagnostics.Testing` package, A1 Option B; `5555427` feat: `SelectNext` reshaped to a pure `readonly record struct SelectNextResult(Matches, UnresolvedIds)` — dangling next-step ids now surface in `UnresolvedIds` (D-01, was silently dropped), condition-mismatch/`Never(5)` collected nowhere (D-03), terminal guard preserved, helper stays pure D-02; all `SelectNext` call sites migrated to `.Matches`; `7d3e390` feat: `orchestrator_step_unresolved` `Counter<long>` added to `OrchestratorMetrics` via existing `IMeterFactory.Create("Orchestrator")` — snake_case, no `_total`, no static Meter, meter name unchanged). SPEC-4/5/6. **1 deviation (Rule 3 - blocking):** migrated additional `SelectNext` call sites beyond the plan's listed 6 (`OrchestratorPrePipeline.cs:68` + ~16 `MultiStepHydrationCascadeTests` sites) to `.Matches` — the return-type change broke every caller; required to hold the 0-warning gate (pure mechanical `.Matches` substitution, no behavior change). Hermetic: StepAdvancementTests 15/15 + OrchestratorMetricsFacts 2/2 = **17/17 GREEN**; **0-warning Debug + Release**. Summary: `.planning/phases/72-processor-always-write-to-l2-and-uniform-orchestrator-pre-pi/72-02-SUMMARY.md` (Self-Check PASSED). Plan 03 next.
 
 > Phase 72 Plan 01 — ✅ COMPLETE 2026-06-17 (Wave 1: processor always-write to L2 + real EntryId on terminal Step\*). **2 atomic feat commits** (`c7fdbc0` OutputTail always-write gate `result != Processing` + Failed/Cancelled `EntryId = dr.MessageId` in BuildStep + DataResult gains ErrorMessage/CancellationMessage; `e2076f2` ProcessorPipeline input-fail + both catch blocks route through `outputTail.RunAsync` carrying `Data=validatedData`, dead BuildFailed/BuildCancelled/BuildProcessing + orphaned SendResult/ResultOutcome deleted). REQ-1/2/3/6 (SPEC-1/2/3/6). **2 deviations, both Rule 3 (blocking):** (1) added `ErrorMessage`/`CancellationMessage` to `DataResult` so the rerouted catch diagnostics survive `BuildStep` (the field didn't exist — D-07 couldn't work otherwise); (2) deleted the now-orphaned `SendResult`/`ResultOutcome` beyond the plan's A2 builder cleanup to hold the 0-warning gate. Hermetic: OutputTailFacts 5/5 + PrePipelineFacts 22/22 = **27/27 GREEN**; **0-warning Debug + Release**. WR-03 sanitized constant preserved (unexpected-catch wire stays `"input deserialization failed"`, never `ex.Message`). Summary: `.planning/phases/72-processor-always-write-to-l2-and-uniform-orchestrator-pre-pi/72-01-SUMMARY.md` (Self-Check PASSED). Plan 02 next.
 
@@ -1028,6 +1030,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 71 P02 | 18min | 3 tasks | 17 files |
 | Phase 71 P03 | 6min | 3 tasks | 9 files |
 | Phase 72 P01 | 25 | 2 tasks | 5 files |
+| Phase 72 P02 | 13min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1492,6 +1495,7 @@ Recent decisions affecting current work:
 - Phase 71-02: no-silent-loss via two distinct trip-end LOG lines (completed-terminal / completed-unresolved) + behavior; the orchestrator_trip_ended metric counter is DEFERRED
 - 71-03: orchestrator keeper recovery trio reuses the shared KeeperMetrics.ReinjectDropped counter (no new instrument) per plan preference
 - 71-03: INJECT relocate body re-implemented INLINE in Keeper (cross-assembly firewall held — no Keeper->Orchestrator ProjectReference; shared policy in L2ProjectionKeys only)
+- Phase 72 Plan 02: SelectNext returns pure SelectNextResult{Matches,UnresolvedIds} — dangling next-step ids surface in UnresolvedIds (D-01), condition-mismatch/Never collected nowhere (D-03); helper stays pure (D-02). orchestrator_step_unresolved counter via existing IMeterFactory (no static Meter). Zero-dep BCL MeterListener seam (A1 Option B, no new NuGet).
 
 ### Roadmap Milestone Log
 
@@ -1598,9 +1602,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: --stopped-at
-Stopped at: Phase 72 context gathered
-Resume file: --resume-file
+Last session: 2026-06-17T11:19:27.645Z
+Stopped at: Completed 72-02-PLAN.md
+Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
 **Phase 29 (Structured Execution-Scope Logging):** 5/5 plans complete — close gate GATE_EXIT=0 (405 Passed ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held; live scopeProof passes on a `processor-sample` Completed log); LOG-01..06 all complete. Awaiting orchestrator phase verification + `phase.complete`. Milestone v3.5.0 = 17/17 plans across phases 25-29.
