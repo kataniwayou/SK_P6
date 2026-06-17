@@ -80,7 +80,14 @@ public sealed class ProcessorPipeline(
 
         if (!ProcessorJsonSchemaValidator.TryValidate(context.InputDefinition, validatedData, out var inErrs))
         {
-            await SendResult(BuildFailed(d, string.Join("; ", inErrs)), limit, ct);
+            // D-07: route the input-schema failure THROUGH the OutputTail (write L2[out:messageId]=validatedData
+            // + send StepFailed with a real EntryId) instead of a bypass SendResult. C-2/D-08: no entry delete.
+            var failDr = new DataResult(d.WorkflowId, d.StepId, d.ProcessorId)
+            {
+                CorrelationId = d.CorrelationId, ExecutionId = d.ExecutionId, MessageId = messageId,
+                Result = StepOutcome.Failed, Data = validatedData, ErrorMessage = string.Join("; ", inErrs),
+            };
+            await outputTail.RunAsync(failDr, d.EntryId, ct);
             return;   // C-2: NO DeleteTerminalAsync / KeyDeleteAsync here (req 2 — left to TTL)
         }
 
@@ -95,15 +102,25 @@ public sealed class ProcessorPipeline(
             try { dr = await processor.ExecuteAsync(validatedData, d.Payload, d.ExecutionId, ct); }
             catch (ProcessStatusException e)
             {
-                IStepResult res = e switch
+                // D-07: a seam-thrown status routes THROUGH the OutputTail carrying Data=validatedData (so the
+                // terminal write + real EntryId happen uniformly). The Processing case rides the tail's
+                // result!=Processing gate → NO blob, EntryId=Guid.Empty (D-04).
+                var statusDr = new DataResult(d.WorkflowId, d.StepId, d.ProcessorId)
                 {
-                    FailedException     => BuildFailed(d, e.Message),
-                    CancelledException  => BuildCancelled(d, e.Message),
-                    ProcessingException => BuildProcessing(d),
-                    _                   => BuildFailed(d, e.Message),
+                    CorrelationId = d.CorrelationId, ExecutionId = d.ExecutionId, MessageId = messageId,
+                    Data = validatedData,
+                    Result = e switch
+                    {
+                        FailedException     => StepOutcome.Failed,
+                        CancelledException  => StepOutcome.Cancelled,
+                        ProcessingException => StepOutcome.Processing,
+                        _                   => StepOutcome.Failed,
+                    },
+                    ErrorMessage        = e is CancelledException ? "" : e.Message,
+                    CancellationMessage = e is CancelledException ? e.Message : "",
                 };
                 if (e is ProcessingException) logger.LogInformation("ProcessAsync threw processing status: {Msg}", e.Message);
-                await SendResult(res, limit, ct);
+                await outputTail.RunAsync(statusDr, d.EntryId, ct);
                 return;   // C-2 parity: a seam-thrown failure does NOT delete the entry on this phase's model
             }
             catch (Exception ex)   // unexpected (incl. the deserialize JsonException, req 2) ⇒ failed, NO delete
@@ -111,8 +128,14 @@ public sealed class ProcessorPipeline(
                 // WR-03: never put ex.Message on the StepFailed wire — a deserialize JsonException can carry a
                 // fragment of the offending payload/config (path, line, token), which defeats the never-log-
                 // payload discipline (T-70-10). Emit a sanitized constant; the detail stays in the local log.
+                // D-07: route through the OutputTail so the blob (Data=validatedData) + real EntryId are written.
                 logger.LogWarning(ex, "ProcessAsync/deserialize faulted; emitting StepFailed (entry left to TTL)");
-                await SendResult(BuildFailed(d, "input deserialization failed"), limit, ct);
+                var unexpectedDr = new DataResult(d.WorkflowId, d.StepId, d.ProcessorId)
+                {
+                    CorrelationId = d.CorrelationId, ExecutionId = d.ExecutionId, MessageId = messageId,
+                    Result = StepOutcome.Failed, Data = validatedData, ErrorMessage = "input deserialization failed",
+                };
+                await outputTail.RunAsync(unexpectedDr, d.EntryId, ct);
                 return;
             }
 
@@ -160,29 +183,8 @@ public sealed class ProcessorPipeline(
     }
 
     // ---- Send owners: every send wrapped in RetryLoop; send-exhaustion PROPAGATES (throw → broker redelivery, no _error). ----
-
-    private async Task SendResult(IStepResult result, int limit, CancellationToken ct)
-    {
-        var ep = await sendProvider.GetSendEndpoint(new Uri($"queue:{OrchestratorQueues.Result}"));
-        var sent = await RetryLoop.ExecuteAsync(
-            async () => { await ep.Send((object)result, CancellationToken.None); return true; }, limit, ct);
-        if (!sent.Succeeded) throw sent.Error!;   // propagate → throw → broker redelivery (no _error, Phase-53 D-01)
-
-        metrics.ResultSent.Add(1,
-            new KeyValuePair<string, object?>("ProcessorId", context.Id!.Value.ToString("D")),
-            new KeyValuePair<string, object?>("outcome", ResultOutcome(result)));
-    }
-
-    /// <summary>Maps the concrete <see cref="IStepResult"/> record to a stable lowercase outcome tag value
-    /// (completed/failed/cancelled/processing) for the <c>processor_result_sent_total</c> outcome label.</summary>
-    private static string ResultOutcome(IStepResult result) => result switch
-    {
-        StepCompleted  => "completed",
-        StepFailed     => "failed",
-        StepCancelled  => "cancelled",
-        StepProcessing => "processing",
-        _              => "failed",
-    };
+    // Phase 72 (D-07): the Step* result send now lives ENTIRELY in OutputTail (every terminal/Processing result
+    // routes through outputTail.RunAsync). The pipeline keeps only the keeper send below for REINJECT/DELETE.
 
     private async Task SendKeeper(IKeeperRecoverable msg, int limit, CancellationToken ct)
     {
@@ -194,15 +196,8 @@ public sealed class ProcessorPipeline(
 
     // ---- Builders (inherit-ids positional ctor + init; A1 id-sets). ----
     // REINJECT/DELETE carry the INBOUND dispatch ExecutionId (d.ExecutionId — may legitimately be Guid.Empty).
-
-    private static StepFailed     BuildFailed(EntryStepDispatch d, string err) =>
-        new(d.WorkflowId, d.StepId, d.ProcessorId) { CorrelationId = d.CorrelationId, ExecutionId = NewId.NextGuid(), EntryId = Guid.Empty, ErrorMessage = err };
-
-    private static StepCancelled  BuildCancelled(EntryStepDispatch d, string msg) =>
-        new(d.WorkflowId, d.StepId, d.ProcessorId) { CorrelationId = d.CorrelationId, ExecutionId = NewId.NextGuid(), EntryId = Guid.Empty, CancellationMessage = msg };
-
-    private static StepProcessing BuildProcessing(EntryStepDispatch d) =>
-        new(d.WorkflowId, d.StepId, d.ProcessorId) { CorrelationId = d.CorrelationId, ExecutionId = NewId.NextGuid() };
+    // Phase 72 (D-07/A2): BuildFailed/BuildCancelled/BuildProcessing are removed — their former callers now
+    // build a DataResult{Data=validatedData} and route it through OutputTail (which owns the Step* construction).
 
     // req 6: REINJECT carries the carried messageId (the new KeeperReinject.MessageId field) so the keeper
     // re-injects with the SAME envelope messageId. Plus EntryId/Payload + the inbound ids.

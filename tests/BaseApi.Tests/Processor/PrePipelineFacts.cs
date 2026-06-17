@@ -92,10 +92,11 @@ public sealed class PrePipelineFacts
     }
 
     [Fact]
-    public async Task InputInvalid_OneStepFailed_AndNoEntryDelete()   // C-2 / req 2
+    public async Task InputInvalid_OneStepFailed_WritesOutputData_AndNoEntryDelete()   // C-2 / req 2 / Phase 72 REQ-3
     {
         var ct = TestContext.Current.CancellationToken;
         var entryId = Guid.NewGuid();
+        var messageId = Guid.NewGuid();
         var redis = DispatchTestKit.ReadWriteDeleteOkL2(
             new Dictionary<string, string> { [L2ProjectionKeys.ExecutionData(entryId)] = "{}" }, out var db);
         var processor = new DispatchTestKit.FakeProcessor(DispatchTestKit.Result(StepOutcome.Completed, "out"));
@@ -104,11 +105,16 @@ public sealed class PrePipelineFacts
         var send = new DispatchTestKit.CapturingSendProvider();
         var d = DispatchTestKit.Dispatch(entryId, correlationId: Guid.NewGuid());
 
-        await Build(redis, context, processor, send).RunAsync(d, Guid.NewGuid(), ct);
+        await Build(redis, context, processor, send).RunAsync(d, messageId, ct);
 
-        Assert.IsType<StepFailed>(Assert.Single(send.Sent));         // exactly one StepFailed
-        Assert.False(processor.Invoked);                             // failed before the seam ran
-        // C-2: NO entry delete on the input-invalid path — assert generically AND on the exact key.
+        var failed = Assert.IsType<StepFailed>(Assert.Single(send.Sent));   // exactly one StepFailed
+        Assert.Equal(messageId, failed.EntryId);                           // REQ-2: real EntryId now routed through OutputTail
+        Assert.False(processor.Invoked);                                   // failed before the seam ran
+        // Phase 72 / REQ-3: the input-fail path now writes the out: blob carrying validatedData ("{}").
+        var set = Assert.Single(DispatchTestKit.ReceivedStringSets(db));
+        Assert.Equal((RedisKey)L2ProjectionKeys.OutputData(messageId), set.Key);
+        Assert.Equal((RedisValue)"{}", set.Value);
+        // C-2/D-08: NO entry delete on the input-invalid path — assert generically AND on the exact key.
         await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
         await db.DidNotReceive().KeyDeleteAsync(
             (RedisKey)L2ProjectionKeys.ExecutionData(d.EntryId), Arg.Any<CommandFlags>());
@@ -201,56 +207,71 @@ public sealed class PrePipelineFacts
     // ---- seam-throw parity (C-2): a ProcessStatusException throw → one Step*, NO entry delete ----
 
     [Fact]
-    public async Task SeamThrows_StatusException_OneStepFailed_NoEntryDelete()
+    public async Task SeamThrows_StatusException_OneStepFailed_WritesOutputData_NoEntryDelete()
     {
         var ct = TestContext.Current.CancellationToken;
         var entryId = Guid.NewGuid();
+        var messageId = Guid.NewGuid();
         var redis = DispatchTestKit.ReadWriteDeleteOkL2(
             new Dictionary<string, string> { [L2ProjectionKeys.ExecutionData(entryId)] = "{}" }, out var db);
         var processor = new DispatchTestKit.FakeProcessor(new FailedException("x"));
         var send = new DispatchTestKit.CapturingSendProvider();
 
         await Build(redis, Ctx(), processor, send).RunAsync(
-            DispatchTestKit.Dispatch(entryId, correlationId: Guid.NewGuid()), Guid.NewGuid(), ct);
+            DispatchTestKit.Dispatch(entryId, correlationId: Guid.NewGuid()), messageId, ct);
 
         var failed = Assert.IsType<StepFailed>(Assert.Single(send.Sent));
-        Assert.Equal("x", failed.ErrorMessage);
+        Assert.Equal("x", failed.ErrorMessage);                        // e.Message survives the OutputTail routing
+        Assert.Equal(messageId, failed.EntryId);                       // REQ-2/REQ-3: real EntryId (= out: blob key)
         Assert.Empty(send.SentKeeper);
+        // Phase 72 / REQ-3: a seam-thrown Failed now writes L2[out:messageId] carrying validatedData ("{}").
+        var set = Assert.Single(DispatchTestKit.ReceivedStringSets(db));
+        Assert.Equal((RedisKey)L2ProjectionKeys.OutputData(messageId), set.Key);
+        Assert.Equal((RedisValue)"{}", set.Value);
         await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());   // C-2 parity
     }
 
     [Fact]
-    public async Task SeamThrows_Cancelled()
+    public async Task SeamThrows_Cancelled_WritesOutputData_StampsEntryId()
     {
         var ct = TestContext.Current.CancellationToken;
         var entryId = Guid.NewGuid();
+        var messageId = Guid.NewGuid();
         var redis = DispatchTestKit.ReadWriteDeleteOkL2(
-            new Dictionary<string, string> { [L2ProjectionKeys.ExecutionData(entryId)] = "{}" }, out _);
+            new Dictionary<string, string> { [L2ProjectionKeys.ExecutionData(entryId)] = "{}" }, out var db);
         var processor = new DispatchTestKit.FakeProcessor(new CancelledException("c"));
         var send = new DispatchTestKit.CapturingSendProvider();
 
         await Build(redis, Ctx(), processor, send).RunAsync(
-            DispatchTestKit.Dispatch(entryId, correlationId: Guid.NewGuid()), Guid.NewGuid(), ct);
+            DispatchTestKit.Dispatch(entryId, correlationId: Guid.NewGuid()), messageId, ct);
 
         var cancelled = Assert.IsType<StepCancelled>(Assert.Single(send.Sent));
-        Assert.Equal("c", cancelled.CancellationMessage);
+        Assert.Equal("c", cancelled.CancellationMessage);              // e.Message survives the routing
+        Assert.Equal(messageId, cancelled.EntryId);                    // REQ-2/REQ-3: real EntryId
         Assert.Empty(send.SentKeeper);
+        // Phase 72 / REQ-3: a seam-thrown Cancelled now writes L2[out:messageId] carrying validatedData ("{}").
+        var set = Assert.Single(DispatchTestKit.ReceivedStringSets(db));
+        Assert.Equal((RedisKey)L2ProjectionKeys.OutputData(messageId), set.Key);
+        Assert.Equal((RedisValue)"{}", set.Value);
     }
 
     [Fact]
-    public async Task SeamThrows_Processing()
+    public async Task SeamThrows_Processing_NoWrite_EmptyEntryId()   // D-04: Processing keeps Guid.Empty + no blob
     {
         var ct = TestContext.Current.CancellationToken;
         var entryId = Guid.NewGuid();
         var redis = DispatchTestKit.ReadWriteDeleteOkL2(
-            new Dictionary<string, string> { [L2ProjectionKeys.ExecutionData(entryId)] = "{}" }, out _);
+            new Dictionary<string, string> { [L2ProjectionKeys.ExecutionData(entryId)] = "{}" }, out var db);
         var processor = new DispatchTestKit.FakeProcessor(new ProcessingException("p"));
         var send = new DispatchTestKit.CapturingSendProvider();
 
         await Build(redis, Ctx(), processor, send).RunAsync(
             DispatchTestKit.Dispatch(entryId, correlationId: Guid.NewGuid()), Guid.NewGuid(), ct);
 
-        Assert.IsType<StepProcessing>(Assert.Single(send.Sent));
+        var processing = Assert.IsType<StepProcessing>(Assert.Single(send.Sent));
+        Assert.Equal(Guid.Empty, processing.EntryId);                 // D-04: Processing keeps Guid.Empty
+        // D-04: the transient Processing status rides the OutputTail result!=Processing gate → NO out: blob.
+        Assert.Empty(DispatchTestKit.ReceivedStringSets(db));
         Assert.Empty(send.SentKeeper);
     }
 
@@ -260,18 +281,24 @@ public sealed class PrePipelineFacts
         var ct = TestContext.Current.CancellationToken;
         var entryId = Guid.NewGuid();
         var redis = DispatchTestKit.ReadWriteDeleteOkL2(
-            new Dictionary<string, string> { [L2ProjectionKeys.ExecutionData(entryId)] = "{}" }, out _);
+            new Dictionary<string, string> { [L2ProjectionKeys.ExecutionData(entryId)] = "{}" }, out var db);
+        var messageId = Guid.NewGuid();
         var processor = new DispatchTestKit.FakeProcessor(new InvalidOperationException("boom"));
         var send = new DispatchTestKit.CapturingSendProvider();
 
         await Build(redis, Ctx(), processor, send).RunAsync(
-            DispatchTestKit.Dispatch(entryId, correlationId: Guid.NewGuid()), Guid.NewGuid(), ct);
+            DispatchTestKit.Dispatch(entryId, correlationId: Guid.NewGuid()), messageId, ct);
 
         var failed = Assert.IsType<StepFailed>(Assert.Single(send.Sent));
         // WR-03: the unexpected/deserialize branch emits a SANITIZED constant on the wire — never ex.Message
         // (which for a JsonException can carry payload bytes). The raw "boom" must NOT leak to the result.
         Assert.Equal("input deserialization failed", failed.ErrorMessage);
         Assert.DoesNotContain("boom", failed.ErrorMessage);
+        Assert.Equal(messageId, failed.EntryId);                       // REQ-2/REQ-3: real EntryId now routed through OutputTail
+        // Phase 72 / REQ-3: the unexpected catch now writes L2[out:messageId] carrying validatedData ("{}").
+        var set = Assert.Single(DispatchTestKit.ReceivedStringSets(db));
+        Assert.Equal((RedisKey)L2ProjectionKeys.OutputData(messageId), set.Key);
+        Assert.Equal((RedisValue)"{}", set.Value);
         Assert.Empty(send.SentKeeper);
     }
 
@@ -288,20 +315,27 @@ public sealed class PrePipelineFacts
     }
 
     [Fact]
-    public async Task MalformedPayload_DeserFailure_OneStepFailed_NoEntryDelete()
+    public async Task MalformedPayload_DeserFailure_OneStepFailed_WritesOutputData_NoEntryDelete()
     {
         var ct = TestContext.Current.CancellationToken;
         var entryId = Guid.NewGuid();
+        var messageId = Guid.NewGuid();
         var redis = DispatchTestKit.ReadWriteDeleteOkL2(
             new Dictionary<string, string> { [L2ProjectionKeys.ExecutionData(entryId)] = "{}" }, out var db);
         var send = new DispatchTestKit.CapturingSendProvider();
 
         // "not json" → JsonException inside BaseProcessor<DeserConfig>.ExecuteAsync → pipeline catch-all → one StepFailed.
         await Build(redis, Ctx(), new RealDeserProcessor(), send).RunAsync(
-            DispatchTestKit.Dispatch(entryId, Guid.NewGuid(), "not json"), Guid.NewGuid(), ct);
+            DispatchTestKit.Dispatch(entryId, Guid.NewGuid(), "not json"), messageId, ct);
 
-        Assert.IsType<StepFailed>(Assert.Single(send.Sent));
+        var failed = Assert.IsType<StepFailed>(Assert.Single(send.Sent));
+        Assert.Equal("input deserialization failed", failed.ErrorMessage);   // WR-03: sanitized constant on the wire
+        Assert.Equal(messageId, failed.EntryId);                             // REQ-2/REQ-3: real EntryId
+        // Phase 72 / REQ-3: the deser-catch now writes L2[out:messageId] carrying validatedData ("{}").
+        var set = Assert.Single(DispatchTestKit.ReceivedStringSets(db));
+        Assert.Equal((RedisKey)L2ProjectionKeys.OutputData(messageId), set.Key);
+        Assert.Equal((RedisValue)"{}", set.Value);
         Assert.Empty(send.SentKeeper);
-        await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());   // C-2 parity
+        await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());   // C-2/D-08 parity
     }
 }
