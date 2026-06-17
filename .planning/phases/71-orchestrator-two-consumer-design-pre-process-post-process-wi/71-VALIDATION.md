@@ -1,10 +1,11 @@
 ---
 phase: 71
 slug: orchestrator-two-consumer-design-pre-process-post-process-wi
-status: draft
+status: validated
 nyquist_compliant: true
-wave_0_complete: false
+wave_0_complete: true
 created: 2026-06-17
+audited: 2026-06-17
 ---
 
 # Phase 71 — Validation Strategy
@@ -38,15 +39,15 @@ created: 2026-06-17
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| 71-01-01 | 01 | 1 | REQ-71-07/10 (contracts) | T-71-02 | No log emits Data/Payload (contracts have no logging) | unit | `dotnet test … --filter "FullyQualifiedName~OrchestratorContractTests"` | ❌ W0 (new) | ⬜ pending |
-| 71-01-02 | 01 | 1 | REQ-71-07 (A1 both sites) | T-71-01 | A1 stamp uses processor's own envelope id, not external input | unit | `dotnet test … --filter "FullyQualifiedName~OutputTail\|FullyQualifiedName~InjectConsumer"` | ⚠️ UPDATE (InjectConsumerFacts:75, OutputTailFacts) | ⬜ pending |
-| 71-01-03 | 01 | 1 | REQ-71-07/08/09/10 (contract facts) | T-71-03 | NextStepHandoff has no MessageId body field (D-11) | unit | `dotnet test … --filter "FullyQualifiedName~OrchestratorContractTests"` | ❌ W0 (new) | ⬜ pending |
-| 71-02-01 | 02 | 2 | REQ-71-06/11 (RelocateTail + Post) | T-71-04 | No log emits Data/Payload; data: write TTL'd | unit | `dotnet test … --filter "FullyQualifiedName~OrchestratorPostProcess"` | ❌ W0 (new) | ⬜ pending |
-| 71-02-02 | 02 | 2 | REQ-71-01/02/03/04/05/11 (Pre pipeline; trip-end LOG lines — metric DEFERRED) | T-71-04 / T-71-05 | Two distinct trip-end log lines (no silent loss); ids-only logs; no envelope override on fan-out | build | `dotnet build src/Orchestrator/Orchestrator.csproj` (behavioral facts land in 71-02-03) | N/A (build target; metric counter deferred) | ⬜ pending |
-| 71-02-03 | 02 | 2 | REQ-71-01/02/03/04/05/11/12 (wiring + migration + Pre facts) | T-71-05 / T-71-07 | executionId equality (not regeneration); duplicate-tolerance preserved | unit | `dotnet test … --filter "FullyQualifiedName~Orchestrator"` | ⚠️ MIGRATE TypedResultConsumerFacts/ResultAckTests + ❌ W0 OrchestratorPrePipelineFacts | ⬜ pending |
-| 71-03-01 | 03 | 2 | REQ-71-08/10 (REINJECT + DELETE) | T-71-09 / T-71-10 | STRLEN drop (not KeyExists); ids-only drop log; envelope override | unit | `dotnet test … --filter "FullyQualifiedName~OrchestratorReinject\|FullyQualifiedName~OrchestratorDelete"` | ❌ W0 (new) | ⬜ pending |
-| 71-03-02 | 03 | 2 | REQ-71-09/11 (INJECT inline body) | T-71-11 / T-71-12 | No L1 recompute; inline body (firewall); executionId unchanged | unit | `dotnet test … --filter "FullyQualifiedName~OrchestratorInject"` | ❌ W0 (new) | ⬜ pending |
-| 71-03-03 | 03 | 2 | REQ-71-11 (binder/program/partition/firewall) | T-71-12 | No Keeper→Orchestrator ProjectReference; no bus retry / no _error | unit | `dotnet test … --filter "FullyQualifiedName~Keeper"` | ⚠️ EXTEND RecoveryPartitionFacts (firewall/host-boot reused) | ⬜ pending |
+| 71-01-01 | 01 | 1 | REQ-71-07/10 (contracts) | T-71-02 | No log emits Data/Payload (contracts have no logging) | unit | `dotnet test … --filter "FullyQualifiedName~OrchestratorContractTests"` | ❌ W0 (new) | ✅ green |
+| 71-01-02 | 01 | 1 | REQ-71-07 (A1 both sites) | T-71-01 | A1 stamp uses processor's own envelope id, not external input | unit | `dotnet test … --filter "FullyQualifiedName~OutputTail\|FullyQualifiedName~InjectConsumer"` | ⚠️ UPDATE (InjectConsumerFacts:75, OutputTailFacts) | ✅ green |
+| 71-01-03 | 01 | 1 | REQ-71-07/08/09/10 (contract facts) | T-71-03 | NextStepHandoff has no MessageId body field (D-11) | unit | `dotnet test … --filter "FullyQualifiedName~OrchestratorContractTests"` | ❌ W0 (new) | ✅ green |
+| 71-02-01 | 02 | 2 | REQ-71-06/11 (RelocateTail + Post) | T-71-04 | No log emits Data/Payload; data: write TTL'd | unit | `dotnet test … --filter "FullyQualifiedName~OrchestratorPostProcess"` | ❌ W0 (new) | ✅ green |
+| 71-02-02 | 02 | 2 | REQ-71-01/02/03/04/05/11 (Pre pipeline; trip-end LOG lines — metric DEFERRED) | T-71-04 / T-71-05 | Two distinct trip-end log lines (no silent loss); ids-only logs; no envelope override on fan-out | build | `dotnet build src/Orchestrator/Orchestrator.csproj` (behavioral facts land in 71-02-03) | N/A (build target; metric counter deferred) | ✅ green |
+| 71-02-03 | 02 | 2 | REQ-71-01/02/03/04/05/11/12 (wiring + migration + Pre facts) | T-71-05 / T-71-07 | executionId equality (not regeneration); duplicate-tolerance preserved | unit | `dotnet test … --filter "FullyQualifiedName~Orchestrator"` | ⚠️ MIGRATE TypedResultConsumerFacts/ResultAckTests + ❌ W0 OrchestratorPrePipelineFacts | ✅ green |
+| 71-03-01 | 03 | 2 | REQ-71-08/10 (REINJECT + DELETE) | T-71-09 / T-71-10 | STRLEN drop (not KeyExists); ids-only drop log; envelope override | unit | `dotnet test … --filter "FullyQualifiedName~OrchestratorReinject\|FullyQualifiedName~OrchestratorDelete"` | ❌ W0 (new) | ✅ green |
+| 71-03-02 | 03 | 2 | REQ-71-09/11 (INJECT inline body) | T-71-11 / T-71-12 | No L1 recompute; inline body (firewall); executionId unchanged | unit | `dotnet test … --filter "FullyQualifiedName~OrchestratorInject"` | ❌ W0 (new) | ✅ green |
+| 71-03-03 | 03 | 2 | REQ-71-11 (binder/program/partition/firewall) | T-71-12 | No Keeper→Orchestrator ProjectReference; no bus retry / no _error | unit | `dotnet test … --filter "FullyQualifiedName~Keeper"` | ⚠️ EXTEND RecoveryPartitionFacts (firewall/host-boot reused) | ✅ green |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -57,9 +58,9 @@ created: 2026-06-17
 The phase keeps suites green wave-to-wave by migrating each test in the SAME plan that changes the behavior it
 asserts (rather than a separate up-front Wave-0 plan). New/updated test files per plan:
 
-- [ ] Plan 01: NEW `tests/BaseApi.Tests/Contracts/OrchestratorContractTests.cs`; UPDATE `Keeper/InjectConsumerFacts.cs:75` (Guid.Empty → dr.MessageId) + `Processor/OutputTailFacts.cs` (Completed-EntryId assertion).
-- [ ] Plan 02: NEW `Orchestrator/OrchestratorPrePipelineFacts.cs`, `Orchestrator/OrchestratorPostProcessConsumerFacts.cs`; MIGRATE `Orchestrator/TypedResultConsumerFacts.cs` + `Orchestrator/ResultAckTests.cs` (two-consumer + relocation model; ExecutionId equality, NOT regeneration — flip `Assert.NotEqual(Guid.Empty, call.ExecutionId)` at line 114; trip-end asserted via captured logger lines `completed-terminal`/`completed-unresolved`, NOT a metric counter — counter DEFERRED).
-- [ ] Plan 03: NEW `Keeper/OrchestratorReinjectConsumerFacts.cs`, `Keeper/OrchestratorInjectConsumerFacts.cs`, `Keeper/OrchestratorDeleteConsumerFacts.cs`; EXTEND `Keeper/RecoveryPartitionFacts.cs` (3 new contracts share one partition slot); REUSE `Keeper/KeeperDependencyFirewallTests.cs` + `Keeper/KeeperHostBootTests.cs` (no change, must stay green).
+- [x] Plan 01: NEW `tests/BaseApi.Tests/Contracts/OrchestratorContractTests.cs`; UPDATE `Keeper/InjectConsumerFacts.cs:75` (Guid.Empty → dr.MessageId) + `Processor/OutputTailFacts.cs` (Completed-EntryId assertion).
+- [x] Plan 02: NEW `Orchestrator/OrchestratorPrePipelineFacts.cs`, `Orchestrator/OrchestratorPostProcessConsumerFacts.cs`; MIGRATE `Orchestrator/TypedResultConsumerFacts.cs` + `Orchestrator/ResultAckTests.cs` (two-consumer + relocation model; ExecutionId equality, NOT regeneration — flip `Assert.NotEqual(Guid.Empty, call.ExecutionId)` at line 114; trip-end asserted via captured logger lines `completed-terminal`/`completed-unresolved`, NOT a metric counter — counter DEFERRED).
+- [x] Plan 03: NEW `Keeper/OrchestratorReinjectConsumerFacts.cs`, `Keeper/OrchestratorInjectConsumerFacts.cs`, `Keeper/OrchestratorDeleteConsumerFacts.cs`; EXTEND `Keeper/RecoveryPartitionFacts.cs` (3 new contracts share one partition slot); REUSE `Keeper/KeeperDependencyFirewallTests.cs` + `Keeper/KeeperHostBootTests.cs` (no change, must stay green).
 - [ ] Test doubles: REUSE `Orchestrator/OrchestratorTestStubs.cs` (PresentL2/AbsentL2/InfraFaultL2/Context/Metrics) for Pre/Post; REUSE `Keeper/RecoveryTestKit.cs` (Db/Mux/CapturingSendProvider+SentMessageIds/Metrics) for the keeper facts.
 
 ---
@@ -84,3 +85,30 @@ asserts (rather than a separate up-front Wave-0 plan). New/updated test files pe
 - [x] `nyquist_compliant: true` set in frontmatter
 
 **Approval:** approved 2026-06-17
+
+---
+
+## Validation Audit 2026-06-17 (post-execution)
+
+| Metric | Count |
+|--------|-------|
+| Requirements / tasks audited | 9 |
+| COVERED (test exists, green) | 9 |
+| PARTIAL | 0 |
+| MISSING | 0 |
+| Gaps found | 0 |
+| Resolved | 0 |
+| Escalated to manual-only | 0 |
+
+All 11 planned test files exist and pass. Ran the exact phase-71 class set via the MTP-native
+class filter: **Passed: 46, Failed: 0, Skipped: 0** (`OrchestratorContractTests`, `InjectConsumerFacts`,
+`OutputTailFacts`, `OrchestratorPrePipelineFacts`, `OrchestratorPostProcessConsumerFacts`,
+`TypedResultConsumerFacts`, `ResultAckTests`, `OrchestratorReinjectConsumerFacts`,
+`OrchestratorInjectConsumerFacts`, `OrchestratorDeleteConsumerFacts`, `RecoveryPartitionFacts`).
+Phase 71 is Nyquist-compliant — every requirement has automated verification, no manual-only items.
+
+> **Test-runner correction:** the `--filter "FullyQualifiedName~X"` commands recorded in the
+> Test Infrastructure / Per-Task Map columns above are **VSTest syntax, silently ignored** by this
+> suite's Microsoft.Testing.Platform runner (they run the whole suite). The working scoped form is:
+> `dotnet test tests/BaseApi.Tests/BaseApi.Tests.csproj -- --filter-class "Namespace.ClassName"`
+> (repeatable). Use this form for future scoped runs.
