@@ -13,16 +13,17 @@ namespace Processor.Sample;
 /// <para>
 /// Phase 70 (req 10): the two-mode worked example, keyed on the inbound <c>executionId</c>:
 /// <list type="bullet">
-///   <item><b>ENTRY/seed</b> (<c>executionId == Guid.Empty</c>, Mode-2): generates TWO numbers (each
-///   <c>baseNumber + random[0,99]</c>), logs <c>"{label} had the following numbers: …"</c>, then SPAWNS two
-///   completed <see cref="DataResult"/>s to the Post-Process queue via <c>SpawnToPost</c>
+///   <item><b>ENTRY/seed</b> (<c>executionId == Guid.Empty</c>, Mode-2): seeds the TWO FIXED values
+///   <c>100</c> and <c>200</c> (deterministic — NO random), logs <c>"{label} seeded the following numbers: …"</c>,
+///   then SPAWNS two completed <see cref="DataResult"/>s to the Post-Process queue via <c>SpawnToPost</c>
 ///   with DISTINCT freshly-minted executionIds (D-09, swallow), DELETES the inbound entry via
 ///   <c>DeleteEntry</c>, and RETURNS NULL — the framework writes/sends/deletes nothing
 ///   inline (req 3).</item>
 ///   <item><b>DOWNSTREAM</b> (<c>executionId != Guid.Empty</c>, Mode-1): accumulates ONE number
-///   (<c>incomingNumber + baseNumber</c>, deterministic — NO random), logs the same line, and RETURNS ONE
-///   completed <see cref="DataResult"/> REUSING the inbound executionId — the framework's inline tail runs
-///   (no spawn, no delete).</item>
+///   (<c>incomingNumber + baseNumber</c>, deterministic — NO random), logs the value-clarifying
+///   <c>"{label} received {Received} produced {Produced}"</c> line (the ES <c>attributes.Received</c>/
+///   <c>attributes.Produced</c> contract), and RETURNS ONE completed <see cref="DataResult"/> REUSING the
+///   inbound executionId — the framework's inline tail runs (no spawn, no delete).</item>
 /// </list>
 /// The author writes NO RetryLoop/keeper/envelope code — <c>SpawnToPost</c> /
 /// <c>DeleteEntry</c> own resilience, and <c>NewResult</c> stamps
@@ -69,8 +70,12 @@ public sealed class SampleProcessor(ILogger<SampleProcessor> logger) : BaseProce
         var incomingNumber = parsed.RootElement.GetProperty("number").GetInt32();
         var accumulated    = incomingNumber + baseNumber;
 
-        logger.LogInformation("{StepLabel} had the following numbers: {Numbers}",
-            label, accumulated.ToString());
+        // D-03/D-11: the value-clarifying line. {Received} = inbound L2 value, {Produced} = accumulated
+        // output value, both surfaced as ES attributes.Received / attributes.Produced for the live auditor's
+        // value-chain assertion. ExecutionId/CorrelationId ride the ambient ExecutionLogScope (no extra args).
+        // Synthetic deterministic proof integers — no real/sensitive payload (D-03).
+        logger.LogInformation("{StepLabel} received {Received} produced {Produced}",
+            label, incomingNumber, accumulated);
 
         var downstreamData = JsonSerializer.Serialize(
             new { number = accumulated, label }, ProcessorConfig.SerializerOptions);
