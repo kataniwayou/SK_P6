@@ -60,7 +60,8 @@ public sealed class InjectConsumer(
     }
 
     /// <summary>Phase 70 (req 11): the L2[messageId] output-blob TTL — jittered
-    /// <c>random[ExecutionDataTtl, 2×ExecutionDataTtl]</c> (identical policy to the Pre/Post inline tail).</summary>
-    private TimeSpan JitteredTtl()
-        => TimeSpan.FromSeconds(Random.Shared.Next(_executionDataTtlSeconds, 2 * _executionDataTtlSeconds + 1));
+    /// <c>random[ExecutionDataTtl, 2×ExecutionDataTtl]</c>. IN-04: the POLICY is now the shared single source
+    /// of truth <see cref="L2ProjectionKeys.OutputDataTtl"/> (same call the Pre/Post inline tail makes), so the
+    /// two writers cannot desynchronize; only the floor differs by option (RecoveryOptions here).</summary>
+    private TimeSpan JitteredTtl() => L2ProjectionKeys.OutputDataTtl(_executionDataTtlSeconds);
 }

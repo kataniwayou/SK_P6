@@ -34,12 +34,10 @@ public sealed class OutputTail(
     ProcessorMetrics metrics)
 {
     /// <summary>D-10: the jittered <c>random[ExecutionDataTtl, 2×ExecutionDataTtl]</c> TTL carried on the
-    /// L2[messageId] write (single source of truth — relocated from the retired slot model).</summary>
+    /// L2[messageId] write. IN-04: the POLICY now lives in <see cref="L2ProjectionKeys.OutputDataTtl"/> (the
+    /// single source of truth shared with the keeper INJECT path); this only supplies the floor from options.</summary>
     private TimeSpan JitteredTtl()
-    {
-        var ttl = livenessOptions.Value.ExecutionDataTtlSeconds;
-        return TimeSpan.FromSeconds(Random.Shared.Next(ttl, 2 * ttl + 1));   // random[ttl, 2×ttl]
-    }
+        => L2ProjectionKeys.OutputDataTtl(livenessOptions.Value.ExecutionDataTtlSeconds);
 
     /// <summary>Validate output → (if Completed) write L2[messageId]=data (write-exhaust → INJECT,
     /// return <c>false</c> = "stop, do not send/delete") → send Step* by result (send-exhaust throws).
@@ -107,9 +105,15 @@ public sealed class OutputTail(
 
     private async Task SendResult(IStepResult result, int limit, CancellationToken ct)
     {
-        var ep = await sendProvider.GetSendEndpoint(new Uri($"queue:{OrchestratorQueues.Result}"));
-        var sent = await RetryLoop.ExecuteAsync(
-            async () => { await ep.Send((object)result, CancellationToken.None); return true; }, limit, ct);
+        // IN-01: resolve GetSendEndpoint INSIDE the RetryLoop (mirror the keeper Guard pattern) so a transient
+        // GetSendEndpoint fault routes through the bounded retry like the send; an exhaust still throws → broker
+        // redelivery (no _error). The inner broker Send uses CancellationToken.None (do not abort a started send).
+        var sent = await RetryLoop.ExecuteAsync(async () =>
+        {
+            var ep = await sendProvider.GetSendEndpoint(new Uri($"queue:{OrchestratorQueues.Result}"));
+            await ep.Send((object)result, CancellationToken.None);
+            return true;
+        }, limit, ct);
         if (!sent.Succeeded) throw sent.Error!;   // propagate → throw → broker redelivery (no _error)
 
         metrics.ResultSent.Add(1,
@@ -128,9 +132,13 @@ public sealed class OutputTail(
 
     private async Task SendKeeper(IKeeperRecoverable msg, int limit, CancellationToken ct)
     {
-        var ep = await sendProvider.GetSendEndpoint(new Uri($"queue:{KeeperQueues.Recovery}"));
-        var sent = await RetryLoop.ExecuteAsync(
-            async () => { await ep.Send((object)msg, CancellationToken.None); return true; }, limit, ct);
+        // IN-01: resolve GetSendEndpoint inside the RetryLoop (keeper Guard parity).
+        var sent = await RetryLoop.ExecuteAsync(async () =>
+        {
+            var ep = await sendProvider.GetSendEndpoint(new Uri($"queue:{KeeperQueues.Recovery}"));
+            await ep.Send((object)msg, CancellationToken.None);
+            return true;
+        }, limit, ct);
         if (!sent.Succeeded) throw sent.Error!;   // propagate → throw → broker redelivery
     }
 }

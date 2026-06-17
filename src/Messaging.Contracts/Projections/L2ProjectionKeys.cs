@@ -57,8 +57,18 @@ public static class L2ProjectionKeys
     /// <summary>D-10: the per-message output blob key — <c>skp:out:{messageId:D}</c> — written by the
     /// Pre inline tail / Post / INJECT (write L2[messageId]=data, completed-only). Distinct `out:`
     /// namespace separates output blobs (by messageId) from input blobs (`skp:data:` by entryId). The
-    /// jittered random[ExecutionDataTtl, 2×ExecutionDataTtl] TTL is a caller concern (passed on the write).</summary>
+    /// jittered random[ExecutionDataTtl, 2×ExecutionDataTtl] TTL is a caller concern (passed on the write —
+    /// see <see cref="OutputDataTtl"/>, the single source of truth for the policy).</summary>
     public static string OutputData(Guid messageId) => $"{Prefix}out:{messageId:D}";
+
+    /// <summary>IN-04 (Phase 70): the SINGLE source of truth for the L2[messageId] output-blob TTL policy —
+    /// jittered <c>random[ttlSeconds, 2×ttlSeconds]</c>. BOTH the processor's <c>OutputTail</c> (Pre/Post
+    /// inline tail) AND the keeper's <c>InjectConsumer</c> call this so a keeper-completed result and a
+    /// directly-completed one cannot desynchronize lifetimes (they previously duplicated the formula across
+    /// two assemblies). The <paramref name="ttlSeconds"/> floor still comes from each writer's own option
+    /// (ProcessorLivenessOptions / RecoveryOptions — both default 300); only the policy is shared here.</summary>
+    public static TimeSpan OutputDataTtl(int ttlSeconds)
+        => TimeSpan.FromSeconds(Random.Shared.Next(ttlSeconds, 2 * ttlSeconds + 1));
 
     /// <summary>D-03: probe scratch key — short-TTL write-then-delete; the TTL is the crash net-zero net.</summary>
     public static string KeeperProbe(string h) => $"{Prefix}keeper:probe:{h}";   // "skp:keeper:probe:{h}"
