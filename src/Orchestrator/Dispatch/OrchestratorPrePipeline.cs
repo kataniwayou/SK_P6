@@ -18,29 +18,42 @@ namespace Orchestrator.Dispatch;
 /// <c>out:</c>; this orchestrator Pre READS/DELETES <c>out:</c> (the upstream output blob via A1) and the
 /// downstream <c>RelocateTail</c> WRITES <c>data:</c>.
 /// <para>
-/// <b>The linear Pre flow</b> (REQ-71-01..05):
+/// <b>The UNIFORM (branch-free) Pre flow</b> (Phase 72 / REQ-71-01..05 + SPEC-4/5/6 / D-05/D-09/D-10): the
+/// read → fan-out → delete run for EVERY outcome — there is NO <c>if (outcome == Completed)</c> branch (D-09).
+/// Since the processor now ALWAYS writes an <c>out:</c> blob on a terminal result (Phase 72 Plan 01), a
+/// Completed/Failed/Cancelled all relocate identically; <c>outcome</c> is consumed ONLY by
+/// <see cref="StepAdvancement.SelectNext"/> for entry-condition matching, never for L2 behavior.
 /// <list type="number">
 ///   <item><b>Resolution</b> (REQ-71-02/03, PURE L1 — cannot infra-fail): an L1 miss (workflow or step
-///   absent) logs a DISTINCT <c>completed-unresolved</c> trip-end line and acks (NO throw, NO keeper).</item>
-///   <item><b>SelectNext</b> (REQ-71-03): a resolved step with no matching successor (terminal) logs a
-///   DISTINCT <c>completed-terminal</c> trip-end line and acks (NO throw, NO keeper).</item>
-///   <item><b>Relocation gate</b> (REQ-71-01/04): only a Completed result has an <c>out:</c> blob. A bounded
-///   read of <c>L2[out:EntryId]</c>; a Redis EXCEPTION on the read → exactly one REINJECT + return (no
-///   fan-out). A clean-absent/empty value is NOT an escalation — proceed with empty relocated data.</item>
+///   absent) logs a DISTINCT <c>completed-unresolved</c> trip-end line, increments
+///   <c>orchestrator_step_unresolved</c> (stage-1 — wired in Task 2), and acks (NO throw, NO keeper).</item>
+///   <item><b>SelectNext</b> (REQ-71-03): a resolved step with NO matches AND NO unresolved ids (a true
+///   terminal) logs a DISTINCT <c>completed-terminal</c> trip-end line and acks (NO throw, NO keeper, NO
+///   increment — D-03). Empty matches but non-empty <c>UnresolvedIds</c> falls THROUGH so stage-3 counts.</item>
+///   <item><b>Relocation (three-way read, D-10)</b>: a bounded read of <c>L2[out:EntryId]</c> runs for every
+///   outcome. (a) a Redis EXCEPTION on the read → exactly one REINJECT + return (no fan-out); (b) a
+///   clean-absent/empty value (no Redis fault) → an idempotent ack-skip: NO fan-out, NO keeper, NO delete
+///   (this is how a <c>Processing</c> result — which wrote no <c>out:</c> blob — stops advancing for free,
+///   D-05); (c) a present blob → relocate it.</item>
 ///   <item><b>Fan-out</b> (REQ-71-05): one <see cref="NextStepHandoff"/> per match to
-///   <see cref="OrchestratorQueues.ResultPost"/> (fresh envelope MessageId — NO override, D-11); Completed
-///   carries the read blob as <see cref="NextStepHandoff.Data"/>, non-completed carries "".</item>
+///   <see cref="OrchestratorQueues.ResultPost"/> (fresh envelope MessageId — NO override, D-11) carrying the
+///   read blob as <see cref="NextStepHandoff.Data"/>. Each entry in <c>UnresolvedIds</c> (a dangling next-step
+///   edge) logs + increments <c>orchestrator_step_unresolved</c> (stage-3 — wired in Task 2) + <c>continue</c>s
+///   — NEVER throws (D-02 graceful business skip).</item>
 ///   <item><b>Delete</b> (REQ-71-05, send-before-delete): AFTER all sends land, delete <c>L2[out:EntryId]</c>
-///   (Completed only); a delete-exhaust → one DELETE keeper + return; a send-exhaust THROWS (NO delete).</item>
+///   (for every outcome, past the clean-absent gate); a delete-exhaust → one DELETE keeper + return; a
+///   send-exhaust THROWS (NO delete).</item>
 /// </list>
 /// </para>
 /// <para>
 /// No-silent-loss (REQ-71-02 / D-18) is realized HERE by the two DISTINCT trip-end LOG lines + behavior
-/// (ack, no throw, no keeper). The two-reason trip-end metric counter is DEFERRED to a later phase (per the
-/// user) — so this pipeline injects NO orchestrator-metrics holder (an unused primary-ctor param would trip
-/// CS9113 and the 0-warning build gate). <see cref="NextStepHandoff.ExecutionId"/> is carried from the
-/// inbound result onto each handoff unchanged (D-13). Trip-end / drop logs reference ids only — never the
-/// relocated-input or author-payload tokens (T-70-10).
+/// (ack, no throw, no keeper) AND the <c>orchestrator_step_unresolved</c> counter (Phase-71 D-18 deferral
+/// realized, wired in Task 2): it increments at stage-1 (consumed step/workflow missing from L1) and once per
+/// dangling next-step id at stage-3 — labeled <c>workflowId</c> only. A completed-terminal, an
+/// entry-condition skip, and a normal fan-out do NOT increment. The <see cref="Orchestrator.Observability.OrchestratorMetrics"/> holder
+/// is constructor-injected (singleton-into-scoped — no Program.cs edit). <see cref="NextStepHandoff.ExecutionId"/>
+/// is carried from the inbound result onto each handoff unchanged (D-13). Trip-end / drop logs reference ids
+/// only — never the relocated-input or author-payload tokens (T-70-10).
 /// </para>
 /// </summary>
 public sealed class OrchestratorPrePipeline(
@@ -63,10 +76,12 @@ public sealed class OrchestratorPrePipeline(
             return;
         }
 
-        // 2) SelectNext (REQ-71-03): a resolved-but-terminal step (empty match set) is the other graceful
-        //    trip-end — a DISTINCT "completed-terminal" line + ack (NO throw, NO keeper).
-        var matches = advancement.SelectNext(outcome, completed, wf.Steps).Matches;
-        if (matches.Count == 0)
+        // 2) SelectNext (REQ-71-03): a resolved step with NO matches AND NO unresolved ids is the true
+        //    terminal — a DISTINCT "completed-terminal" line + ack (NO throw, NO keeper, NO increment, D-03).
+        //    If Matches is empty but UnresolvedIds is NOT, do NOT early-return — fall through so stage-3
+        //    (Task 2) increments orchestrator_step_unresolved per dangling id.
+        var selection = advancement.SelectNext(outcome, completed, wf.Steps);
+        if (selection.Matches.Count == 0 && selection.UnresolvedIds.Count == 0)
         {
             logger.LogInformation(
                 "Trip ended (completed-terminal): no matching successor for ({WorkflowId}, {StepId}) outcome={Outcome} — acking (business)",
@@ -77,30 +92,36 @@ public sealed class OrchestratorPrePipeline(
         var db = redis.GetDatabase();
         var limit = retryOptions.Value.Limit;
 
-        // 3) Relocation gate (REQ-71-01/04): only a Completed result wrote an out: blob (A1). A Redis
-        //    EXCEPTION on the read -> REINJECT (the only escalation here). A clean-absent/empty value is NOT
-        //    an escalation (RESEARCH Pattern 1 asymmetry) — proceed with empty relocated data.
-        string relocated = "";
-        if (outcome == StepOutcome.Completed)
+        // 3) Relocation (UNIFORM, three-way, D-09/D-10): the out: read runs for EVERY outcome (the processor
+        //    now always writes a terminal out: blob, Phase 72 Plan 01). The read lambda returns null on a
+        //    clean-absent value so a success-with-absent is distinguishable from a thrown RedisException
+        //    (Pitfall 2). (a) read-fault (exhausted) -> REINJECT + return. (b) clean-absent (no fault) ->
+        //    idempotent ack-skip: NO fan-out, NO keeper, NO delete (this is how a Processing result — which
+        //    wrote no out: blob — stops advancing for free, D-05). (c) present -> relocate.
+        var read = await RetryLoop.ExecuteAsync(async () =>
         {
-            var read = await RetryLoop.ExecuteAsync(async () =>
-            {
-                var raw = await db.StringGetAsync(L2ProjectionKeys.OutputData(m.EntryId));
-                return raw.IsNullOrEmpty ? "" : raw.ToString();
-            }, limit, ct);
-            if (!read.Succeeded) { await SendKeeper(BuildReinject(m, outcome, messageId), limit, ct); return; }
-            relocated = read.Value!;
+            var raw = await db.StringGetAsync(L2ProjectionKeys.OutputData(m.EntryId));
+            return raw.IsNullOrEmpty ? null : raw.ToString();
+        }, limit, ct);
+        if (!read.Succeeded) { await SendKeeper(BuildReinject(m, outcome, messageId), limit, ct); return; }
+        if (string.IsNullOrEmpty(read.Value))
+        {
+            logger.LogInformation(
+                "Trip ended (clean-absent out: blob): no out: blob for ({WorkflowId}, {StepId}) — acking idempotent skip",
+                m.WorkflowId, m.StepId);
+            return;   // clean-absent -> idempotent skip: NO fan-out, NO keeper, NO delete (D-10)
         }
+        var relocated = read.Value!;
 
         // 4) Fan-out (REQ-71-05): one NextStepHandoff per match to orchestrator-result-post. NO MessageId
         //    override (D-11 — MassTransit assigns a fresh envelope id = the next step's messageId). A
         //    send-exhaust THROWS (broker redelivery) — and because the delete runs AFTER, NO delete on throw.
         var post = await sendProvider.GetSendEndpoint(new Uri($"queue:{OrchestratorQueues.ResultPost}"));
-        foreach (var (stepId, step) in matches)
+        foreach (var (stepId, step) in selection.Matches)
         {
             var handoff = new NextStepHandoff(m.WorkflowId, stepId, step.ProcessorId, step.Payload)
             {
-                Data          = relocated,             // "" for a non-completed continuation
+                Data          = relocated,             // the relocated out: blob (uniform for every outcome)
                 CorrelationId = m.CorrelationId,
                 ExecutionId   = m.ExecutionId,         // D-13: threaded UNCHANGED
             };
@@ -109,14 +130,15 @@ public sealed class OrchestratorPrePipeline(
             if (!sent.Succeeded) throw sent.Error!;    // send-exhaust → throw → broker redelivery (NO delete)
         }
 
-        // 5) Delete (REQ-71-05, send-before-delete): ONLY when there was an out: blob to delete (Completed).
-        //    A delete-exhaust → one DELETE keeper + return.
-        if (outcome == StepOutcome.Completed)
-        {
-            var del = await RetryLoop.ExecuteAsync(
-                () => db.KeyDeleteAsync(L2ProjectionKeys.OutputData(m.EntryId)), limit, ct);
-            if (!del.Succeeded) { await SendKeeper(BuildDelete(m), limit, ct); return; }
-        }
+        // stage-3 (Task 2): each dangling next-step id in selection.UnresolvedIds logs + increments
+        //    orchestrator_step_unresolved + continue (graceful, NEVER throws — D-02). Sits AFTER the
+        //    clean-absent gate so a skipped message never counts stage-3. (Increment wired in Task 2.)
+
+        // 5) Delete (REQ-71-05, send-before-delete, UNIFORM): AFTER all sends land, delete L2[out:EntryId]
+        //    for every outcome (past the clean-absent gate). A delete-exhaust → one DELETE keeper + return.
+        var del = await RetryLoop.ExecuteAsync(
+            () => db.KeyDeleteAsync(L2ProjectionKeys.OutputData(m.EntryId)), limit, ct);
+        if (!del.Succeeded) { await SendKeeper(BuildDelete(m), limit, ct); return; }
     }
 
     /// <summary>Mirror <c>ProcessorPipeline.SendKeeper</c>: resolve <c>queue:{KeeperQueues.Recovery}</c>
