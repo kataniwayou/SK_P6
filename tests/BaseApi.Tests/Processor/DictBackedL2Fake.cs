@@ -69,13 +69,16 @@ public sealed class DictBackedL2Fake
             .Returns(ci => Task.FromResult(_store.TryGetValue((RedisKey)ci[0], out var v) ? v : RedisValue.Null));
 
         // WRITE (OutputTail.cs:66): the 3-arg StringSetAsync(key, value, ttl) the production tail calls binds to
-        // a REAL virtual overload. Stub BOTH real virtual forms so a single-overload stub cannot false-green
-        // (Pitfall 1 / T-70-11). Both persist _store[key] = value and return true; TTL is ignored (hermetic).
-        // 5-arg Expiration/ValueCondition form — FakeRedis.cs:144-147 (TimeSpan? implicitly converts to Expiration).
-        db.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(),
-                Arg.Any<When>(), Arg.Any<CommandFlags>())
+        // a REAL virtual overload. CRITICAL (Pitfall 1 / T-70-11, DispatchTestKit.cs:114-118): in SE.Redis 2.13
+        // the ONLY real virtual IDatabase.StringSetAsync overload is the (RedisKey, RedisValue, Expiration,
+        // ValueCondition, CommandFlags) form — the TimeSpan?/When/keepTtl shorthands are EXTENSION methods
+        // NSubstitute CANNOT intercept (stubbing them is a no-op that false-greens the round-trip). Stub the two
+        // real virtual overloads the 3-arg write can bind to (the 5-arg Expiration/ValueCondition AND the
+        // 6-arg keepTtl form, mirroring DispatchTestKit.StubWriteFault :181-188). Both persist _store[key] =
+        // value and return true; TTL is ignored (hermetic, no expiry).
+        db.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<Expiration>(),
+                Arg.Any<ValueCondition>(), Arg.Any<CommandFlags>())
             .Returns(ci => { _store[(RedisKey)ci[0]] = (RedisValue)ci[1]; return Task.FromResult(true); });
-        // 6-arg keepTtl form — DispatchTestKit.StubWriteOk :160-167.
         db.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(),
                 Arg.Any<bool>(), Arg.Any<When>(), Arg.Any<CommandFlags>())
             .Returns(ci => { _store[(RedisKey)ci[0]] = (RedisValue)ci[1]; return Task.FromResult(true); });
