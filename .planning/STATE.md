@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
-status: executing
-stopped_at: Completed 73-03-PLAN.md
-last_updated: "2026-06-17T21:47:56.289Z"
+status: verifying
+stopped_at: Completed 73-04-PLAN.md
+last_updated: "2026-06-17T22:23:16.381Z"
 last_activity: 2026-06-17
 progress:
   total_phases: 4
@@ -33,7 +33,7 @@ Phase: 73 (verify-and-instrument-end-to-end-l2-data-delivery-across-a-f) — EXE
 Current Plan: 1
 Total Plans: 3
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-17
 
 > Phase 72 Plan 03 — ✅ COMPLETE 2026-06-17 (Wave 2: the payoff — all four `TypedResultConsumer<T>` shells now run ONE uniform branch-free pre-pipeline flow + the Phase-71-deferred D-18 trip-end metric lands). **2 atomic feat commits** (`b501557` dropped BOTH `if (outcome == StepOutcome.Completed)` gates — the `out:` read and the delete now run for every outcome (D-09, riding Plan-01's always-write); consumed `SelectNext`'s `{Matches, UnresolvedIds}`; three-way read (read lambda returns null on clean-absent to split absent from fault, Pitfall 2): present → fan-out+delete / clean-absent → idempotent ack-skip (Processing rides it for free, D-05) / Redis fault → REINJECT (D-10); ExecutionId threaded unchanged D-13; `88dbd3f` `OrchestratorMetrics` ctor-injected (singleton→scoped, no Program.cs edit) + BOTH increments in the same change (no CS9113): stage-1 L1-miss + stage-3 `foreach` over `UnresolvedIds` (continue, never throws, D-02), `workflowId` label only; rewrote `OrchestratorPrePipelineFacts` in place D-12 — Failed/Cancelled present-blob fan-out+delete like Completed, clean-absent + Processing-rides-skip facts, dangling-next-step (resolvable still fans out + 1 increment), condition-skip + normal-fanout no-increment, `MeterCollector` tag-set assertions). SPEC-4/5/6. **2 deviations:** (1) Rule 3 (blocking) — migrated 3 other test ctor sites (`TypedResultConsumerFacts`/`ResultAckTests`/`StopConsumerLifecycleTests`) to `OrchestratorTestStubs.Metrics()` (the ctor-param add broke them); (2) Rule 1 (test) — `TypedResultConsumerFacts` Failed-gated sub-call now passes the SAME `entryId` whose `out:` blob is present (the Failed read is now uniform post-D-09). Hermetic: `OrchestratorPrePipelineFacts` **15/15** + affected orchestrator facts **40/40 GREEN**; **0-warning Debug + Release** (full solution). Full `dotnet test` shows 288 failures — ALL pre-existing Docker-bound E2E/Integration tests (sandbox lacks Redis/RabbitMQ/Postgres); none in the hermetic dispatch surface. Live-stack proof deferred-automated (SPEC AC #10). Summary: `.planning/phases/72-processor-always-write-to-l2-and-uniform-orchestrator-pre-pi/72-03-SUMMARY.md` (Self-Check PASSED). **Phase 72 ready for verification.**
@@ -1039,6 +1039,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 73 P01 | 2min | 3 tasks | 1 files |
 | Phase 73 P02 | 31min | 3 tasks | 2 files |
 | Phase 73 P03 | 15min | 3 tasks | 5 files |
+| Phase 73 P04 | 10min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1513,6 +1514,8 @@ Recent decisions affecting current work:
 - 73-03: LabelsPerRun stays 9 (inert Prom basis); the binding verdict is value-chain + completeness, never Prom (Step_G x2 not folded into dispatch math)
 - 73-03: convergent terminal Step_G has expected multiplicity 2 — HasIllegitimateDuplicate exempts Step_G x2 but fails x!=2 and every non-convergent duplicate (fail-closed preserved)
 - 73-03: live terminal-anchor PROXY = Step_G completed-terminal ES value seed+6; durable skp:out: blob proof owned by hermetic harness Plan 02 (ES-read-only auditor cannot read Redis)
+- 73-04: live RealStack auditor reads attributes.Produced + ES @timestamp trip-duration into the Plan-03 extended FromLabels/Analyze; Step_G seed+6 ES log is the live terminal-anchor proxy (ES-read-only, no Redis read)
+- 73-04: seeder builds G-extended DAG (10/10/10, Step_G lone sink, uniform number=1); phase-73-sweep.ps1 live Docker round-trip is deferred-automated, not a phase gate
 
 ### Roadmap Milestone Log
 
@@ -1619,8 +1622,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-17T21:47:47.278Z
-Stopped at: Completed 73-03-PLAN.md
+Last session: 2026-06-17T22:23:07.491Z
+Stopped at: Completed 73-04-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
