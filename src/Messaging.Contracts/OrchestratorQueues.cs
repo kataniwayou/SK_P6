@@ -14,4 +14,13 @@ public static class OrchestratorQueues
     /// scheme prefix — the Send side adds it.
     /// </summary>
     public const string Result = "orchestrator-result";
+
+    /// <summary>
+    /// Pre-&gt;Post fan-out queue short-name (D-03). The orchestrator Pre Sends one
+    /// <c>NextStepHandoff</c> per fan-out target to <c>queue:orchestrator-result-post</c>;
+    /// the Post consumer relocates the data and dispatches. Bind it as
+    /// <c>ReceiveEndpoint(OrchestratorQueues.ResultPost)</c>; the Send side prepends the
+    /// <c>queue:</c> URI scheme. The bare endpoint short-name is stored WITHOUT the scheme prefix.
+    /// </summary>
+    public const string ResultPost = "orchestrator-result-post";
 }
