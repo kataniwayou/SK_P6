@@ -137,7 +137,9 @@ public sealed class OutputTail(
         StepFailed     => "failed",
         StepCancelled  => "cancelled",
         StepProcessing => "processing",
-        _              => "failed",
+        // IN-03: the set is closed today (BuildStep covers all four), so this is unreachable — but tag a
+        // future IStepResult subtype "unknown" rather than masquerading it as "failed" in ResultSent telemetry.
+        _              => "unknown",
     };
 
     private async Task SendKeeper(IKeeperRecoverable msg, int limit, CancellationToken ct)
