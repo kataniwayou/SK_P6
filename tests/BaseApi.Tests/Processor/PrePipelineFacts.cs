@@ -268,7 +268,10 @@ public sealed class PrePipelineFacts
             DispatchTestKit.Dispatch(entryId, correlationId: Guid.NewGuid()), Guid.NewGuid(), ct);
 
         var failed = Assert.IsType<StepFailed>(Assert.Single(send.Sent));
-        Assert.Equal("boom", failed.ErrorMessage);
+        // WR-03: the unexpected/deserialize branch emits a SANITIZED constant on the wire — never ex.Message
+        // (which for a JsonException can carry payload bytes). The raw "boom" must NOT leak to the result.
+        Assert.Equal("input deserialization failed", failed.ErrorMessage);
+        Assert.DoesNotContain("boom", failed.ErrorMessage);
         Assert.Empty(send.SentKeeper);
     }
 

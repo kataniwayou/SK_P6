@@ -86,40 +86,50 @@ public sealed class ProcessorPipeline(
 
         // req 3: seam returns one DataResult or null. Wire the framework helper-state onto the processor
         // FIRST (so this.SpawnToPost / this.DeleteEntry / this.NewResult have db/sendProvider/ids/hooks).
+        // CR-01: the state lives in a per-consume AsyncLocal on the (Singleton) processor; clear it in a
+        // finally so a stale capture never outlives this dispatch on a pooled thread.
         SetSeamState(d, messageId, db, limit);
-        DataResult? dr;
-        try { dr = await processor.ExecuteAsync(validatedData, d.Payload, d.ExecutionId, ct); }
-        catch (ProcessStatusException e)
+        try
         {
-            IStepResult res = e switch
+            DataResult? dr;
+            try { dr = await processor.ExecuteAsync(validatedData, d.Payload, d.ExecutionId, ct); }
+            catch (ProcessStatusException e)
             {
-                FailedException     => BuildFailed(d, e.Message),
-                CancelledException  => BuildCancelled(d, e.Message),
-                ProcessingException => BuildProcessing(d),
-                _                   => BuildFailed(d, e.Message),
-            };
-            if (e is ProcessingException) logger.LogInformation("ProcessAsync threw processing status: {Msg}", e.Message);
-            await SendResult(res, limit, ct);
-            return;   // C-2 parity: a seam-thrown failure does NOT delete the entry on this phase's model
+                IStepResult res = e switch
+                {
+                    FailedException     => BuildFailed(d, e.Message),
+                    CancelledException  => BuildCancelled(d, e.Message),
+                    ProcessingException => BuildProcessing(d),
+                    _                   => BuildFailed(d, e.Message),
+                };
+                if (e is ProcessingException) logger.LogInformation("ProcessAsync threw processing status: {Msg}", e.Message);
+                await SendResult(res, limit, ct);
+                return;   // C-2 parity: a seam-thrown failure does NOT delete the entry on this phase's model
+            }
+            catch (Exception ex)   // unexpected (incl. the deserialize JsonException, req 2) ⇒ failed, NO delete
+            {
+                // WR-03: never put ex.Message on the StepFailed wire — a deserialize JsonException can carry a
+                // fragment of the offending payload/config (path, line, token), which defeats the never-log-
+                // payload discipline (T-70-10). Emit a sanitized constant; the detail stays in the local log.
+                logger.LogWarning(ex, "ProcessAsync/deserialize faulted; emitting StepFailed (entry left to TTL)");
+                await SendResult(BuildFailed(d, "input deserialization failed"), limit, ct);
+                return;
+            }
+
+            if (dr is null) return;   // req 3: Mode-2 spawn handled everything; skip the tail (no write/send/delete)
+
+            // req 4: inline tail = shared OutputTail (write completed-only → INJECT on exhaust → send by result),
+            // THEN delete L2[entryId] (exhaust → DELETE). Carry the carried messageId onto the DataResult so the
+            // output key + INJECT/REINJECT use it.
+            var carried = dr with { MessageId = messageId };
+            var proceed = await outputTail.RunAsync(carried, d.EntryId, ct);
+            if (!proceed) return;   // INJECT escalation already ended the round trip (no delete)
+
+            var del = await RetryLoop.ExecuteAsync(
+                () => db.KeyDeleteAsync(L2ProjectionKeys.ExecutionData(d.EntryId)), limit, ct);
+            if (!del.Succeeded) await SendKeeper(BuildDelete(d), limit, ct);   // delete-exhaust → DELETE (req 4)
         }
-        catch (Exception ex)   // unexpected (incl. the deserialize JsonException, req 2) ⇒ failed, NO delete
-        {
-            await SendResult(BuildFailed(d, ex.Message), limit, ct);
-            return;
-        }
-
-        if (dr is null) return;   // req 3: Mode-2 spawn handled everything; skip the tail (no write/send/delete)
-
-        // req 4: inline tail = shared OutputTail (write completed-only → INJECT on exhaust → send by result),
-        // THEN delete L2[entryId] (exhaust → DELETE). Carry the carried messageId onto the DataResult so the
-        // output key + INJECT/REINJECT use it.
-        var carried = dr with { MessageId = messageId };
-        var proceed = await outputTail.RunAsync(carried, d.EntryId, ct);
-        if (!proceed) return;   // INJECT escalation already ended the round trip (no delete)
-
-        var del = await RetryLoop.ExecuteAsync(
-            () => db.KeyDeleteAsync(L2ProjectionKeys.ExecutionData(d.EntryId)), limit, ct);
-        if (!del.Succeeded) await SendKeeper(BuildDelete(d), limit, ct);   // delete-exhaust → DELETE (req 4)
+        finally { processor.ClearSeamState(); }   // CR-01: per-consume AsyncLocal cleanup
     }
 
     /// <summary>Populate the framework-owned per-dispatch state on the <see cref="BaseProcessor"/> the
@@ -141,7 +151,9 @@ public sealed class ProcessorPipeline(
             {
                 logger.LogWarning(
                     "SpawnToPost drop: send to -post exhausted ExecutionId={ExecutionId}", execId);   // never log Payload (T-70-10)
-                metrics.DispatchDeduped.Add(1,
+                // IN-03: a spawn drop is NOT a dispatch dedup — count it on its own SpawnDropped signal so the
+                // dedup rate stays readable and the spawn-drop rate is observable under its real name.
+                metrics.SpawnDropped.Add(1,
                     new KeyValuePair<string, object?>("ProcessorId", context.Id!.Value.ToString("D")));
             },
             escalateDelete: () => SendKeeper(BuildDelete(d), limit, CancellationToken.None));
