@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: Not started
-status: completed
+current_plan: 2
+status: executing
 stopped_at: Phase 72 context gathered
-last_updated: "2026-06-17T09:38:55.010Z"
-last_activity: 2026-06-17
+last_updated: "2026-06-17T11:12:03.874Z"
+last_activity: 2026-06-17 -- Phase 72 Plan 01 complete (processor always-write + EntryId; 27/27 hermetic GREEN, 0-warning Debug+Release)
 progress:
   total_phases: 4
   completed_phases: 0
@@ -21,7 +21,7 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase 71 — orchestrator-two-consumer-design-pre-process-post-process-wi
+**Current focus:** Phase --phase — 72
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
@@ -29,12 +29,14 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 71
-Current Plan: Not started
+Phase: 72 (processor-always-write-to-l2-and-uniform-orchestrator-pre-pi) — EXECUTING
+Current Plan: 2
 Total Plans: 3
-Plan: 3 of 3 (71-01 ✅, 71-02 ✅ — next: 71-03)
-Status: Milestone complete
-Last activity: 2026-06-17
+Plan: 2 of 3
+Status: Executing Phase 72 (72-01 COMPLETE; 72-02 next)
+Last activity: 2026-06-17 -- Phase 72 Plan 01 complete (processor always-write + EntryId; 27/27 hermetic GREEN, 0-warning Debug+Release)
+
+> Phase 72 Plan 01 — ✅ COMPLETE 2026-06-17 (Wave 1: processor always-write to L2 + real EntryId on terminal Step\*). **2 atomic feat commits** (`c7fdbc0` OutputTail always-write gate `result != Processing` + Failed/Cancelled `EntryId = dr.MessageId` in BuildStep + DataResult gains ErrorMessage/CancellationMessage; `e2076f2` ProcessorPipeline input-fail + both catch blocks route through `outputTail.RunAsync` carrying `Data=validatedData`, dead BuildFailed/BuildCancelled/BuildProcessing + orphaned SendResult/ResultOutcome deleted). REQ-1/2/3/6 (SPEC-1/2/3/6). **2 deviations, both Rule 3 (blocking):** (1) added `ErrorMessage`/`CancellationMessage` to `DataResult` so the rerouted catch diagnostics survive `BuildStep` (the field didn't exist — D-07 couldn't work otherwise); (2) deleted the now-orphaned `SendResult`/`ResultOutcome` beyond the plan's A2 builder cleanup to hold the 0-warning gate. Hermetic: OutputTailFacts 5/5 + PrePipelineFacts 22/22 = **27/27 GREEN**; **0-warning Debug + Release**. WR-03 sanitized constant preserved (unexpected-catch wire stays `"input deserialization failed"`, never `ex.Message`). Summary: `.planning/phases/72-processor-always-write-to-l2-and-uniform-orchestrator-pre-pi/72-01-SUMMARY.md` (Self-Check PASSED). Plan 02 next.
 
 > Phase 68 (capstone live proof) — ✅ COMPLETE 2026-06-15. The live 7-scenario fault sweep ran end-to-end (`scripts/phase-68-sweep.ps1`, ~1h, windows ~04:30→05:25 UTC): **6/7 PASS** (TEST-01..05 + TEST-07, each zero-missing + effect-once); wrapper exit 1. The lone **TEST-06 (rabbitmq) VERDICT_FAIL** (MISSING:2, 7/9 complete; effect-once held) was traced — `KeeperReinjectDroppedDelta:2 == Missing:2` → the by-design `ReinjectConsumer.cs:37` silent-DROP (`STRLEN L2[entryId]==0`): the 5s `Processor__ExecutionDataTtl` (compose:285) self-expired across the 45s outage so keeper REINJECT correctly dropped already-gone keys. Corroborated by TEST-07 (strictly-harder redis+rabbitmq superset) PASS 8/8 — a deterministic rabbitmq-recovery defect would have failed TEST-07 too. **Spec-owner disposition: ACCEPT AS TEST-ENV TTL ARTIFACT** (accept-with-rationale; NO code/TTL/dwell/retry change, D-01b/D-04 honoured). Recovery machinery **PROVEN across all 7 fault classes**; TEST-06's miss documented as a known test-env TTL artifact. TEST-01..07 all complete (TEST-06 proven-with-documented-artifact). Roll-up `analyzer-reports/phase-68-summary.json` (`098f36a`). Summary: `.planning/phases/68-live-resilience-proof-7-scenarios-capstone/68-02-SUMMARY.md`.
 
@@ -1025,6 +1027,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 71 P01 | 26min | 3 tasks | 10 files |
 | Phase 71 P02 | 18min | 3 tasks | 17 files |
 | Phase 71 P03 | 6min | 3 tasks | 9 files |
+| Phase 72 P01 | 25 | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1604,4 +1607,4 @@ Resume file: --resume-file
 
 **Previous Phase:** 11 (migrate-prometheus-and-elastic-containers-from-compose-stack) — 10/10 plans — verified 2026-05-28 (3 consecutive GREEN dotnet test runs at 142/142 facts each; byte-identical psql `\l` SHA-256 `0d98b0de…0aac127`; OBSERV-12 superseded; INFRA-06 amendment locked in)
 
-**Planned Phase:** 71 (Orchestrator two-consumer design (Pre-Process + Post-Process) with keeper recovery) — 3 plans — 2026-06-17T05:49:01.779Z
+**Planned Phase:** 72 (Processor always-write to L2 and uniform orchestrator pre-pipeline with unresolved-step metric) — 3 plans — 2026-06-17T10:03:10.299Z
