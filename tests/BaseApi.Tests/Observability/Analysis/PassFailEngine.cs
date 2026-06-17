@@ -44,13 +44,22 @@ namespace BaseApi.Tests.Observability.Analysis;
 public sealed class PassFailEngine
 {
     /// <summary>
-    /// The 9-label completeness set (verbatim — FanOutSeederE2ETests.cs NodeNumbers keys):
-    /// A→B→C→{D1→E1→F1, D2→E2→F2}. A COMPLETE run's distinct set equals this exactly (both sinks).
+    /// The 10-label completeness set (verbatim — FanOutSeederE2ETests.cs NodeNumbers keys):
+    /// A→B→C→{D1→E1→F1, D2→E2→F2}→G, with the single shared convergent terminal Step_G reachable from
+    /// BOTH sinks (73, D-10). A COMPLETE run's DISTINCT set equals this exactly (10 distinct labels) — note
+    /// Step_G logs TWICE per run (the per-arrival fan-in), which inflates RAW count to 11 but DISTINCT to 10.
     /// </summary>
     private static readonly HashSet<string> AllLabels = new(StringComparer.Ordinal)
-    { "Step_A", "Step_B", "Step_C", "Step_D1", "Step_E1", "Step_F1", "Step_D2", "Step_E2", "Step_F2" };
+    { "Step_A", "Step_B", "Step_C", "Step_D1", "Step_E1", "Step_F1", "Step_D2", "Step_E2", "Step_F2", "Step_G" };
 
-    /// <summary>Both sinks Step_F1 + Step_F2 required for COMPLETE → 9 distinct labels / dispatches per run.</summary>
+    /// <summary>
+    /// The Prom dispatch-count basis for the (inert, non-binding) corroboration math — kept at 9, NOT 10.
+    /// The convergent Step_G's ×2 fan-in is intentionally NOT folded into this count: metrics are DEFERRED
+    /// out of this phase (SPEC out-of-scope — no metric-counter assertions), and the BINDING verdict is
+    /// value-chain + completeness, NEVER Prom. Folding Step_G's ×2 here would distort the inert
+    /// promImpliedRuns / spawnReconSlack arithmetic without protecting any binding outcome (73, D-10). The
+    /// corroboration block stays structurally intact and can never gate the value-chain verdict.
+    /// </summary>
     public const int LabelsPerRun = 9;
 
     /// <summary>
@@ -86,8 +95,23 @@ public sealed class PassFailEngine
     /// passes <c>traces.Select(t =&gt; t.CorrelationId).Distinct().Count()</c>) — NEVER hard-coded. Default 0
     /// keeps every pre-spawn caller's behaviour identical.
     /// </param>
+    /// <param name="tripDurationMsByExecution">
+    /// VALUE-CHAIN/TRIP evidence (73, D-12): per-<c>(corr, exec)</c> trip duration ms keyed
+    /// <c>"correlationId|executionId"</c> (first-step → Step_G-terminal ES <c>@timestamp</c> delta). The engine
+    /// reads NO ES timestamps; the live fixture (Plan 04) passes the real map, the hermetic facts pass
+    /// synthetic/empty. Default null ⇒ empty map (keeps existing callers compiling, no behaviour change).
+    /// </param>
+    /// <param name="tripDurationMsByCorrelation">Per-<c>correlationId</c> aggregate trip duration ms (73, D-12). Default null ⇒ empty.</param>
+    /// <param name="seedsByExecution">
+    /// VALUE-CHAIN seed map (73, D-11): per-<c>(corr, exec)</c> seed keyed <c>"correlationId|executionId"</c>, used to
+    /// check each label's surfaced value equals <c>seed + hop-count</c>. When a run has no entry here, its seed is
+    /// recovered from the chain itself (<c>Values["Step_B"] - 1</c>). Default null ⇒ recover-from-chain for all.
+    /// </param>
     public AnalyzerReport Analyze(IReadOnlyList<RunTrace> runs, PromCounterSnapshot prom,
-                                  int triggerCount, string scenarioId, int spawnExtra = 0)
+                                  int triggerCount, string scenarioId, int spawnExtra = 0,
+                                  IReadOnlyDictionary<string, double>? tripDurationMsByExecution = null,
+                                  IReadOnlyDictionary<string, double>? tripDurationMsByCorrelation = null,
+                                  IReadOnlyDictionary<string, int>? seedsByExecution = null)
     {
         // ── ES-BINDING ARBITER (67-03) ────────────────────────────────────────────────────────────
 
@@ -95,7 +119,8 @@ public sealed class PassFailEngine
         // RunTrace each (each spawned execution is its own run).
         var startedRuns = runs.Count;
 
-        // COMPLETE (OBS-01): distinct StepLabel set equals the full 9-label set (both sinks).
+        // COMPLETE (OBS-01): distinct StepLabel set equals the full 10-label set (both sinks + the
+        // convergent terminal Step_G). Step_G logs ×2 per run but DISTINCT collapses it to one (73, D-10).
         var complete = runs.Where(r => r.DistinctLabels.SetEquals(AllLabels)).ToList();
 
         // MISSING (OBS-02): started-but-incomplete. Bound against the ES STARTED denominator — NOT the
@@ -107,17 +132,47 @@ public sealed class PassFailEngine
         {
             missingDetail.Add(
                 $"{missing} of {startedRuns} STARTED run(s) (distinct correlationId with ≥1 Step_* log) did NOT reach " +
-                "COMPLETE (all 9 labels incl. both sinks Step_F1 + Step_F2).");
+                "COMPLETE (all 10 labels incl. both sinks Step_F1 + Step_F2 and the convergent terminal Step_G).");
             missingDetail.Add(
                 "A fully-dead run (dispatched but never logging Step_A) never started in ES and is NOT in this count; " +
                 "it surfaces as a Prom corroboration WARNING (impliedRuns > startedRuns). The specific missing " +
                 "correlationId for such a run is NOT recoverable from telemetry (research item #1).");
         }
 
-        // DUPLICATE (OBS-02, fail-closed, BINDING): any duplicate (correlationId, StepLabel) is a FAIL.
-        // No live dedupe counter can corroborate a redelivery (dormant) → un-corroboratable → fail-closed.
-        var duplicates = runs.Where(r => r.HasAnyDuplicateLabel).ToList();
+        // DUPLICATE (OBS-02, fail-closed, BINDING): any ILLEGITIMATE duplicate (correlationId, StepLabel) is a
+        // FAIL. Reads the convergent-aware HasIllegitimateDuplicate (73, D-10), NOT the raw HasAnyDuplicateLabel,
+        // so the legitimate Step_G ×2 fan-in does NOT trip the rule WHILE every other duplicate AND a Step_G
+        // count ≠ 2 (1 = missing arrival, 3+ = same-entryId redelivery) still fail closed. No live dedupe counter
+        // can corroborate a redelivery (dormant) → un-corroboratable → fail-closed.
+        var duplicates = runs.Where(r => r.HasIllegitimateDuplicate).ToList();
         var dupFail = duplicates.Count > 0;
+
+        // VALUE-CHAIN ASSERTION (NEW, 73, D-11, BINDING): each STARTED run's surfaced values must follow the
+        // deterministic chain Values[label] == seed + hop-count (B=seed+1 … G=seed+6), and BOTH Step_G arrivals
+        // sit at the shared terminal seed+6 — the LIVE terminal-anchor proxy (the Step_G completed-terminal ES
+        // log carrying seed+6). The auditor does NOT read a Redis skp:out: blob; that durable-blob proof is owned
+        // by the hermetic harness (Plan 02). A run is checked ONLY if it surfaced any values (legacy callers that
+        // pass no value map are skipped, so existing behaviour is unchanged). valueChainOk is true when EVERY
+        // checked run's chain holds; it folds into the verdict.
+        var valueChainDetail = new List<string>();
+        var valueChainOk = true;
+        foreach (var run in runs)
+        {
+            if (run.Values.Count == 0)
+            {
+                continue; // no surfaced values (legacy caller) → not value-chain-checked
+            }
+
+            var seed = ResolveSeed(run, seedsByExecution);
+            if (!CheckValueChain(run, seed, out var detail))
+            {
+                valueChainOk = false;
+            }
+            valueChainDetail.Add(detail);
+        }
+
+        var tripByExec = tripDurationMsByExecution ?? new Dictionary<string, double>(StringComparer.Ordinal);
+        var tripByCorr = tripDurationMsByCorrelation ?? new Dictionary<string, double>(StringComparer.Ordinal);
 
         // ── PROM CORROBORATION (OBS-03, NON-BINDING, 67-03) ────────────────────────────────────────
         // The three retired conflations (#1 DispatchSentDelta as per-run denom; #2 ResultSentCompleted
@@ -188,7 +243,9 @@ public sealed class PassFailEngine
             : ReconciliationOutcome.Unreconciled;
 
         // ── VERDICT (ES-binding; Prom corroboration is non-fatal) ──────────────────────────────────
-        var pass = missing == 0 && !dupFail;
+        // The value-chain check (incl. the Step_G-at-seed+6 terminal-anchor proxy) is BINDING (73, D-11);
+        // Prom corroboration remains non-fatal and never flips a green ES verdict.
+        var pass = missing == 0 && !dupFail && valueChainOk;
         var verdict = pass ? Verdict.Pass : Verdict.Fail;
 
         // Build the report (no IO).
@@ -209,21 +266,96 @@ public sealed class PassFailEngine
             CorroborationDetail = corroborationDetail,
             Prom = prom,
             Traces = runs,
+            ValueChainOk = valueChainOk,
+            ValueChainDetail = valueChainDetail,
+            TripDurationMsByExecution = tripByExec,
+            TripDurationMsByCorrelation = tripByCorr,
             HumanSummary = BuildSummary(
-                scenarioId, verdict, startedRuns, complete.Count, missing, dupFail, recon, corroborationDetail),
+                scenarioId, verdict, startedRuns, complete.Count, missing, dupFail, valueChainOk, recon, corroborationDetail),
         };
     }
 
+    /// <summary>
+    /// The expected per-hop value offset from the run's seed (73, D-11/D-02): the deterministic chain
+    /// seed → B=seed+1, C=seed+2, {D1,D2}=seed+3, {E1,E2}=seed+4, {F1,F2}=seed+5, G=seed+6 (both Step_G
+    /// arrivals share the terminal seed+6). Step_A is the seed source itself (offset 0). Symmetric branches
+    /// carry the same per-hop value, distinguished only by their framework-owned entryId (D-07).
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, int> ExpectedHopOffset =
+        new Dictionary<string, int>(StringComparer.Ordinal)
+        {
+            ["Step_A"] = 0,
+            ["Step_B"] = 1,
+            ["Step_C"] = 2,
+            ["Step_D1"] = 3, ["Step_D2"] = 3,
+            ["Step_E1"] = 4, ["Step_E2"] = 4,
+            ["Step_F1"] = 5, ["Step_F2"] = 5,
+            ["Step_G"] = 6,
+        };
+
+    /// <summary>
+    /// Resolve the seed for a run's value chain (73, D-11): the explicit <paramref name="seedsByExecution"/>
+    /// entry keyed <c>"correlationId|executionId"</c> if present, else recovered from the chain itself
+    /// (<c>Values["Step_B"] - 1</c>), else <c>Values["Step_A"]</c> (the seed source), else 0.
+    /// </summary>
+    private static int ResolveSeed(RunTrace run, IReadOnlyDictionary<string, int>? seedsByExecution)
+    {
+        if (seedsByExecution is not null &&
+            seedsByExecution.TryGetValue($"{run.CorrelationId}|{run.ExecutionId}", out var seed))
+        {
+            return seed;
+        }
+        if (run.Values.TryGetValue("Step_B", out var b))
+        {
+            return b - 1;
+        }
+        if (run.Values.TryGetValue("Step_A", out var a))
+        {
+            return a;
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// Check a run's deterministic value chain (73, D-11): for every surfaced label, assert
+    /// <c>Values[label] == seed + ExpectedHopOffset[label]</c>. Both Step_G arrivals share the single map
+    /// entry at the terminal <c>seed + 6</c> — the LIVE terminal-anchor proxy. Emits a per-run evidence line
+    /// (expected-vs-actual) and returns false on the first mismatch (recorded in the detail).
+    /// </summary>
+    private static bool CheckValueChain(RunTrace run, int seed, out string detail)
+    {
+        var mismatches = new List<string>();
+        foreach (var (label, actual) in run.Values.OrderBy(kv => kv.Key, StringComparer.Ordinal))
+        {
+            if (!ExpectedHopOffset.TryGetValue(label, out var offset))
+            {
+                continue; // unknown label carries no chain expectation
+            }
+            var expected = seed + offset;
+            if (actual != expected)
+            {
+                mismatches.Add($"{label} expected {expected} got {actual}");
+            }
+        }
+
+        var ok = mismatches.Count == 0;
+        detail = ok
+            ? $"[{run.CorrelationId}|{run.ExecutionId}] value-chain OK (seed {seed}; Step_G terminal {seed + 6})."
+            : $"[{run.CorrelationId}|{run.ExecutionId}] value-chain FAIL (seed {seed}): {string.Join(", ", mismatches)}.";
+        return ok;
+    }
+
     private static string BuildSummary(string scenarioId, Verdict verdict, int startedRuns,
-        int completeRuns, int missing, bool dupFail, ReconciliationOutcome recon,
+        int completeRuns, int missing, bool dupFail, bool valueChainOk, ReconciliationOutcome recon,
         IReadOnlyList<string> corroborationDetail)
     {
         var reasons = new List<string>();
         if (missing > 0) reasons.Add($"{missing} started-but-incomplete");
-        if (dupFail) reasons.Add("unaccountable duplicate (fail-closed)");
+        if (dupFail) reasons.Add("illegitimate duplicate (fail-closed)");
+        if (!valueChainOk) reasons.Add("value-chain mismatch (seed + hop-count / Step_G terminal anchor)");
 
         var driver = verdict == Verdict.Pass
-            ? "every started run complete, no duplicate (ES-binding)"
+            ? "every started run complete, no illegitimate duplicate, value-chain intact (ES-binding)"
             : string.Join("; ", reasons);
 
         // Prom corroboration is reported alongside the (ES-binding) verdict, never as its cause.

@@ -13,9 +13,9 @@ namespace BaseApi.Tests.Observability.Analysis;
 /// <para>
 /// Fact → requirement map (67-03 ES-binding semantics):
 /// <list type="bullet">
-/// <item><c>Complete_AllStartedRuns_Yields_Pass</c> — ES-binding: every started run 9-label complete → Pass.</item>
+/// <item><c>Complete_AllStartedRuns_Yields_Pass</c> — ES-binding: every started run 10-label complete (Step_G ×2) → Pass.</item>
 /// <item><c>Incomplete_StartedRun_DropsStepF2_Yields_Fail</c> — OBS-02: a started-but-incomplete run → Fail (binding).</item>
-/// <item><c>Duplicate_TwoStepC_Yields_FailClosed</c> — OBS-02: any duplicate → Fail (binding fail-closed).</item>
+/// <item><c>Duplicate_TwoStepC_Yields_FailClosed</c> — OBS-02: an ILLEGITIMATE duplicate (non-convergent Step_C ×2) → Fail (binding fail-closed; Step_G ×2 stays legitimate).</item>
 /// <item><c>PromDeadRun_ImpliesMoreRunsThanEs_Yields_NonFatalWarning</c> — 67-03: Prom excess ⇒ WARNING, NOT Fail.</item>
 /// <item><c>PromWindowEdge_OneRunMismatch_WithinTolerance_StaysClean</c> — 67-03: ±1-run boundary tolerance, no warning, Pass.</item>
 /// <item><c>RetiredConflation_ResultSentShort_DoesNotFailVerdict</c> — 67-03: ResultSentCompleted short no longer fails (retired #2).</item>
@@ -33,9 +33,16 @@ namespace BaseApi.Tests.Observability.Analysis;
 /// </summary>
 public sealed class PassFailEngineFacts
 {
-    /// <summary>The full 9-label set (both sinks) — a COMPLETE run.</summary>
-    private static readonly string[] AllNineLabels =
-        { "Step_A", "Step_B", "Step_C", "Step_D1", "Step_E1", "Step_F1", "Step_D2", "Step_E2", "Step_F2" };
+    /// <summary>
+    /// The full 10-label completeness set as RAW labels for a COMPLETE run (73, D-10): Step_A…Step_F2 once
+    /// PLUS the convergent terminal Step_G TWICE (the legitimate per-arrival fan-in). DISTINCT collapses to 10;
+    /// the Step_G ×2 is exempt from the duplicate-fail via RunTrace.HasIllegitimateDuplicate. These facts pass
+    /// NO value map, so the engine's value-chain check skips them (legacy-caller behaviour) and each fact stays
+    /// focused on its ONE branch (completeness / duplicate / Prom corroboration). The dedicated value-chain
+    /// Pass/Fail proofs live in PassFailEngineValueChainFacts.
+    /// </summary>
+    private static readonly string[] AllTenLabelsWithConvergentGx2 =
+        { "Step_A", "Step_B", "Step_C", "Step_D1", "Step_E1", "Step_F1", "Step_D2", "Step_E2", "Step_F2", "Step_G", "Step_G" };
 
     /// <summary>
     /// A Prom snapshot CORROBORATING <paramref name="startedRuns"/> ES-observed runs: the orchestrator
@@ -60,12 +67,12 @@ public sealed class PassFailEngineFacts
     [Fact]
     public void Complete_AllStartedRuns_Yields_Pass()
     {
-        // 3 STARTED runs (distinct correlationIds), all 9-label complete → ES-binding Pass.
+        // 3 STARTED runs (distinct correlationIds), all 10-label complete (Step_G ×2 legitimate) → ES-binding Pass.
         var runs = new[]
         {
-            RunTrace.FromLabels("corr-1", "exec-1", AllNineLabels),
-            RunTrace.FromLabels("corr-2", "exec-2", AllNineLabels),
-            RunTrace.FromLabels("corr-3", "exec-3", AllNineLabels),
+            RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2),
+            RunTrace.FromLabels("corr-2", "exec-2", AllTenLabelsWithConvergentGx2),
+            RunTrace.FromLabels("corr-3", "exec-3", AllTenLabelsWithConvergentGx2),
         };
         var snap = CorroboratingSnapshot(startedRuns: 3);
 
@@ -81,9 +88,10 @@ public sealed class PassFailEngineFacts
     [Fact]
     public void Incomplete_StartedRun_DropsStepF2_Yields_Fail()
     {
-        // The run STARTED (it logged Step_A…) but is missing the Step_F2 sink → 8 labels → incomplete.
-        var eightLabels = AllNineLabels.Where(l => l != "Step_F2").ToArray();
-        var run = RunTrace.FromLabels("corr-1", "exec-1", eightLabels);
+        // The run STARTED (it logged Step_A…) but is missing the Step_F2 sink → 9 distinct labels → incomplete.
+        // Step_G ×2 stays legitimate (not a duplicate); the ONLY failure driver is the missing Step_F2.
+        var missingF2Labels = AllTenLabelsWithConvergentGx2.Where(l => l != "Step_F2").ToArray();
+        var run = RunTrace.FromLabels("corr-1", "exec-1", missingF2Labels);
         var snap = CorroboratingSnapshot(startedRuns: 1);
 
         var report = new PassFailEngine().Analyze(new[] { run }, snap, TriggerCountOf(snap), "unit-test");
@@ -98,8 +106,9 @@ public sealed class PassFailEngineFacts
     [Fact]
     public void Duplicate_TwoStepC_Yields_FailClosed()
     {
-        // All 9 distinct labels PRESENT, but Step_C appears twice → HasAnyDuplicateLabel true.
-        var labelsWithDuplicate = AllNineLabels.Concat(new[] { "Step_C" }).ToArray();
+        // All 10 distinct labels PRESENT (incl. the legitimate Step_G ×2), but Step_C appears twice → an
+        // ILLEGITIMATE (non-convergent) duplicate → HasIllegitimateDuplicate true → fail-closed.
+        var labelsWithDuplicate = AllTenLabelsWithConvergentGx2.Concat(new[] { "Step_C" }).ToArray();
         // Duplicate WITHIN one (correlationId, executionId) instance → fail-closed.
         var run = RunTrace.FromLabels("corr-1", "exec-1", labelsWithDuplicate);
         var snap = CorroboratingSnapshot(startedRuns: 1);
@@ -117,7 +126,7 @@ public sealed class PassFailEngineFacts
         // 2 fully-dead runs (dispatched, Step_A never logged). Under the OLD binding model this was a
         // hard Fail; under 67-03 it is a NON-FATAL corroboration warning — the ES-binding verdict (every
         // started run complete, no duplicate) still PASSES.
-        var run = RunTrace.FromLabels("corr-1", "exec-1", AllNineLabels);
+        var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
         var snap = CorroboratingSnapshot(startedRuns: 1) with
         {
             DispatchSentDelta = 3 * PassFailEngine.LabelsPerRun, // implies 3 runs vs ES 1
@@ -143,7 +152,7 @@ public sealed class PassFailEngineFacts
         // flagged; an out-of-tolerance NEGATIVE excess (started > implied) is intentionally not a warning
         // (see the asymmetry note in PassFailEngine.cs). Within ±1, both directions stay clean regardless.
         var runs = Enumerable.Range(1, 10)
-            .Select(i => RunTrace.FromLabels($"corr-{i}", $"exec-{i}", AllNineLabels))
+            .Select(i => RunTrace.FromLabels($"corr-{i}", $"exec-{i}", AllTenLabelsWithConvergentGx2))
             .ToArray();
         var snap = CorroboratingSnapshot(startedRuns: 10) with
         {
@@ -166,7 +175,7 @@ public sealed class PassFailEngineFacts
         // Retired conflation #2: under the OLD model ResultSentCompletedDelta < complete × 9 forced an
         // Unreconciled FAIL. Under 67-03 that arithmetic is gone from the binding gate — a complete
         // ES-binding cohort PASSES regardless of the ResultSentCompleted counter value.
-        var run = RunTrace.FromLabels("corr-1", "exec-1", AllNineLabels);
+        var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
         var snap = CorroboratingSnapshot(startedRuns: 1) with
         {
             ResultSentCompletedDelta = 8, // short of 9 — would have failed the OLD binding gate
@@ -181,7 +190,7 @@ public sealed class PassFailEngineFacts
     [Fact]
     public void DormantDedupeCounters_Absent_DoNotBlockPass()
     {
-        var run = RunTrace.FromLabels("corr-1", "exec-1", AllNineLabels);
+        var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
         var snap = CorroboratingSnapshot(startedRuns: 1) with
         {
             ResultDedupedDelta = null,   // absent / dormant
@@ -203,10 +212,10 @@ public sealed class PassFailEngineFacts
         // reconciles CLEAN (no warning); the ES-binding verdict (every run complete, no duplicate) PASSES.
         var runs = new[]
         {
-            RunTrace.FromLabels("corr-1", "exec-1a", AllNineLabels),
-            RunTrace.FromLabels("corr-1", "exec-1b", AllNineLabels),
-            RunTrace.FromLabels("corr-2", "exec-2a", AllNineLabels),
-            RunTrace.FromLabels("corr-2", "exec-2b", AllNineLabels),
+            RunTrace.FromLabels("corr-1", "exec-1a", AllTenLabelsWithConvergentGx2),
+            RunTrace.FromLabels("corr-1", "exec-1b", AllTenLabelsWithConvergentGx2),
+            RunTrace.FromLabels("corr-2", "exec-2a", AllTenLabelsWithConvergentGx2),
+            RunTrace.FromLabels("corr-2", "exec-2b", AllTenLabelsWithConvergentGx2),
         };
         var spawnExtra = runs.Select(r => r.CorrelationId).Distinct().Count();   // derived from data = 2
         var dispatch = 4 * PassFailEngine.LabelsPerRun;                          // 4 instances' worth of step dispatches
@@ -234,10 +243,10 @@ public sealed class PassFailEngineFacts
         // (every run complete, no duplicate) still PASSES — Prom is corroborating only.
         var runs = new[]
         {
-            RunTrace.FromLabels("corr-1", "exec-1a", AllNineLabels),
-            RunTrace.FromLabels("corr-1", "exec-1b", AllNineLabels),
-            RunTrace.FromLabels("corr-2", "exec-2a", AllNineLabels),
-            RunTrace.FromLabels("corr-2", "exec-2b", AllNineLabels),
+            RunTrace.FromLabels("corr-1", "exec-1a", AllTenLabelsWithConvergentGx2),
+            RunTrace.FromLabels("corr-1", "exec-1b", AllTenLabelsWithConvergentGx2),
+            RunTrace.FromLabels("corr-2", "exec-2a", AllTenLabelsWithConvergentGx2),
+            RunTrace.FromLabels("corr-2", "exec-2b", AllTenLabelsWithConvergentGx2),
         };
         var spawnExtra = runs.Select(r => r.CorrelationId).Distinct().Count();   // 2
         var dispatch = 4 * PassFailEngine.LabelsPerRun;
