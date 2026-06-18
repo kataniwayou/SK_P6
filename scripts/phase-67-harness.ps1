@@ -358,13 +358,25 @@ try {
     $stopBody = ConvertTo-Json @($wfId)
     try { Invoke-WebRequest -Method Post -Uri 'http://localhost:8080/api/v1/orchestration/stop' `
             -ContentType 'application/json' -Body $stopBody -TimeoutSec 15 -ErrorAction Stop | Out-Null } catch { }
-    $prevC = -1; $prevS = -1; $drainDeadline = (Get-Date).AddSeconds(180)
+    # Break on GAP CONVERGENCE, not "both flat": the orchestrator and processor export their counters
+    # INDEPENDENTLY on a ~60s OTLP cadence, so a counter can read flat for up to 60s BETWEEN exports even
+    # while its true value differs from the other service's. A "both flat over 15s" break therefore fires
+    # during an inter-export gap and pins windowEnd with a stale skew (observed live on TEST-04: orch_consumed
+    # @end 178 vs proc_sent 200, gap 22, despite ES 18/18 clean). Instead wait until |consumed - sent| <= 1 —
+    # for a binding scenario with no real loss the gap converges to 0 once both services' final values export
+    # (within one ~60s interval). A reporting-only scenario (counter reset / wipe loss) never converges; once
+    # both counters are flat across >=100s (> one export interval, so the flatness is REAL, not skew) stop
+    # waiting — MG-1 ignores that residual gap. The 180s deadline bounds both paths.
+    $prevC = -1; $prevS = -1; $polls = 0; $drainDeadline = (Get-Date).AddSeconds(180)
     do {
-        Start-Sleep -Seconds 15
+        Start-Sleep -Seconds 20
+        $polls++
         $c = Get-PromSum 'orchestrator_messages_consumed_total'
         $s = Get-PromSum 'processor_messages_sent_total'
-        Write-Phase "  drain: orch_consumed=$c proc_sent=$s gap=$([math]::Abs($c - $s))" 'Gray'
-        if ($c -eq $prevC -and $s -eq $prevS) { break }   # both flat over one interval -> result pipeline settled
+        $gap = [math]::Abs($c - $s)
+        Write-Phase "  drain: orch_consumed=$c proc_sent=$s gap=$gap" 'Gray'
+        if ($gap -le 1) { break }                                              # converged (binding scenarios)
+        if ($c -eq $prevC -and $s -eq $prevS -and $polls -ge 5) { break }      # real flat past one export interval (reporting-only)
         $prevC = $c; $prevS = $s
     } while ((Get-Date) -lt $drainDeadline)
     $windowEnd = [DateTimeOffset]::UtcNow
