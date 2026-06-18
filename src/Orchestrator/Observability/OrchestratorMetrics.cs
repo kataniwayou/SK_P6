@@ -3,8 +3,9 @@ using System.Diagnostics.Metrics;
 namespace Orchestrator.Observability;
 
 /// <summary>
-/// METRIC-04 — the Orchestrator's code-owned <see cref="Meter"/> ("Orchestrator") holding two
-/// monotonic <see cref="Counter{T}"/> instruments for the per-processor dispatch-bottleneck PromQL.
+/// Phase 74 (REQ-1/REQ-6) — the Orchestrator's code-owned <see cref="Meter"/> ("Orchestrator") holding the
+/// uniform two-counter business model (<c>orchestrator_messages_consumed</c> / <c>orchestrator_messages_sent</c>)
+/// plus the kept <c>orchestrator_step_unresolved</c> counter.
 /// <para>
 /// Built via <see cref="IMeterFactory"/> (the .NET 8 blessed DI pattern, auto-registered by the
 /// generic host) — NEVER a <c>static Meter</c> field, which would leak across tests in the shared
@@ -15,8 +16,9 @@ namespace Orchestrator.Observability;
 /// <para>
 /// The counter names are snake_case with NO Prometheus counter suffix (D-03): the collector's
 /// prometheus exporter <c>add_metric_suffixes</c> default appends the suffix itself, so embedding it
-/// in the instrument name here would double it. Each counter is tagged <c>ProcessorId</c> at the
-/// increment site and inherits the ambient <c>service_instance_id</c> resource label from Plan 01.
+/// in the instrument name here would double it. The two business counters are tagged camelCase
+/// <c>workflowId</c>+<c>processorId</c> (D-07) at the increment site (<c>messageId</c> is the counting
+/// unit, never a label — D-04) and inherit the ambient <c>service_instance_id</c> resource label.
 /// </para>
 /// </summary>
 public sealed class OrchestratorMetrics
@@ -24,22 +26,21 @@ public sealed class OrchestratorMetrics
     /// <summary>The meter name — MUST equal the <c>AddMeter("Orchestrator")</c> registration (D-02).</summary>
     public const string MeterName = "Orchestrator";
 
-    /// <summary><c>orchestrator_dispatch_sent</c> — incremented AFTER <c>endpoint.Send</c> in StepDispatcher.</summary>
-    public Counter<long> DispatchSent { get; }
-
-    /// <summary><c>orchestrator_result_consumed</c> — incremented at the TOP of TypedResultConsumer&lt;T&gt;.Consume.</summary>
-    public Counter<long> ResultConsumed { get; }
+    /// <summary>
+    /// <c>orchestrator_messages_consumed</c> (Phase 74, REQ-1/D-03) — incremented ONCE at the consume entry
+    /// of <see cref="Consumers.TypedResultConsumer{T}"/>.Consume, one per consumed result. Tagged camelCase
+    /// <c>workflowId</c>+<c>processorId</c> (D-07); <c>messageId</c> is the counting unit, NOT a label (D-04).
+    /// </summary>
+    public Counter<long> MessagesConsumed { get; }
 
     /// <summary>
-    /// <c>orchestrator_result_deduped</c> — RETAINED-BUT-DORMANT post-RETIRE-01. Originally (Phase 32, D-10)
-    /// incremented at the <c>flag[H]=="Ack"</c> effect-first dedup drop gate in the retired
-    /// <c>ResultConsumer</c>. That gate was removed when <see cref="Consumers.TypedResultConsumer{T}"/>
-    /// replaced it (the typed consumer is dedup-free by design, D-07), so this counter currently has NO
-    /// increment site and emits no series. It is intentionally kept (and still covered by
-    /// <c>BreakerMetricsFacts</c>) as the meter slot for a possible future dedup feature — do NOT expect a
-    /// live series from it today.
+    /// <c>orchestrator_messages_sent</c> (Phase 74, REQ-1/D-02) — incremented after EVERY successful outbound
+    /// broker Send: forward dispatch (StepDispatcher), fan-out per match (OrchestratorPrePipeline), and the
+    /// keeper REINJECT/DELETE/INJECT escalations (OrchestratorPrePipeline + RelocateTail SendKeeper). A
+    /// failed/exhausted Send does NOT count (count-after-success). Tagged camelCase
+    /// <c>workflowId</c>+<c>processorId</c> (D-05/D-06/D-07); <c>messageId</c> is NOT a label (D-04).
     /// </summary>
-    public Counter<long> ResultDeduped { get; }
+    public Counter<long> MessagesSent { get; }
 
     /// <summary>
     /// <c>orchestrator_step_unresolved</c> — incremented (Plan 03) at each L1-resolution miss: a dangling
@@ -51,9 +52,8 @@ public sealed class OrchestratorMetrics
     public OrchestratorMetrics(IMeterFactory meterFactory)
     {
         var meter = meterFactory.Create(MeterName);
-        DispatchSent   = meter.CreateCounter<long>("orchestrator_dispatch_sent");       // D-03 — collector appends the suffix
-        ResultConsumed = meter.CreateCounter<long>("orchestrator_result_consumed");     // D-03 — collector appends the suffix
-        ResultDeduped  = meter.CreateCounter<long>("orchestrator_result_deduped");      // Phase 32 D-10 — collector appends the suffix
-        StepUnresolved = meter.CreateCounter<long>("orchestrator_step_unresolved");     // Phase 72 D-03 — collector appends the suffix
+        MessagesConsumed = meter.CreateCounter<long>("orchestrator_messages_consumed"); // Phase 74 D-03 — collector appends the suffix
+        MessagesSent     = meter.CreateCounter<long>("orchestrator_messages_sent");     // Phase 74 D-02 — collector appends the suffix
+        StepUnresolved   = meter.CreateCounter<long>("orchestrator_step_unresolved");   // Phase 72 D-03 — collector appends the suffix
     }
 }
