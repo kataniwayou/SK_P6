@@ -48,9 +48,13 @@ public abstract class TypedResultConsumer<TMessage>(
         var m = context.Message;
         _ = logger;   // reserved — the pipeline owns all trip-end / drop logging (ids-only, T-70-10).
 
-        // METRIC-04: count EVERY consumed result at the TOP, BEFORE the pipeline runs, so the graceful
-        // trip-end acks inside the pipeline are ALSO counted. Tagged ProcessorId only (cardinality); ambient sid.
-        metrics.ResultConsumed.Add(1, new KeyValuePair<string, object?>("ProcessorId", m.ProcessorId.ToString("D")));
+        // Phase 74 (REQ-1/D-03): count EVERY consumed result ONCE at the consume entry, BEFORE the pipeline
+        // runs, so the graceful trip-end acks inside the pipeline are ALSO counted. Tagged camelCase
+        // workflowId+processorId (D-07); messageId is the counting unit, never a label (D-04). `m` is the
+        // consumed IStepResult (IExecutionCorrelated) → both ids in-hand. Ambient service_instance_id.
+        metrics.MessagesConsumed.Add(1,
+            new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>("processorId", m.ProcessorId.ToString("D")));
 
         // Delegate to the shared Pre pipeline: L1 resolution -> two-reason trip-end / out: gate-read ->
         // fan-out to orchestrator-result-post -> delete out:. The inbound envelope MessageId is threaded so a

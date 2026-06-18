@@ -34,10 +34,15 @@ public sealed class StepDispatcher(
         var endpoint = await sendProvider.GetSendEndpoint(new Uri($"queue:{processorId:D}"));
         await endpoint.Send(msg, ct);
 
-        // METRIC-04 (D-04): SENT = count-AFTER-Send — an infra throw on Send correctly skips this
-        // increment. Tagged ProcessorId only (no workflowId — cardinality, D-03/SPEC); the literal
-        // PascalCase key is preserved by the collector exporter so `sum by (ProcessorId)` works verbatim.
-        // The "D" format mirrors the queue:{processorId:D} naming. service_instance_id is ambient (Plan 01).
-        metrics.DispatchSent.Add(1, new KeyValuePair<string, object?>("ProcessorId", processorId.ToString("D")));
+        // Phase 74 (REQ-1/D-02): SENT = count-AFTER-Send — an infra throw on Send correctly skips this
+        // increment (a failed/exhausted send must not count). Tagged camelCase workflowId+processorId (D-07);
+        // messageId is never a label (D-04). D-05: processorId here = the dispatch recipient = the target
+        // queue's processor (this `processorId` method param). Both label values are in-hand as method params.
+        // The "D" format mirrors the queue:{processorId:D} naming. service_instance_id is ambient. This single
+        // site covers BOTH the orchestrator's direct forward dispatch AND RelocateTail's post-process dispatch
+        // (both call DispatchAsync) — do NOT add a second dispatch increment in RelocateTail (no double-count).
+        metrics.MessagesSent.Add(1,
+            new KeyValuePair<string, object?>("workflowId", workflowId.ToString("D")),
+            new KeyValuePair<string, object?>("processorId", processorId.ToString("D")));
     }
 }
