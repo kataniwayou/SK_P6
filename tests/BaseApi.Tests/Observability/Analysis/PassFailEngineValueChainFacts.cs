@@ -78,6 +78,8 @@ public sealed class PassFailEngineValueChainFacts
         OrchestratorMessagesConsumedDelta = 0,
         ProcessorMessagesConsumedDelta = 0,
         ProcessorMessagesSentDelta = 0,
+        OrchestratorMessagesConsumedAtEnd = 0,
+        ProcessorMessagesSentAtEnd = 0,
         KeeperMessagesConsumedDelta = 0,
         KeeperMessagesSentDelta = 0,
         KeeperL2ProbeRate = 0.2,

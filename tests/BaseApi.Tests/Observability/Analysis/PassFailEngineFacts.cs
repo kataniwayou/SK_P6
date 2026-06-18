@@ -51,6 +51,8 @@ public sealed class PassFailEngineFacts
         OrchestratorMessagesConsumedDelta = 0,
         ProcessorMessagesConsumedDelta = 0,
         ProcessorMessagesSentDelta = 0,
+        OrchestratorMessagesConsumedAtEnd = 0,
+        ProcessorMessagesSentAtEnd = 0,
         KeeperMessagesConsumedDelta = 0,
         KeeperMessagesSentDelta = 0,
         KeeperL2ProbeRate = 0.2,
@@ -140,6 +142,8 @@ public sealed class PassFailEngineFacts
         OrchestratorMessagesConsumedDelta = results,           // == processor_sent at quiescence (MG-1)
         ProcessorMessagesConsumedDelta = results,
         ProcessorMessagesSentDelta = results,
+        OrchestratorMessagesConsumedAtEnd = results,           // == processor_sent@end → MG-1 conservation holds
+        ProcessorMessagesSentAtEnd = results,
         KeeperMessagesConsumedDelta = keeperConsumed,
         KeeperMessagesSentDelta = keeperSent,
         KeeperL2ProbeRate = probeRate,
@@ -160,7 +164,7 @@ public sealed class PassFailEngineFacts
     public void MetricGate_ConservationBroken_Yields_Fail()
     {
         var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
-        var snap = ConservingSnapshot(results: 9) with { OrchestratorMessagesConsumedDelta = 9, ProcessorMessagesSentDelta = 4 };
+        var snap = ConservingSnapshot(results: 9) with { OrchestratorMessagesConsumedAtEnd = 9, ProcessorMessagesSentAtEnd = 4 };
         var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-test");
         Assert.False(report.MetricGate.ConservationOk);
         Assert.Equal(Verdict.Fail, report.Verdict);
@@ -173,7 +177,7 @@ public sealed class PassFailEngineFacts
         // A scenario whose conservation counter reset (or L2 was wiped) shows ConservationOk=false, but
         // because MG-1 is reporting-only for it (mg1Binding:false), the verdict is NOT gated on it.
         var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
-        var snap = ConservingSnapshot(results: 9) with { OrchestratorMessagesConsumedDelta = 9, ProcessorMessagesSentDelta = 4 };
+        var snap = ConservingSnapshot(results: 9) with { OrchestratorMessagesConsumedAtEnd = 9, ProcessorMessagesSentAtEnd = 4 };
         var report = new PassFailEngine().Analyze(new[] { run }, snap, "TEST-02", mg1Binding: false);
         Assert.False(report.MetricGate.ConservationOk);   // still reported
         Assert.False(report.MetricGate.Mg1Binding);       // but not binding

@@ -205,7 +205,7 @@ public sealed class PassFailEngine
         // ── METRIC GATE (binding, at quiescence) ──
         const double ConservationTol = 1.0;   // ±1 for window-boundary in-flight
         var conservationOk =
-            Math.Abs(prom.OrchestratorMessagesConsumedDelta - prom.ProcessorMessagesSentDelta) <= ConservationTol;
+            Math.Abs(prom.OrchestratorMessagesConsumedAtEnd - prom.ProcessorMessagesSentAtEnd) <= ConservationTol;
         var keeperRecoveryOk = expectsKeeperActivity
             ? (prom.KeeperMessagesConsumedDelta > 0 && prom.KeeperMessagesSentDelta > 0)
             : true;   // scenarios recovered by broker redelivery don't require keeper activity
@@ -214,8 +214,8 @@ public sealed class PassFailEngine
         var corroborationDetail = new List<string>();
         if (!conservationOk && mg1Binding)
             corroborationDetail.Add(
-                $"MG-1 conservation FAIL: orchestrator_consumed={prom.OrchestratorMessagesConsumedDelta} != " +
-                $"processor_sent={prom.ProcessorMessagesSentDelta} (>{ConservationTol}) — message loss or leak.");
+                $"MG-1 conservation FAIL: orchestrator_consumed@end={prom.OrchestratorMessagesConsumedAtEnd} != " +
+                $"processor_sent@end={prom.ProcessorMessagesSentAtEnd} (>{ConservationTol}) — message loss or leak.");
         if (!keeperRecoveryOk)
             corroborationDetail.Add(
                 $"MG-2 keeper-recovery FAIL: expected keeper activity but keeper_consumed={prom.KeeperMessagesConsumedDelta}, " +

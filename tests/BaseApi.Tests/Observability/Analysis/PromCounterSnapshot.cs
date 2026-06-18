@@ -41,6 +41,17 @@ public sealed record PromCounterSnapshot
     /// </summary>
     public required double ProcessorMessagesSentDelta { get; init; }
 
+    /// <summary>orchestrator_messages_consumed_total CUMULATIVE value at windowEnd (NOT a delta). MG-1
+    /// conservation is checked on the windowEnd-cumulative pair, not the windowed delta, because the
+    /// harness --force-recreate leaves stale pre-recreate series in Prometheus's ~5-min lookback that
+    /// inflate the windowStart-pinned sum and corrupt the delta; the windowEnd read is clean (old series
+    /// age out by then).</summary>
+    public required double OrchestratorMessagesConsumedAtEnd { get; init; }
+
+    /// <summary>processor_messages_sent_total CUMULATIVE value at windowEnd (NOT a delta). The MG-1 pair
+    /// with <see cref="OrchestratorMessagesConsumedAtEnd"/>; see that field for why windowEnd-cumulative.</summary>
+    public required double ProcessorMessagesSentAtEnd { get; init; }
+
     /// <summary>keeper_messages_consumed_total — windowed delta. &gt; 0 proves the keeper consumed recovery work.</summary>
     public required double KeeperMessagesConsumedDelta { get; init; }
 

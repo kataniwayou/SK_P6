@@ -589,6 +589,11 @@ public sealed class AnalyzerE2ETests
             ProcessorMessagesConsumedDelta = after.ProcessorMessagesConsumed - before.ProcessorMessagesConsumed,
             ProcessorMessagesSentDelta = after.ProcessorMessagesSent - before.ProcessorMessagesSent,
 
+            // MG-1: the CLEAN windowEnd-cumulative reads MG-1 conservation uses (the windowed-delta baseline is
+            // corrupted by --force-recreate lingering pre-recreate series in Prom's ~5-min lookback).
+            OrchestratorMessagesConsumedAtEnd = after.OrchestratorMessagesConsumed,
+            ProcessorMessagesSentAtEnd = after.ProcessorMessagesSent,
+
             // MG-2: keeper consumed/sent as windowed deltas (after − before), same shape as the four above.
             KeeperMessagesConsumedDelta = after.KeeperMessagesConsumed - before.KeeperMessagesConsumed,
             KeeperMessagesSentDelta = after.KeeperMessagesSent - before.KeeperMessagesSent,
