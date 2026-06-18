@@ -178,14 +178,19 @@ public sealed class AnalyzerE2ETests
         // ±1-run tolerance absorbs any single-unit rounding wobble, so ToEven is intentionally accepted.
         var triggerCount = PassFailEngine.TriggerCountFrom(promSnapshot);
 
-        // Precondition: at least one dispatch must have fired in the window. A zero DispatchSentDelta
-        // AND zero ES traces would let the ES-binding verdict pass vacuously (0 started, 0 missing) even
-        // though the fan-out workflow precondition is broken. Fail LOUD here instead. (WR-04 fix —
-        // re-anchored on dispatch presence as the firing precondition; the ES started count remains the
-        // verdict denominator inside the engine.)
-        Assert.True(triggerCount > 0,
-            $"No dispatches observed in the window (DispatchSentDelta={promSnapshot.DispatchSentDelta}); " +
-            "the fan-out workflow precondition is not satisfied.");
+        // Precondition: the fan-out must have actually fired in the window. The BINDING evidence of a
+        // fire is the ES started-run count (distinct correlationIds with >=1 Step_* log), NOT the raw Prom
+        // counter delta. A force-recreate / orchestrator restart resets orchestrator_dispatch_sent_total
+        // AND leaves the pre-restart container's series lingering in Prom's ~5min instant-query lookback,
+        // so the windowed delta can sum to a NEGATIVE value (counter reset) even when the DAG fired
+        // normally — observed live (phase-73 harness run): DispatchSentDelta=-2337 with 20 ES started runs.
+        // Per this guard's own documented intent ("a zero DispatchSentDelta AND zero ES traces would let
+        // the verdict pass vacuously"), the broken precondition is ONLY a true no-fire: no Prom delta AND
+        // no ES traces. Phase 73 is ES-primary and explicitly defers metric assertions, so a Prom-only
+        // counter-reset artifact must never abort the ES value-chain audit. (WR-04 + phase-73 live fix.)
+        Assert.True(triggerCount > 0 || traces.Count > 0,
+            $"No fan-out fire observed in the window: DispatchSentDelta={promSnapshot.DispatchSentDelta} " +
+            $"AND zero ES Step_* traces (started runs={traces.Count}); the precondition is not satisfied.");
 
         // ── 7. RUN THE ENGINE (pure — no IO) ─────────────────────────────────────────────────────────
         //    SPAWN-AWARE OBS-03: the entry step emits 2 results from 1 dispatch, so ResultConsumed runs
