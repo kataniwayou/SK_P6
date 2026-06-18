@@ -16,7 +16,7 @@ namespace Keeper.Recovery;
 /// <c>MessageId</c> overridden to the carried <see cref="OrchestratorReinject.MessageId"/> (D-03 — "same
 /// messageId"). An absent/empty <c>out:</c> blob (STRLEN==0, NO Redis exception) is a BY-DESIGN silent drop —
 /// ack with no throw and no send, emitting a structured warning (ids only, never the payload). Phase 74
-/// (REQ-3): the legacy <c>keeper_reinject_dropped</c> drop counter is removed — the only success-path counter
+/// (REQ-3): the legacy reinject-drop counter is removed — the only success-path counter
 /// is the shared <see cref="RecoveryConsumerBase{TMessage}.CountSent"/> (<c>keeper_messages_sent</c>), called
 /// after the confirmed send and NEVER on this drop branch. A Redis
 /// EXCEPTION on the read is still infra → <see cref="RecoveryConsumerBase{TMessage}.Guard"/> → exhaustion
@@ -41,7 +41,7 @@ public sealed class OrchestratorReinjectConsumer(
             ct) != 0;
         if (!present)
         {
-            // Phase 74 (REQ-3): the legacy keeper_reinject_dropped counter is REMOVED; the by-design-drop
+            // Phase 74 (REQ-3): the legacy reinject-drop counter is REMOVED; the by-design-drop
             // structured warning survives (ids only — never log the relocated blob). No keeper_messages_sent
             // here — a drop never sends, so CountSent must NEVER fire on this early-return path (D-02 / T-74-06).
             logger.LogWarning("Orchestrator REINJECT drop: out: gone EntryId={EntryId}", m.EntryId);   // ids only — never log the relocated blob
@@ -68,5 +68,8 @@ public sealed class OrchestratorReinjectConsumer(
         // result queue with the envelope MessageId overridden to the carried m.MessageId (D-03 — SAME id).
         var ep = await Guard(() => Send.GetSendEndpoint(new Uri($"queue:{OrchestratorQueues.Result}")), ct);
         await Guard(() => ep.Send((object)step, ctx => ctx.MessageId = m.MessageId, CancellationToken.None), ct);
+        // REQ-3 / D-09: count keeper_messages_sent AFTER the confirmed send (Guard re-throws on exhaustion, so
+        // a failed/exhausted send never reaches here — T-74-06). NEVER on the absent-out: drop branch above.
+        CountSent(m.WorkflowId, m.ProcessorId);
     }
 }

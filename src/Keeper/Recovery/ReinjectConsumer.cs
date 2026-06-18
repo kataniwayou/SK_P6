@@ -15,7 +15,7 @@ namespace Keeper.Recovery;
 /// direct dispatch uses. Phase 52 (D-06/D-07): an absent/empty L2[entryId] (STRLEN==0, NO Redis exception)
 /// is now a BY-DESIGN silent drop — ack with no throw and no send, emitting a structured warning
 /// (A18 "accepted silent losses": the data is genuinely gone, so a replay can't proceed and nothing
-/// downstream is lost). Phase 74 (REQ-3): the legacy <c>keeper_reinject_dropped</c> drop counter is removed —
+/// downstream is lost). Phase 74 (REQ-3): the legacy reinject-drop counter is removed —
 /// the only counter on the success path is the shared <see cref="RecoveryConsumerBase{TMessage}.CountSent"/>
 /// (<c>keeper_messages_sent</c>), called after the confirmed send and NEVER on this drop branch. A Redis
 /// EXCEPTION on the read is still infra → <see cref="RecoveryConsumerBase{TMessage}.Guard"/> → exhaustion
@@ -37,7 +37,7 @@ public sealed class ReinjectConsumer(
             ct) != 0;
         if (!present)
         {
-            // Phase 74 (REQ-3): the legacy keeper_reinject_dropped counter is REMOVED; the by-design-drop
+            // Phase 74 (REQ-3): the legacy reinject-drop counter is REMOVED; the by-design-drop
             // structured warning survives (never log the Payload). No keeper_messages_sent here — a drop
             // never sends, so CountSent must NEVER fire on this early-return path (D-02 / T-74-06).
             logger.LogWarning("REINJECT drop: L2 data gone EntryId={EntryId}", m.EntryId);   // structured hole (never log Payload)
@@ -60,5 +60,8 @@ public sealed class ReinjectConsumer(
         // SendContext.MessageId to the carried m.MessageId (precedent: OutboundCorrelationSendFilter
         // sets SendContext.CorrelationId). No inbox/dedup on this endpoint, so the reused id is safe.
         await Guard(() => ep.Send(dispatch, ctx => ctx.MessageId = m.MessageId, CancellationToken.None), ct);
+        // REQ-3 / D-09: count keeper_messages_sent AFTER the confirmed send (Guard re-throws on exhaustion, so
+        // a failed/exhausted send never reaches here — T-74-06). NEVER on the absent-data drop branch above.
+        CountSent(m.WorkflowId, m.ProcessorId);
     }
 }

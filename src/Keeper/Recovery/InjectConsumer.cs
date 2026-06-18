@@ -57,6 +57,10 @@ public sealed class InjectConsumer(
         // (e.g. bus not yet fully started) routes through the bounded RetryLoop like every other op.
         var ep = await Guard(() => Send.GetSendEndpoint(new Uri($"queue:{OrchestratorQueues.Result}")), ct);
         await Guard(() => ep.Send((object)step, ctx => ctx.MessageId = dr.MessageId, CancellationToken.None), ct);
+        // REQ-3 / D-09: count keeper_messages_sent AFTER the confirmed send (Guard re-throws on exhaustion → a
+        // failed/exhausted send never reaches here, T-74-06). D-06: recipient is the orchestrator-result queue
+        // (not a processor) → use the producing processor's id (the only processor identity on the message).
+        CountSent(m.WorkflowId, m.ProcessorId);
 
         // 3) delete L2[entryId] (the source DeleteEntryId) — AFTER the confirmed send (Pitfall 5 order).
         await Guard(() => Db.KeyDeleteAsync(L2ProjectionKeys.ExecutionData(m.DeleteEntryId)), ct);

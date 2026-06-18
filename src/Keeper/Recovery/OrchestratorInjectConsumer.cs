@@ -57,6 +57,10 @@ public sealed class OrchestratorInjectConsumer(
         };
         var ep = await Guard(() => Send.GetSendEndpoint(new Uri($"queue:{h.ProcessorId:D}")), ct);
         await Guard(() => ep.Send(dispatch, ctx => ctx.MessageId = m.MessageId, CancellationToken.None), ct);
+        // REQ-3 / D-09: count keeper_messages_sent AFTER the confirmed dispatch (Guard re-throws on exhaustion →
+        // a failed/exhausted send never reaches here, T-74-06). D-05: an OrchestratorInject recipient IS a
+        // processor → processorId = m.ProcessorId (the NextProcessorId == h.ProcessorId dispatch recipient).
+        CountSent(m.WorkflowId, m.ProcessorId);
 
         // 3) delete L2[out:DeleteEntryId] (the source out: entry) AFTER the confirmed dispatch (strict order).
         await Guard(() => Db.KeyDeleteAsync(L2ProjectionKeys.OutputData(m.DeleteEntryId)), ct);
