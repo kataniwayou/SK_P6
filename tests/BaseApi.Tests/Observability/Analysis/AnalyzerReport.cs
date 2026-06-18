@@ -2,6 +2,19 @@ using System.Text.Json.Serialization;
 
 namespace BaseApi.Tests.Observability.Analysis;
 
+/// <summary>Phase 74+ binding metric gate (evaluated at quiescence). All three fold into the verdict.</summary>
+public sealed record MetricGateResult
+{
+    /// <summary>MG-1: orchestrator_messages_consumed == processor_messages_sent (±1). False ⇒ real loss/leak.</summary>
+    public required bool ConservationOk { get; init; }
+    /// <summary>MG-2: for keeper-recovery scenarios, keeper_messages_consumed &gt; 0 AND sent &gt; 0 (else expected 0). </summary>
+    public required bool KeeperRecoveryOk { get; init; }
+    /// <summary>MG-3: rate(keeper_l2_probe) &gt; 0 — keeper alive and probing.</summary>
+    public required bool ProbeLiveOk { get; init; }
+    /// <summary>True iff this scenario's recovery path runs through the keeper (drives MG-2's direction).</summary>
+    public required bool ExpectsKeeperActivity { get; init; }
+}
+
 /// <summary>The single per-scenario correctness verdict.</summary>
 public enum Verdict
 {
@@ -161,4 +174,11 @@ public sealed record AnalyzerReport
 
     /// <summary>A human-readable one-line summary of the verdict and its drivers.</summary>
     public required string HumanSummary { get; init; }
+
+    /// <summary>
+    /// Phase 74+ binding metric gate (evaluated at quiescence): MG-1 result conservation, MG-2 per-scenario
+    /// keeper recovery, MG-3 probe liveness. All three fold into <see cref="Verdict"/>; a failing gate emits
+    /// detail into <see cref="CorroborationDetail"/> and flips <see cref="Reconciliation"/> to Unreconciled.
+    /// </summary>
+    public required MetricGateResult MetricGate { get; init; }
 }

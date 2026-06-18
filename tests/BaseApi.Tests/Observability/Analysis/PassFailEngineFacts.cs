@@ -40,13 +40,20 @@ public sealed class PassFailEngineFacts
     private static readonly string[] AllTenLabelsWithConvergentGx2 =
         { "Step_A", "Step_B", "Step_C", "Step_D1", "Step_E1", "Step_F1", "Step_D2", "Step_E2", "Step_F2", "Step_G", "Step_G" };
 
-    // A clean 4-delta snapshot; no per-run scaling (corroboration retired).
+    // A clean snapshot that isolates the ES-binding branches (completeness / duplicate): result conservation
+    // HOLDS (consumed == sent, |0−0| ≤ 1) and the keeper probe is LIVE (rate > 0) so the Phase-74 binding
+    // metric gate passes and never confounds those branches. Keeper recovery deltas stay 0 (these facts pass
+    // no expectsKeeperActivity → MG-2 expects 0). Probe rate is positive so MG-3 passes — a zero probe would
+    // fail every Pass-asserting fact built on this snapshot.
     private static PromCounterSnapshot CleanSnapshot() => new()
     {
         OrchestratorMessagesSentDelta = 0,
         OrchestratorMessagesConsumedDelta = 0,
         ProcessorMessagesConsumedDelta = 0,
         ProcessorMessagesSentDelta = 0,
+        KeeperMessagesConsumedDelta = 0,
+        KeeperMessagesSentDelta = 0,
+        KeeperL2ProbeRate = 0.2,
     };
 
     [Fact]
@@ -112,13 +119,82 @@ public sealed class PassFailEngineFacts
         var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
         var snap = CleanSnapshot() with
         {
-            ProcessorMessagesSentDelta = 8, // short of 9 — would have failed the OLD binding gate
+            // short of the OLD complete×9 expectation — would have failed the RETIRED binding gate. Conservation
+            // is kept BALANCED (orchestrator_consumed == processor_sent) so the NEW binding MG-1 gate is not
+            // confounded: this fact isolates "the retired complete×9 counter no longer gates", not MG-1.
+            OrchestratorMessagesConsumedDelta = 8,
+            ProcessorMessagesSentDelta = 8,
         };
 
         var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-test");
 
         Assert.Equal(1, report.CompleteRuns);
         Assert.Equal(Verdict.Pass, report.Verdict); // ES-binding pass; the retired counter no longer gates
+    }
+
+    // A quiescent, conserving snapshot for N "results": result conservation holds exactly at drain.
+    private static PromCounterSnapshot ConservingSnapshot(double results, double keeperConsumed = 0,
+        double keeperSent = 0, double probeRate = 0.2) => new()
+    {
+        OrchestratorMessagesSentDelta = results * 2,            // ~2x results (two-consumer hop); not asserted
+        OrchestratorMessagesConsumedDelta = results,           // == processor_sent at quiescence (MG-1)
+        ProcessorMessagesConsumedDelta = results,
+        ProcessorMessagesSentDelta = results,
+        KeeperMessagesConsumedDelta = keeperConsumed,
+        KeeperMessagesSentDelta = keeperSent,
+        KeeperL2ProbeRate = probeRate,
+    };
+
+    [Fact]
+    public void MetricGate_ConservationHolds_ProbeLive_Yields_Pass()
+    {
+        var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
+        var snap = ConservingSnapshot(results: 9);
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-test");
+        Assert.True(report.MetricGate.ConservationOk);
+        Assert.True(report.MetricGate.ProbeLiveOk);
+        Assert.Equal(Verdict.Pass, report.Verdict);
+    }
+
+    [Fact]
+    public void MetricGate_ConservationBroken_Yields_Fail()
+    {
+        var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
+        var snap = ConservingSnapshot(results: 9) with { OrchestratorMessagesConsumedDelta = 9, ProcessorMessagesSentDelta = 4 };
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-test");
+        Assert.False(report.MetricGate.ConservationOk);
+        Assert.Equal(Verdict.Fail, report.Verdict);
+        Assert.NotEmpty(report.CorroborationDetail);
+    }
+
+    [Fact]
+    public void MetricGate_ProbeDead_Yields_Fail()
+    {
+        var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
+        var snap = ConservingSnapshot(results: 9, probeRate: 0.0);
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-test");
+        Assert.False(report.MetricGate.ProbeLiveOk);
+        Assert.Equal(Verdict.Fail, report.Verdict);
+    }
+
+    [Fact]
+    public void MetricGate_KeeperExpected_ButSilent_Yields_Fail()
+    {
+        var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
+        var snap = ConservingSnapshot(results: 9, keeperConsumed: 0, keeperSent: 0);
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-test", expectsKeeperActivity: true);
+        Assert.False(report.MetricGate.KeeperRecoveryOk);
+        Assert.Equal(Verdict.Fail, report.Verdict);
+    }
+
+    [Fact]
+    public void MetricGate_KeeperExpected_AndActive_Yields_Pass()
+    {
+        var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
+        var snap = ConservingSnapshot(results: 9, keeperConsumed: 5, keeperSent: 4);
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-test", expectsKeeperActivity: true);
+        Assert.True(report.MetricGate.KeeperRecoveryOk);
+        Assert.Equal(Verdict.Pass, report.Verdict);
     }
 
     [Fact]

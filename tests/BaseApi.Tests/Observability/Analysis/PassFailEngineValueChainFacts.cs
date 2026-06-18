@@ -66,13 +66,21 @@ public sealed class PassFailEngineValueChainFacts
         return RunTrace.FromLabels(corr, exec, labels, ChainValues(seed));
     }
 
-    /// <summary>A clean 4-delta snapshot; no per-run scaling (corroboration retired) — kept so a fact isolates the value-chain branch.</summary>
+    /// <summary>
+    /// A clean snapshot that isolates the value-chain branch: result conservation HOLDS (consumed == sent == 0,
+    /// |0−0| ≤ 1) and the keeper probe is LIVE (rate &gt; 0) so the Phase-74 binding metric gate passes and never
+    /// confounds a value-chain verdict. Keeper recovery deltas stay 0 (no expectsKeeperActivity here → MG-2
+    /// expects 0). Probe rate is positive so MG-3 passes — a zero probe would fail every Pass-asserting fact.
+    /// </summary>
     private static PromCounterSnapshot CleanSnapshot() => new()
     {
         OrchestratorMessagesSentDelta = 0,
         OrchestratorMessagesConsumedDelta = 0,
         ProcessorMessagesConsumedDelta = 0,
         ProcessorMessagesSentDelta = 0,
+        KeeperMessagesConsumedDelta = 0,
+        KeeperMessagesSentDelta = 0,
+        KeeperL2ProbeRate = 0.2,
     };
 
     // seeds locked by D-02: exec_a 100 (→ Step_G 106), exec_b 200 (→ Step_G 206).

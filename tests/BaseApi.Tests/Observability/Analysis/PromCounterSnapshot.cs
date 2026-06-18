@@ -40,4 +40,13 @@ public sealed record PromCounterSnapshot
     /// total == completed and Expected = COMPLETE runs × 9 still holds; the <c>outcome</c> label is gone).
     /// </summary>
     public required double ProcessorMessagesSentDelta { get; init; }
+
+    /// <summary>keeper_messages_consumed_total — windowed delta. &gt; 0 proves the keeper consumed recovery work.</summary>
+    public required double KeeperMessagesConsumedDelta { get; init; }
+
+    /// <summary>keeper_messages_sent_total — windowed delta. &gt; 0 proves the keeper re-emitted recovery messages.</summary>
+    public required double KeeperMessagesSentDelta { get; init; }
+
+    /// <summary>rate(keeper_l2_probe_total[…]) — the BIT probe cadence. &gt; 0 proves the keeper is live and probing L2.</summary>
+    public required double KeeperL2ProbeRate { get; init; }
 }

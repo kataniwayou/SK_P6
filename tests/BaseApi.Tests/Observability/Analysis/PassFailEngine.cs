@@ -98,7 +98,8 @@ public sealed class PassFailEngine
                                   string scenarioId,
                                   IReadOnlyDictionary<string, double>? tripDurationMsByExecution = null,
                                   IReadOnlyDictionary<string, double>? tripDurationMsByCorrelation = null,
-                                  IReadOnlyDictionary<string, int>? seedsByExecution = null)
+                                  IReadOnlyDictionary<string, int>? seedsByExecution = null,
+                                  bool expectsKeeperActivity = false)
     {
         // ── ES-BINDING ARBITER (67-03) ────────────────────────────────────────────────────────────
 
@@ -196,14 +197,36 @@ public sealed class PassFailEngine
         var tripByExec = tripDurationMsByExecution ?? new Dictionary<string, double>(StringComparer.Ordinal);
         var tripByCorr = tripDurationMsByCorrelation ?? new Dictionary<string, double>(StringComparer.Ordinal);
 
-        // ── METRIC GATE (a later task fills this in; for now inert — verdict stays ES-binding) ──
-        // corroborationDetail is intentionally kept always-empty for now, preserving the report shape
-        // (Reconciliation/CorroborationDetail fields) for the future metric gate.
-        var metricGateOk = true;
+        // ── METRIC GATE (binding, at quiescence) ──
+        const double ConservationTol = 1.0;   // ±1 for window-boundary in-flight
+        var conservationOk =
+            Math.Abs(prom.OrchestratorMessagesConsumedDelta - prom.ProcessorMessagesSentDelta) <= ConservationTol;
+        var keeperRecoveryOk = expectsKeeperActivity
+            ? (prom.KeeperMessagesConsumedDelta > 0 && prom.KeeperMessagesSentDelta > 0)
+            : true;   // scenarios recovered by broker redelivery don't require keeper activity
+        var probeLiveOk = prom.KeeperL2ProbeRate > 0;
+
         var corroborationDetail = new List<string>();
-        var recon = corroborationDetail.Count == 0
-            ? ReconciliationOutcome.Reconciled
-            : ReconciliationOutcome.Unreconciled;
+        if (!conservationOk)
+            corroborationDetail.Add(
+                $"MG-1 conservation FAIL: orchestrator_consumed={prom.OrchestratorMessagesConsumedDelta} != " +
+                $"processor_sent={prom.ProcessorMessagesSentDelta} (>{ConservationTol}) — message loss or leak.");
+        if (!keeperRecoveryOk)
+            corroborationDetail.Add(
+                $"MG-2 keeper-recovery FAIL: expected keeper activity but keeper_consumed={prom.KeeperMessagesConsumedDelta}, " +
+                $"keeper_sent={prom.KeeperMessagesSentDelta} — recovery path did not run.");
+        if (!probeLiveOk)
+            corroborationDetail.Add($"MG-3 probe FAIL: keeper_l2_probe rate={prom.KeeperL2ProbeRate} (expected > 0).");
+
+        var metricGate = new MetricGateResult
+        {
+            ConservationOk = conservationOk,
+            KeeperRecoveryOk = keeperRecoveryOk,
+            ProbeLiveOk = probeLiveOk,
+            ExpectsKeeperActivity = expectsKeeperActivity,
+        };
+        var metricGateOk = conservationOk && keeperRecoveryOk && probeLiveOk;
+        var recon = corroborationDetail.Count == 0 ? ReconciliationOutcome.Reconciled : ReconciliationOutcome.Unreconciled;
 
         // ── VERDICT (ES-binding; Prom corroboration is non-fatal) ──────────────────────────────────
         // The value-chain check (incl. the Step_G-at-seed+6 terminal-anchor proxy) is BINDING (73, D-11);
@@ -231,6 +254,7 @@ public sealed class PassFailEngine
             TripDurationMsByCorrelation = tripByCorr,
             HumanSummary = BuildSummary(
                 scenarioId, verdict, startedRuns, complete.Count, missing, dupFail, valueChainOk, recon, corroborationDetail),
+            MetricGate = metricGate,
         };
     }
 
