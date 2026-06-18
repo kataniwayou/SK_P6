@@ -221,7 +221,7 @@ try {
 
     # -----------------------------------------------------------------------
     # STEP F.1 — RECORD WINDOW START + read the baseline Prometheus fire counter (D-13/D-07).
-    # Fire signal = orchestrator_dispatch_sent_total summed across label series — the SAME
+    # Fire signal = orchestrator_messages_sent_total summed across label series — the SAME
     # counter the analyzer's trigger denominator uses (AnalyzerE2ETests.cs:119-123). The
     # harness does NO Prom correctness logic beyond this fire count (Pitfall 5): it does NOT
     # inspect Prom deltas and does NOT abort on a counter discontinuity from the restart;
@@ -231,9 +231,9 @@ try {
     Write-Phase "STEP F: window open at $($windowStart.ToString('o'))"
 
     function Get-FireCount {
-        $r = Invoke-RestMethod -Uri 'http://localhost:9090/api/v1/query?query=orchestrator_dispatch_sent_total' -TimeoutSec 10
+        $r = Invoke-RestMethod -Uri 'http://localhost:9090/api/v1/query?query=orchestrator_messages_sent_total' -TimeoutSec 10
         if (-not $r.data.result) { return 0 }
-        # [long] (not [int]) — orchestrator_dispatch_sent_total summed across all label series on a
+        # [long] (not [int]) — orchestrator_messages_sent_total summed across all label series on a
         # long-lived stack could exceed Int32.MaxValue and overflow to a negative baseline, breaking the
         # `observed -ge N` loop. A 64-bit cast is safe for a monotonic counter (IN-02).
         return [long][double]($r.data.result | ForEach-Object { [double]$_.value[1] } | Measure-Object -Sum).Sum
