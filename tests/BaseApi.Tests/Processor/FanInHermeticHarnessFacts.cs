@@ -189,6 +189,10 @@ public sealed class FanInHermeticHarnessFacts
                 var g = await RunHop(l2, processor, send, "Step_G", executionId, fOutputs[idx].Value, ct);
                 arrivals.Add(new GArrival(g.MessageId, g.EntryId, g.Produced));
             }
+            // IN-03: record the shared terminal value, but make the per-hop integrity fact self-contained —
+            // assert BOTH arrivals agree HERE rather than trusting index 0 (the two-arrivals-equal invariant is
+            // also covered independently by G_invoked_exactly_twice_on_distinct_entryId_blobs).
+            Assert.Equal(arrivals[0].Value, arrivals[1].Value);
             values[(seed, "Step_G")] = arrivals[0].Value;   // both arrivals carry the identical terminal value
 
             (seed == SeedA ? gA : gB).AddRange(arrivals);
