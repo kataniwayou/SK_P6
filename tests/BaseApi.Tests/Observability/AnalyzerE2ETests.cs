@@ -67,8 +67,12 @@ public sealed class AnalyzerE2ETests
     // caller-supplied id can never traverse out of the fixed reports dir (no '/', '\', '.', etc.).
     private static readonly Regex ScenarioIdPattern = new(@"^[A-Za-z0-9_-]+$", RegexOptions.Compiled);
 
-    // MG-2 calibration: which scenarios recover THROUGH the keeper. Seeded false (reporting-only); set true
-    // after the first reporting-only sweep reveals non-zero keeper_messages_* deltas for a scenario.
+    // MG-2 calibration (DONE, evidence-based): which scenarios recover THROUGH the keeper. The reporting-only
+    // sweep (2026-06-18) showed keeper_messages_consumed/sent == 0 in ALL of TEST-01..07 — none of these
+    // whole-tier crash scenarios exercise the keeper's recovery consumers (recovery is by broker redelivery +
+    // retry, NOT keeper REINJECT/INJECT/DELETE). So every scenario stays false; MG-2 is dormant for this
+    // scenario set and the keeper's contribution is proven instead by MG-3 (keeper_l2_probe liveness, which
+    // passes everywhere). Set a scenario true only if a future fault drives non-zero keeper_messages_* deltas.
     private static readonly IReadOnlyDictionary<string, bool> ExpectsKeeperActivity =
         new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
         {

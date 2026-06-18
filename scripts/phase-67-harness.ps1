@@ -238,6 +238,14 @@ try {
         # `observed -ge N` loop. A 64-bit cast is safe for a monotonic counter (IN-02).
         return [long][double]($r.data.result | ForEach-Object { [double]$_.value[1] } | Measure-Object -Sum).Sum
     }
+
+    # Sum a Prometheus counter across all label series as a double. Used by the STEP F.6 conservation-settle
+    # drain to compare orchestrator_messages_consumed against processor_messages_sent (the MG-1 pair).
+    function Get-PromSum([string]$metric) {
+        $r = Invoke-RestMethod -Uri "http://localhost:9090/api/v1/query?query=$metric" -TimeoutSec 10
+        if (-not $r.data.result) { return [double]0 }
+        return [double]($r.data.result | ForEach-Object { [double]$_.value[1] } | Measure-Object -Sum).Sum
+    }
     $fireBaseline = Get-FireCount
     Write-Phase "  baseline fire count = $fireBaseline" 'Gray'
 
@@ -327,26 +335,32 @@ try {
     $windowCloseUtc = [DateTimeOffset]::UtcNow
     Write-Phase "STEP F: observation window closed at $($windowCloseUtc.ToString('o')) ($([int](($windowCloseUtc - $windowStart).TotalSeconds))s)"
 
-    # STEP F.6 — DRAIN TO QUIESCENCE, then pin windowEnd POST-DRAIN. MG-1 result conservation
-    # (orchestrator_messages_consumed == processor_messages_sent) only holds once nothing is in flight, and
-    # the analyzer reads the Prom delta TIME-PINNED to windowEnd. So windowEnd MUST be the post-drain instant,
-    # or the pinned [windowStart, windowEnd] delta captures the in-flight imbalance and the (now-binding) MG-1
-    # gate fails spuriously. The workflow is stopped first, so NO new fires occur during the drain → the ES
-    # [windowStart, windowEnd] cohort is unchanged (no Step_* hits after stop) and extending windowEnd past
-    # the drain is safe for ES while making the Prom conservation read settled.
-    Write-Phase "STEP F.6: stop workflow + drain to quiescence (for metric-gate conservation)"
+    # STEP F.6 — DRAIN THE RESULT PIPELINE TO QUIESCENCE, then pin windowEnd POST-DRAIN. MG-1 result
+    # conservation (orchestrator_messages_consumed == processor_messages_sent) is a windowed delta the analyzer
+    # reads TIME-PINNED to windowEnd, so windowEnd MUST be a SETTLED state. Waiting for orchestrator_messages_sent
+    # (dispatches) to merely flatten is INSUFFICIENT: after a broker crash the orchestrator still has a
+    # redelivered RESULT backlog to consume, so consumed LAGS sent (observed live on TEST-06: proc_sent 188 vs
+    # orch_consumed 166 under the old sent-flat drain). So poll until BOTH orchestrator_messages_consumed AND
+    # processor_messages_sent are flat over one interval — the pipeline has settled, nothing in flight — then
+    # pin windowEnd. The workflow is stopped first so no new fires occur; the ES [windowStart, windowEnd] cohort
+    # is unchanged. For MG-1 reporting-only scenarios (processor/orchestrator crash counter resets, redis-wipe
+    # loss) the counters settle with a residual gap that MG-1 ignores; the both-flat break still fires (and the
+    # deadline bounds it regardless).
+    Write-Phase "STEP F.6: stop workflow + drain result pipeline to quiescence (conservation settle)"
     $stopBody = ConvertTo-Json @($wfId)
     try { Invoke-WebRequest -Method Post -Uri 'http://localhost:8080/api/v1/orchestration/stop' `
             -ContentType 'application/json' -Body $stopBody -TimeoutSec 15 -ErrorAction Stop | Out-Null } catch { }
-    $prev = -1; $stableDeadline = (Get-Date).AddSeconds(120)
+    $prevC = -1; $prevS = -1; $drainDeadline = (Get-Date).AddSeconds(180)
     do {
-        Start-Sleep -Seconds 20
-        $cur = Get-FireCount
-        if ($cur -eq $prev) { break }
-        $prev = $cur
-    } while ((Get-Date) -lt $stableDeadline)
+        Start-Sleep -Seconds 15
+        $c = Get-PromSum 'orchestrator_messages_consumed_total'
+        $s = Get-PromSum 'processor_messages_sent_total'
+        Write-Phase "  drain: orch_consumed=$c proc_sent=$s gap=$([math]::Abs($c - $s))" 'Gray'
+        if ($c -eq $prevC -and $s -eq $prevS) { break }   # both flat over one interval -> result pipeline settled
+        $prevC = $c; $prevS = $s
+    } while ((Get-Date) -lt $drainDeadline)
     $windowEnd = [DateTimeOffset]::UtcNow
-    Write-Phase "  drained (orchestrator_messages_sent flat at $cur); windowEnd pinned post-drain at $($windowEnd.ToString('o'))." 'Gray'
+    Write-Phase "  drained (orch_consumed=$c, proc_sent=$s, gap=$([math]::Abs($c - $s))); windowEnd pinned post-drain at $($windowEnd.ToString('o'))." 'Gray'
 
     # -----------------------------------------------------------------------
     # STEP H — DRAIN + ANALYZE (FRAME 4 / D-04 / D-16; VERDICT — do NOT remap to an infra code).
