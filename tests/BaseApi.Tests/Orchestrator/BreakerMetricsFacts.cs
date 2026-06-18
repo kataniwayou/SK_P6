@@ -9,15 +9,19 @@ using Xunit;
 namespace BaseApi.Tests.Orchestrator;
 
 /// <summary>
-/// Phase 32.1 (req-4 dedup). Hermetic guard for the retained dedup counters on the Phase-30 meters: the
-/// processor-side <c>processor_dispatch_deduped</c> and the orchestrator-side
-/// <c>orchestrator_result_deduped</c>. Constructs both holders from a real <see cref="IMeterFactory"/>
-/// (the .NET 8 blessed pattern — no <c>static Meter</c> field, so no cross-test static leak) and asserts:
+/// Phase 74 (D-14) absence guard, re-founded from the retired Phase-32.1 dedup fixture. The two dormant
+/// dedup counters that this fixture once probed — the processor-side <c>processor_dispatch_deduped</c> and
+/// the orchestrator-side <c>orchestrator_result_deduped</c> — are REMOVED (REQ-1/REQ-2). This fixture now
+/// asserts the uniform two-counter model in their place from a real <see cref="IMeterFactory"/> (the .NET 8
+/// blessed pattern — no <c>static Meter</c> field, so no cross-test static leak):
 /// <list type="bullet">
-///   <item><description>both dedup counters are non-null;</description></item>
+///   <item><description>the surviving uniform counters (<c>MessagesConsumed</c>/<c>MessagesSent</c>) are non-null;</description></item>
 ///   <item><description>the meter-name consts are unchanged (<c>"BaseProcessor"</c> / <c>"Orchestrator"</c>);</description></item>
-///   <item><description>a recorded measurement carries the bounded <c>ProcessorId</c> tag but NO
-///   <c>workflowId</c>/<c>WorkflowId</c> tag key (T-32-02 cardinality guard, mirrors T-30-04).</description></item>
+///   <item><description>D-14 absence: NO instrument named <c>processor_dispatch_deduped</c> or
+///   <c>orchestrator_result_deduped</c> is ever published under its meter (the removed counters emit no series);</description></item>
+///   <item><description>a recorded <c>processor_messages_sent</c> measurement carries the NEW camelCase
+///   <c>workflowId</c>+<c>processorId</c> label keys (the uniform model REQUIRES <c>workflowId</c>, inverting
+///   the old cardinality guard).</description></item>
 /// </list>
 /// Hermetic (default Category) — no real stack.
 /// </summary>
@@ -39,35 +43,63 @@ public sealed class BreakerMetricsFacts
     }
 
     [Fact]
-    public void Processor_New_Counters_Construct_NonNull()
+    public void Processor_DispatchDeduped_Removed_EmitsNoSeries()
     {
-        // Phase 74 (REQ-2): processor_dispatch_deduped was REMOVED. The full absence-assert migration of this
-        // fixture is owned by Plan 04 (D-14); here we only keep the holder constructible by probing the
-        // surviving uniform counters instead of the gone DispatchDeduped probe.
+        // Phase 74 (REQ-2, D-14): processor_dispatch_deduped is REMOVED. Assert the holder constructs with only
+        // the uniform counters AND that NO instrument named processor_dispatch_deduped is ever published on the
+        // BaseProcessor meter (absence-of-series). Exercise the surviving counters so the meter is live.
+        var publishedNames = new System.Collections.Concurrent.ConcurrentBag<string>();
         var meterFactory = NewMeterFactory(out var provider);
         using (provider)
         {
+            using var listener = new MeterListener();
+            listener.InstrumentPublished = (instrument, _) =>
+            {
+                if (instrument.Meter.Name == ProcessorMetrics.MeterName)
+                    publishedNames.Add(instrument.Name);
+            };
+            listener.Start();
+
             var metrics = new ProcessorMetrics(meterFactory);
 
             Assert.NotNull(metrics.MessagesConsumed);
             Assert.NotNull(metrics.MessagesSent);
+            metrics.MessagesConsumed.Add(1);
+            metrics.MessagesSent.Add(1);
         }
+
+        // D-14 absence: the removed dedup counter publishes no series.
+        Assert.DoesNotContain("processor_dispatch_deduped", publishedNames);
     }
 
     [Fact]
-    public void Orchestrator_New_Counter_Constructs_NonNull()
+    public void Orchestrator_ResultDeduped_Removed_EmitsNoSeries()
     {
-        // Phase 74 (REQ-1): orchestrator_result_deduped was REMOVED. The full absence-assert migration of
-        // this fixture is owned by Plan 04 (D-14); here we only keep the holder constructible and assert the
-        // dormant dedup counter is gone by replacing the old ResultDeduped probe with the surviving members.
+        // Phase 74 (REQ-1, D-14): orchestrator_result_deduped is REMOVED. Assert the holder constructs with only
+        // the uniform counters AND that NO instrument named orchestrator_result_deduped is ever published on the
+        // Orchestrator meter (absence-of-series).
+        var publishedNames = new System.Collections.Concurrent.ConcurrentBag<string>();
         var meterFactory = NewMeterFactory(out var provider);
         using (provider)
         {
+            using var listener = new MeterListener();
+            listener.InstrumentPublished = (instrument, _) =>
+            {
+                if (instrument.Meter.Name == OrchestratorMetrics.MeterName)
+                    publishedNames.Add(instrument.Name);
+            };
+            listener.Start();
+
             var metrics = new OrchestratorMetrics(meterFactory);
 
             Assert.NotNull(metrics.MessagesConsumed);
             Assert.NotNull(metrics.MessagesSent);
+            metrics.MessagesConsumed.Add(1);
+            metrics.MessagesSent.Add(1);
         }
+
+        // D-14 absence: the removed dedup counter publishes no series.
+        Assert.DoesNotContain("orchestrator_result_deduped", publishedNames);
     }
 
     [Fact]

@@ -18,8 +18,8 @@ namespace BaseApi.Tests.Observability.Analysis;
 /// <item><c>Duplicate_TwoStepC_Yields_FailClosed</c> — OBS-02: an ILLEGITIMATE duplicate (non-convergent Step_C ×2) → Fail (binding fail-closed; Step_G ×2 stays legitimate).</item>
 /// <item><c>PromDeadRun_ImpliesMoreRunsThanEs_Yields_NonFatalWarning</c> — 67-03: Prom excess ⇒ WARNING, NOT Fail.</item>
 /// <item><c>PromWindowEdge_OneRunMismatch_WithinTolerance_StaysClean</c> — 67-03: ±1-run boundary tolerance, no warning, Pass.</item>
-/// <item><c>RetiredConflation_ResultSentShort_DoesNotFailVerdict</c> — 67-03: ResultSentCompleted short no longer fails (retired #2).</item>
-/// <item><c>DormantDedupeCounters_Absent_DoNotBlockPass</c> — dormant (null) dedupe deltas do not gate PASS.</item>
+/// <item><c>RetiredConflation_ProcessorSentShort_DoesNotFailVerdict</c> — 67-03: ResultSentCompleted short no longer fails (retired #2).</item>
+/// <item><c>RemovedDedupCounters_HaveNoSnapshotField_AbsenceProvenByCompile</c> — D-14: the 3 removed dedup/drop counters have no snapshot field (absence by compile).</item>
 /// <item><c>SpawnAware_ResultExceedsDispatchByExactlySpawnExtra_StaysClean</c> — spawn-aware OBS-03: the entry fan-out's extra result reconciles CLEAN.</item>
 /// <item><c>SpawnAware_ResultMismatch_RaisesNonFatalWarning</c> — spawn-aware OBS-03: a wrong result/dispatch gap is a non-fatal WARNING.</item>
 /// </list>
@@ -46,19 +46,17 @@ public sealed class PassFailEngineFacts
 
     /// <summary>
     /// A Prom snapshot CORROBORATING <paramref name="startedRuns"/> ES-observed runs: the orchestrator
-    /// dispatches once per step, so DispatchSentDelta = startedRuns × 9 (⇒ impliedRuns = startedRuns).
-    /// Dormant dedupe absent; no terminal non-completed outcomes. Corroboration is non-binding (67-03)
-    /// — this shape simply keeps the corroboration cross-check clean so a fact isolates ONE branch.
+    /// dispatches once per step, so OrchestratorMessagesSentDelta = startedRuns × 9 (⇒ impliedRuns =
+    /// startedRuns). The three legacy dedup/drop counters are removed entirely (Phase 74, D-13/D-14) and
+    /// the processor `outcome` breakdown is gone. Corroboration is non-binding (67-03) — this shape simply
+    /// keeps the corroboration cross-check clean so a fact isolates ONE branch.
     /// </summary>
     private static PromCounterSnapshot CorroboratingSnapshot(int startedRuns) => new()
     {
-        DispatchSentDelta = startedRuns * PassFailEngine.LabelsPerRun,
-        ResultConsumedDelta = startedRuns * PassFailEngine.LabelsPerRun,
-        DispatchConsumedDelta = startedRuns * PassFailEngine.LabelsPerRun,
-        ResultSentCompletedDelta = startedRuns * PassFailEngine.LabelsPerRun,
-        KeeperReinjectDroppedDelta = 0,
-        ResultDedupedDelta = null,   // DORMANT — absent
-        DispatchDedupedDelta = null, // DORMANT — absent
+        OrchestratorMessagesSentDelta = startedRuns * PassFailEngine.LabelsPerRun,
+        OrchestratorMessagesConsumedDelta = startedRuns * PassFailEngine.LabelsPerRun,
+        ProcessorMessagesConsumedDelta = startedRuns * PassFailEngine.LabelsPerRun,
+        ProcessorMessagesSentDelta = startedRuns * PassFailEngine.LabelsPerRun,
     };
 
     /// <summary>triggerCount mirrors the fixture via the shared <see cref="PassFailEngine.TriggerCountFrom"/> (IN-01) — corroboration evidence only (67-03).</summary>
@@ -129,8 +127,8 @@ public sealed class PassFailEngineFacts
         var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
         var snap = CorroboratingSnapshot(startedRuns: 1) with
         {
-            DispatchSentDelta = 3 * PassFailEngine.LabelsPerRun, // implies 3 runs vs ES 1
-            ResultConsumedDelta = 3 * PassFailEngine.LabelsPerRun, // keep spawn-aware recon clean (excess isolates the dead-run branch)
+            OrchestratorMessagesSentDelta = 3 * PassFailEngine.LabelsPerRun, // implies 3 runs vs ES 1
+            OrchestratorMessagesConsumedDelta = 3 * PassFailEngine.LabelsPerRun, // keep spawn-aware recon clean (excess isolates the dead-run branch)
         };
 
         var report = new PassFailEngine().Analyze(new[] { run }, snap, TriggerCountOf(snap), "unit-test");
@@ -156,8 +154,8 @@ public sealed class PassFailEngineFacts
             .ToArray();
         var snap = CorroboratingSnapshot(startedRuns: 10) with
         {
-            DispatchSentDelta = 11 * PassFailEngine.LabelsPerRun, // implies 11 vs ES 10 → excess 1 == tolerance
-            ResultConsumedDelta = 11 * PassFailEngine.LabelsPerRun, // keep spawn-aware recon clean (excess isolates the window-edge branch)
+            OrchestratorMessagesSentDelta = 11 * PassFailEngine.LabelsPerRun, // implies 11 vs ES 10 → excess 1 == tolerance
+            OrchestratorMessagesConsumedDelta = 11 * PassFailEngine.LabelsPerRun, // keep spawn-aware recon clean (excess isolates the window-edge branch)
         };
 
         var report = new PassFailEngine().Analyze(runs, snap, TriggerCountOf(snap), "unit-test");
@@ -170,15 +168,15 @@ public sealed class PassFailEngineFacts
     }
 
     [Fact]
-    public void RetiredConflation_ResultSentShort_DoesNotFailVerdict()
+    public void RetiredConflation_ProcessorSentShort_DoesNotFailVerdict()
     {
-        // Retired conflation #2: under the OLD model ResultSentCompletedDelta < complete × 9 forced an
-        // Unreconciled FAIL. Under 67-03 that arithmetic is gone from the binding gate — a complete
-        // ES-binding cohort PASSES regardless of the ResultSentCompleted counter value.
+        // Retired conflation #2: under the OLD model the processor sent-completed counter < complete × 9
+        // forced an Unreconciled FAIL. Under 67-03 that arithmetic is gone from the binding gate — a complete
+        // ES-binding cohort PASSES regardless of the processor_messages_sent counter value.
         var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
         var snap = CorroboratingSnapshot(startedRuns: 1) with
         {
-            ResultSentCompletedDelta = 8, // short of 9 — would have failed the OLD binding gate
+            ProcessorMessagesSentDelta = 8, // short of 9 — would have failed the OLD binding gate
         };
 
         var report = new PassFailEngine().Analyze(new[] { run }, snap, TriggerCountOf(snap), "unit-test");
@@ -188,18 +186,19 @@ public sealed class PassFailEngineFacts
     }
 
     [Fact]
-    public void DormantDedupeCounters_Absent_DoNotBlockPass()
+    public void RemovedDedupCounters_HaveNoSnapshotField_AbsenceProvenByCompile()
     {
+        // D-14 absence proof (compile-time): the three removed counters
+        //   orchestrator_result_deduped / processor_dispatch_deduped / keeper_reinject_dropped
+        // and the processor `outcome` breakdown no longer have ANY PromCounterSnapshot field. A clean
+        // corroborating snapshot constructs with EXACTLY the four uniform deltas and gates PASS — there is
+        // no dedup/drop/outcome series to set, so their absence is structurally guaranteed by this file
+        // compiling. (The live no-series assertion over Prometheus is owned by the RealStack analyzer.)
         var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
-        var snap = CorroboratingSnapshot(startedRuns: 1) with
-        {
-            ResultDedupedDelta = null,   // absent / dormant
-            DispatchDedupedDelta = null, // absent / dormant
-        };
+        var snap = CorroboratingSnapshot(startedRuns: 1);
 
         var report = new PassFailEngine().Analyze(new[] { run }, snap, TriggerCountOf(snap), "unit-test");
 
-        // Dormant counters feed no arithmetic and do not gate PASS.
         Assert.Equal(Verdict.Pass, report.Verdict);
     }
 
@@ -207,7 +206,7 @@ public sealed class PassFailEngineFacts
     public void SpawnAware_ResultExceedsDispatchByExactlySpawnExtra_StaysClean()
     {
         // Two cron fires (2 distinct correlationIds), each spawning 2 execution instances → 4 runs. The entry
-        // step emits 2 results from 1 dispatch, so ResultConsumedDelta runs ahead of DispatchSentDelta by
+        // step emits 2 results from 1 dispatch, so OrchestratorMessagesConsumedDelta runs ahead of OrchestratorMessagesSentDelta by
         // exactly spawnExtra = the number of entry dispatches = distinct correlationIds = 2. Spawn-aware OBS-03
         // reconciles CLEAN (no warning); the ES-binding verdict (every run complete, no duplicate) PASSES.
         var runs = new[]
@@ -221,8 +220,8 @@ public sealed class PassFailEngineFacts
         var dispatch = 4 * PassFailEngine.LabelsPerRun;                          // 4 instances' worth of step dispatches
         var snap = CorroboratingSnapshot(startedRuns: 4) with
         {
-            DispatchSentDelta = dispatch,
-            ResultConsumedDelta = dispatch + spawnExtra,                         // entry fan-out's extra results
+            OrchestratorMessagesSentDelta = dispatch,
+            OrchestratorMessagesConsumedDelta = dispatch + spawnExtra,           // entry fan-out's extra results
         };
 
         var report = new PassFailEngine().Analyze(runs, snap, TriggerCountOf(snap), "unit-test", spawnExtra);
@@ -252,9 +251,9 @@ public sealed class PassFailEngineFacts
         var dispatch = 4 * PassFailEngine.LabelsPerRun;
         var snap = CorroboratingSnapshot(startedRuns: 4) with
         {
-            DispatchSentDelta = dispatch,
+            OrchestratorMessagesSentDelta = dispatch,
             // Expected = dispatch + 2; supply dispatch + 2 + (3 runs' worth) far beyond the ±1-run slack.
-            ResultConsumedDelta = dispatch + spawnExtra + (3 * PassFailEngine.LabelsPerRun),
+            OrchestratorMessagesConsumedDelta = dispatch + spawnExtra + (3 * PassFailEngine.LabelsPerRun),
         };
 
         var report = new PassFailEngine().Analyze(runs, snap, TriggerCountOf(snap), "unit-test", spawnExtra);

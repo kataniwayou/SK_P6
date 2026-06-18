@@ -69,13 +69,10 @@ public sealed class PassFailEngineValueChainFacts
     /// <summary>A Prom snapshot corroborating <paramref name="startedRuns"/> runs (LabelsPerRun=9 dispatch basis) — kept clean so a fact isolates the value-chain branch.</summary>
     private static PromCounterSnapshot CleanSnapshot(int startedRuns) => new()
     {
-        DispatchSentDelta = startedRuns * PassFailEngine.LabelsPerRun,
-        ResultConsumedDelta = startedRuns * PassFailEngine.LabelsPerRun,
-        DispatchConsumedDelta = startedRuns * PassFailEngine.LabelsPerRun,
-        ResultSentCompletedDelta = startedRuns * PassFailEngine.LabelsPerRun,
-        KeeperReinjectDroppedDelta = 0,
-        ResultDedupedDelta = null,
-        DispatchDedupedDelta = null,
+        OrchestratorMessagesSentDelta = startedRuns * PassFailEngine.LabelsPerRun,
+        OrchestratorMessagesConsumedDelta = startedRuns * PassFailEngine.LabelsPerRun,
+        ProcessorMessagesConsumedDelta = startedRuns * PassFailEngine.LabelsPerRun,
+        ProcessorMessagesSentDelta = startedRuns * PassFailEngine.LabelsPerRun,
     };
 
     /// <summary>triggerCount via the shared <see cref="PassFailEngine.TriggerCountFrom"/> (IN-01) — corroboration evidence only.</summary>

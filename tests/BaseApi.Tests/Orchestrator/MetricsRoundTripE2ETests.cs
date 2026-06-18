@@ -15,12 +15,12 @@ namespace BaseApi.Tests.Orchestrator;
 /// <summary>
 /// CAPSTONE Phase-30 metrics round-trip proof (METRIC-01..06 live + METRIC-07 gate). Drives the SAME
 /// real-stack seed→liveness→Start→round-trip as <see cref="SampleRoundTripE2ETests"/>, then queries the
-/// Prometheus SERVER (<c>localhost:9090/api/v1/query</c>) to prove the four business series exist for the
-/// exercised <c>ProcessorId</c>, that the by-<c>ProcessorId</c> bottleneck PromQL evaluates numerically
-/// (METRIC-06), that a runtime metric carries a non-empty <c>service_instance_id</c> (METRIC-01/02), and
-/// that the business counters carry <c>ProcessorId</c> + <c>service_instance_id</c> with NO
-/// <c>workflowId</c> label (METRIC-04/05) — <c>processor_result_sent_total</c> additionally carrying an
-/// <c>outcome</c> ∈ {completed, failed, cancelled}.
+/// Prometheus SERVER (<c>localhost:9090/api/v1/query</c>) to prove the four uniform business series exist
+/// for the exercised <c>processorId</c>, that the by-<c>processorId</c> bottleneck PromQL evaluates
+/// numerically (METRIC-06), that a runtime metric carries a non-empty <c>service_instance_id</c>
+/// (METRIC-01/02), and that the business counters carry <c>processorId</c> + <c>workflowId</c> (Phase 74
+/// REQUIRED — the old "NO workflowId" cardinality guard is INVERTED) + <c>service_instance_id</c>
+/// (METRIC-04/05), with the processor <c>outcome</c> label REMOVED.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -109,9 +109,9 @@ public sealed class MetricsRoundTripE2ETests
         factory.L2KeysToCleanup.Add($"skp:{wfId}:{stepId}");
 
         // Round-trip proof: a NEW skp:data:* execution-data key appears after Start — proves the live
-        // round-trip drove a real dispatch (orchestrator dispatch_sent + processor dispatch_consumed) and
-        // a real result (processor result_sent + orchestrator result_consumed), so all four counters
-        // incremented for THIS procId before we query Prometheus.
+        // round-trip drove a real dispatch (orchestrator messages_sent + processor messages_consumed) and
+        // a real result (processor messages_sent + orchestrator messages_consumed), so all four uniform
+        // counters incremented for THIS procId before we query Prometheus.
         var newDataKey = await PollForNewExecutionDataKeyAsync(dataKeysBefore, ct);
         Assert.NotNull(newDataKey);
         factory.L2KeysToCleanup.Add(newDataKey!.Value);
@@ -119,37 +119,38 @@ public sealed class MetricsRoundTripE2ETests
         // ── Prometheus assertions (query the SERVER :9090, NOT the collector exporter — Pitfall 5) ───
         using var prom = new PrometheusTestClient();
 
-        // METRIC-04 — orchestrator series exist for the exercised ProcessorId.
+        // METRIC-04 — orchestrator uniform series exist for the exercised processorId (camelCase, Phase 74).
         var sent = await prom.PollPromForQuery(
-            $"orchestrator_dispatch_sent_total{{ProcessorId=\"{procId:D}\"}}",
+            $"orchestrator_messages_sent_total{{processorId=\"{procId:D}\"}}",
             PrometheusTestClient.VectorNonEmpty, PromPollTimeoutMs, ct);
         Assert.NotNull(sent);
         var resultConsumed = await prom.PollPromForQuery(
-            $"orchestrator_result_consumed_total{{ProcessorId=\"{procId:D}\"}}",
+            $"orchestrator_messages_consumed_total{{processorId=\"{procId:D}\"}}",
             PrometheusTestClient.VectorNonEmpty, PromPollTimeoutMs, ct);
         Assert.NotNull(resultConsumed);
 
-        // METRIC-05 — processor series exist (result_sent additionally carries the outcome tag).
+        // METRIC-05 — processor uniform series exist (no outcome tag in the Phase 74 model).
         var consumed = await prom.PollPromForQuery(
-            $"processor_dispatch_consumed_total{{ProcessorId=\"{procId:D}\"}}",
+            $"processor_messages_consumed_total{{processorId=\"{procId:D}\"}}",
             PrometheusTestClient.VectorNonEmpty, PromPollTimeoutMs, ct);
         Assert.NotNull(consumed);
         var resultSent = await prom.PollPromForQuery(
-            $"processor_result_sent_total{{ProcessorId=\"{procId:D}\"}}",
+            $"processor_messages_sent_total{{processorId=\"{procId:D}\"}}",
             PrometheusTestClient.VectorNonEmpty, PromPollTimeoutMs, ct);
         Assert.NotNull(resultSent);
 
-        // METRIC-06 — the by-ProcessorId bottleneck PromQL evaluates to a numeric result.
+        // METRIC-06 — the by-processorId bottleneck PromQL evaluates to a numeric result.
         var bottleneck = await prom.PollPromForQuery(
-            $"sum by (ProcessorId)(rate(orchestrator_dispatch_sent_total{{ProcessorId=\"{procId:D}\"}}[5m])) " +
-            $"- sum by (ProcessorId)(rate(processor_dispatch_consumed_total{{ProcessorId=\"{procId:D}\"}}[5m]))",
+            $"sum by (processorId)(rate(orchestrator_messages_sent_total{{processorId=\"{procId:D}\"}}[5m])) " +
+            $"- sum by (processorId)(rate(processor_messages_consumed_total{{processorId=\"{procId:D}\"}}[5m]))",
             PrometheusTestClient.HasNumericValue, PromPollTimeoutMs, ct);
         Assert.NotNull(bottleneck);
 
         // ── Label-shape assertions on the returned (cloned) data — METRIC-04/05 acceptance ───────────
-        // Business counters carry ProcessorId + service_instance_id (both non-empty) and NO workflowId.
-        AssertBusinessLabels(sent!.Value, expectOutcome: false);
-        AssertBusinessLabels(resultSent!.Value, expectOutcome: true);
+        // Phase 74: business counters carry processorId + workflowId (REQUIRED now) + service_instance_id,
+        // and NO outcome label. The old "NO workflowId" cardinality guard is INVERTED (workflowId required).
+        AssertBusinessLabels(sent!.Value);
+        AssertBusinessLabels(resultSent!.Value);
 
         // METRIC-01/02 — a RUNTIME metric carries a non-empty service_instance_id. Query a broad runtime
         // selector (process_runtime_dotnet_*) and inspect result[0].metric for the instance label.
@@ -182,7 +183,7 @@ public sealed class MetricsRoundTripE2ETests
         // Filter by BOTH ProcessorId AND the captured combined name; a non-empty vector proves the swap
         // is observable end-to-end through resource_to_telemetry_conversion.
         var procDbSeries = await prom.PollPromForQuery(
-            $"processor_dispatch_consumed_total{{ProcessorId=\"{procId:D}\",service_name=\"{procServiceName}\"}}",
+            $"processor_messages_consumed_total{{processorId=\"{procId:D}\",service_name=\"{procServiceName}\"}}",
             PrometheusTestClient.VectorNonEmpty, PromPollTimeoutMs, ct);
         Assert.NotNull(procDbSeries); // resolved series carries the DB {Name}_{Version}, NOT processor-sample_3.5.0
 
@@ -201,7 +202,7 @@ public sealed class MetricsRoundTripE2ETests
         // MLBL-01 + MLBL-02 — business family (orchestrator). An orchestrator business counter filtered
         // by BOTH ProcessorId AND the combined orchestrator_3.4.0 name, with a non-empty instance id.
         var orchSeries = await prom.PollPromForQuery(
-            $"orchestrator_dispatch_sent_total{{ProcessorId=\"{procId:D}\",service_name=\"orchestrator_3.4.0\"}}",
+            $"orchestrator_messages_sent_total{{processorId=\"{procId:D}\",service_name=\"orchestrator_3.4.0\"}}",
             PrometheusTestClient.VectorNonEmpty, PromPollTimeoutMs, ct);
         Assert.NotNull(orchSeries);
         var orchMetric = FirstMetricObject(orchSeries!.Value);
@@ -226,33 +227,31 @@ public sealed class MetricsRoundTripE2ETests
         catch { /* best-effort net-zero teardown */ }
     }
 
-    // ── Label-shape helper (METRIC-04/05): ProcessorId + service_instance_id present & non-empty, ──
-    //    NO workflowId; result_sent additionally carries a terminal `outcome`. ──────────────────────
-    private static void AssertBusinessLabels(JsonElement data, bool expectOutcome)
+    // ── Label-shape helper (METRIC-04/05, Phase 74): processorId + workflowId (REQUIRED) + ───────────
+    //    service_instance_id present & non-empty; NO outcome label (the uniform two-counter model ──────
+    //    dropped `outcome`). The OLD "NO workflowId" cardinality guard is INVERTED — the new bounded
+    //    workflowId+processorId cardinality is accepted, so workflowId is now a REQUIRED label.
+    private static void AssertBusinessLabels(JsonElement data)
     {
         var metric = FirstMetricObject(data);
 
         Assert.True(
-            TryGetNonEmpty(metric, "ProcessorId", out _),
-            "Business counter must carry a non-empty ProcessorId label.");
+            TryGetNonEmpty(metric, "processorId", out _),
+            "Business counter must carry a non-empty processorId label (camelCase, Phase 74).");
+        Assert.True(
+            TryGetNonEmpty(metric, "workflowId", out _),
+            "Business counter MUST carry a non-empty workflowId label (Phase 74 uniform model — REQUIRED, "
+            + "inverting the old cardinality guard).");
         Assert.True(
             TryGetNonEmpty(metric, "service_instance_id", out _),
             "Business counter must carry a non-empty service_instance_id label (ambient from Plan 01).");
 
-        // Cardinality constraint (T-30-03/04): NO workflowId / WorkflowId label on the business counters.
+        // Phase 74: the processor `outcome` label is REMOVED — no business counter may carry it.
         foreach (var prop in metric.EnumerateObject())
         {
             Assert.False(
-                string.Equals(prop.Name, "workflowId", StringComparison.OrdinalIgnoreCase),
-                "Business counter must NOT carry a workflowId label (cardinality DoS mitigation).");
-        }
-
-        if (expectOutcome)
-        {
-            Assert.True(
-                TryGetNonEmpty(metric, "outcome", out var outcome),
-                "processor_result_sent_total must carry an outcome label.");
-            Assert.Contains(outcome, new[] { "completed", "failed", "cancelled" });
+                string.Equals(prop.Name, "outcome", StringComparison.OrdinalIgnoreCase),
+                "Business counter must NOT carry an `outcome` label (removed in the Phase 74 uniform model).");
         }
     }
 

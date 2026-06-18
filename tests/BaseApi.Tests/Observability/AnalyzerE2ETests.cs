@@ -105,7 +105,7 @@ public sealed class AnalyzerE2ETests
         //    The D-16 window seam is PRESENT only when BOTH WINDOW_*_UTC env vars parse (harness mode).
         //    In that mode we TIME-PIN the Prom reads (step 5) to the recorded window bounds — the fixture
         //    runs at window CLOSE, so a live "now" before-snapshot would already include all ~10 in-window
-        //    fires, collapsing DispatchSentDelta to a ~60 s tail and under-counting the trigger denominator
+        //    fires, collapsing OrchestratorMessagesSentDelta to a ~60 s tail and under-counting the trigger denominator
         //    (67-03 / OBS-04). Pinning gives delta = counter@windowEnd − counter@windowStart, matching the
         //    ES [windowStart, windowEnd] cohort.
         //
@@ -138,7 +138,7 @@ public sealed class AnalyzerE2ETests
         // snapshotUtc is captured, BEFORE poll-to-stable — so the Prom delta cohort matches the ES
         // [windowStart, snapshotUtc] range exactly. Previously the AFTER read happened post-poll, so a
         // run dispatched in the tail gap between snapshotUtc and the AFTER read was counted in
-        // DispatchSentDelta yet excluded from the ES range → a spurious dead-run corroboration warning
+        // OrchestratorMessagesSentDelta yet excluded from the ES range → a spurious dead-run corroboration warning
         // (under the old binding model, a spurious MISSING). Aligning the read closes that gap. Window-
         // pinned mode is UNAFFECTED — both its Prom reads are pinned to the recorded bounds in step 5.
         var standaloneAfter = windowPinned ? null : await ReadCounterSetAsync(prom, ct);
@@ -163,13 +163,13 @@ public sealed class AnalyzerE2ETests
         var promSnapshot = BuildSnapshot(beforeSet, afterSet);
 
         // ── 6. PROM CORROBORATION INPUT (67-03 — NO LONGER the per-run denominator) ──────────────────
-        //    Derive triggerCount from the orchestrator_dispatch_sent_total WINDOWED DELTA (rounded).
+        //    Derive triggerCount from the orchestrator_messages_sent_total WINDOWED DELTA (rounded).
         //    67-03: this is CORROBORATION evidence only — the orchestrator dispatches once per STEP, so
-        //    DispatchSentDelta is ~9× the run count and must NOT be used as the per-run denominator (the
+        //    OrchestratorMessagesSentDelta is ~9× the run count and must NOT be used as the per-run denominator (the
         //    old conflation scored a perfect 10-run window as 71 "missing": 81 = 9×9 vs ES 10). The
         //    BINDING denominator is the ES started-run count (distinct correlationIds with ≥1 Step_*
         //    log) computed inside the engine from `traces`. The engine derives impliedRuns =
-        //    round(DispatchSentDelta / 9) for the corroboration cross-check. There is NO per-fire
+        //    round(OrchestratorMessagesSentDelta / 9) for the corroboration cross-check. There is NO per-fire
         //    correlationId orchestrator log (item #1), so the IDENTITY of a fully-dead run is NOT
         //    recoverable — it surfaces as a non-fatal Prom corroboration warning, never named.
         // triggerCount via the shared PassFailEngine.TriggerCountFrom (IN-01) so the live fixture and the
@@ -180,21 +180,21 @@ public sealed class AnalyzerE2ETests
 
         // Precondition: the fan-out must have actually fired in the window. The BINDING evidence of a
         // fire is the ES started-run count (distinct correlationIds with >=1 Step_* log), NOT the raw Prom
-        // counter delta. A force-recreate / orchestrator restart resets orchestrator_dispatch_sent_total
+        // counter delta. A force-recreate / orchestrator restart resets orchestrator_messages_sent_total
         // AND leaves the pre-restart container's series lingering in Prom's ~5min instant-query lookback,
         // so the windowed delta can sum to a NEGATIVE value (counter reset) even when the DAG fired
-        // normally — observed live (phase-73 harness run): DispatchSentDelta=-2337 with 20 ES started runs.
-        // Per this guard's own documented intent ("a zero DispatchSentDelta AND zero ES traces would let
+        // normally — observed live (phase-73 harness run): OrchestratorMessagesSentDelta=-2337 with 20 ES started runs.
+        // Per this guard's own documented intent ("a zero OrchestratorMessagesSentDelta AND zero ES traces would let
         // the verdict pass vacuously"), the broken precondition is ONLY a true no-fire: no Prom delta AND
         // no ES traces. Phase 73 is ES-primary and explicitly defers metric assertions, so a Prom-only
         // counter-reset artifact must never abort the ES value-chain audit. (WR-04 + phase-73 live fix.)
         Assert.True(triggerCount > 0 || traces.Count > 0,
-            $"No fan-out fire observed in the window: DispatchSentDelta={promSnapshot.DispatchSentDelta} " +
+            $"No fan-out fire observed in the window: OrchestratorMessagesSentDelta={promSnapshot.OrchestratorMessagesSentDelta} " +
             $"AND zero ES Step_* traces (started runs={traces.Count}); the precondition is not satisfied.");
 
         // ── 7. RUN THE ENGINE (pure — no IO) ─────────────────────────────────────────────────────────
-        //    SPAWN-AWARE OBS-03: the entry step emits 2 results from 1 dispatch, so ResultConsumed runs
-        //    ahead of DispatchSent by one extra result per entry dispatch. spawnExtra = the number of entry
+        //    SPAWN-AWARE OBS-03: the entry step emits 2 results from 1 dispatch, so OrchestratorMessagesConsumed runs
+        //    ahead of OrchestratorMessagesSent by one extra result per entry dispatch. spawnExtra = the number of entry
         //    dispatches = cron fires = distinct correlationIds — DERIVED from the traces (the per-instance
         //    RunTraces collapse back to their correlationId), NEVER hard-coded 2.
         var spawnExtra = traces.Select(t => t.CorrelationId).Distinct(StringComparer.Ordinal).Count();
@@ -506,25 +506,23 @@ public sealed class AnalyzerE2ETests
     /// <summary>
     /// The raw counter values read at one snapshot point. The fixture takes two (before/after) and
     /// subtracts to get the WINDOWED DELTAS the engine reconciles (A3 — counters are cumulative).
-    /// Nullable members are the DORMANT dedupe counters: <c>null</c> == no series present (absent).
+    /// Phase 74 uniform two-counter model: only the four <c>{service}_messages_consumed/_sent</c> totals
+    /// (the legacy per-type names, the three removed dedup/drop counters, and the processor <c>outcome</c>
+    /// breakdown are gone).
     /// </summary>
     private sealed record CounterSet
     {
-        public required double DispatchSent { get; init; }
-        public required double ResultConsumed { get; init; }
-        public required double DispatchConsumed { get; init; }
-        public required double ResultSentCompleted { get; init; }
-        public required double KeeperReinjectDropped { get; init; }
-        public double? ResultDeduped { get; init; }
-        public double? DispatchDeduped { get; init; }
-        public required IReadOnlyDictionary<string, double> NonCompletedOutcomes { get; init; }
+        public required double OrchestratorMessagesSent { get; init; }
+        public required double OrchestratorMessagesConsumed { get; init; }
+        public required double ProcessorMessagesConsumed { get; init; }
+        public required double ProcessorMessagesSent { get; init; }
     }
 
     /// <summary>
-    /// Read the counter set once. Counters sum across all label combinations (no ProcessorId filter —
-    /// the analyzer reconciles the whole window). DORMANT dedupe counters: query and map an EMPTY series
-    /// to <c>null</c> (absent), feeding NO reconciliation arithmetic. Non-completed processor_result_sent
-    /// outcomes (failed/cancelled/processing) are read per-outcome (expect zero).
+    /// Read the counter set once. Counters sum across all label combinations (no processorId filter —
+    /// the analyzer reconciles the whole window). Phase 74 (D-13): only the four uniform
+    /// <c>{service}_messages_consumed/_sent</c> totals are read; the processor <c>outcome</c> breakdown and
+    /// the three removed dedup/drop counters are gone.
     /// <para>
     /// <paramref name="evalTime"/> (67-03 / OBS-04): when non-null every counter is read via an INSTANT
     /// query pinned to that instant (delta@windowEnd − delta@windowStart aligns the trigger denominator
@@ -535,25 +533,12 @@ public sealed class AnalyzerE2ETests
     private static async Task<CounterSet> ReadCounterSetAsync(
         PrometheusTestClient prom, CancellationToken ct, DateTimeOffset? evalTime = null)
     {
-        var nonCompleted = new Dictionary<string, double>(StringComparer.Ordinal);
-        foreach (var outcome in new[] { "failed", "cancelled", "processing" })
-        {
-            nonCompleted[outcome] = await SumOrZeroAsync(
-                prom, $"processor_result_sent_total{{outcome=\"{outcome}\"}}", ct, evalTime);
-        }
-
         return new CounterSet
         {
-            DispatchSent = await SumOrZeroAsync(prom, "orchestrator_dispatch_sent_total", ct, evalTime),
-            ResultConsumed = await SumOrZeroAsync(prom, "orchestrator_result_consumed_total", ct, evalTime),
-            DispatchConsumed = await SumOrZeroAsync(prom, "processor_dispatch_consumed_total", ct, evalTime),
-            ResultSentCompleted = await SumOrZeroAsync(
-                prom, "processor_result_sent_total{outcome=\"completed\"}", ct, evalTime),
-            KeeperReinjectDropped = await SumOrZeroAsync(prom, "keeper_reinject_dropped_total", ct, evalTime),
-            // DORMANT (no increment site) — absent series ⇒ null ⇒ reported Absent, feeds no arithmetic.
-            ResultDeduped = await SumOrNullAsync(prom, "orchestrator_result_deduped_total", ct, evalTime),
-            DispatchDeduped = await SumOrNullAsync(prom, "processor_dispatch_deduped_total", ct, evalTime),
-            NonCompletedOutcomes = nonCompleted,
+            OrchestratorMessagesSent = await SumOrZeroAsync(prom, "orchestrator_messages_sent_total", ct, evalTime),
+            OrchestratorMessagesConsumed = await SumOrZeroAsync(prom, "orchestrator_messages_consumed_total", ct, evalTime),
+            ProcessorMessagesConsumed = await SumOrZeroAsync(prom, "processor_messages_consumed_total", ct, evalTime),
+            ProcessorMessagesSent = await SumOrZeroAsync(prom, "processor_messages_sent_total", ct, evalTime),
         };
     }
 
@@ -564,45 +549,16 @@ public sealed class AnalyzerE2ETests
         => PrometheusTestClient.SumSampleValues(await prom.QueryPrometheus(promql, ct, evalTime));
 
     /// <summary>
-    /// Sum the series value, or <c>null</c> when the vector is EMPTY — for the DORMANT dedupe counters
-    /// where absence is meaningful (no series exists at all), distinct from a present-but-zero counter.
-    /// When <paramref name="evalTime"/> is non-null the value is read as of that instant (67-03 / OBS-04).
-    /// </summary>
-    private static async Task<double?> SumOrNullAsync(
-        PrometheusTestClient prom, string promql, CancellationToken ct, DateTimeOffset? evalTime = null)
-    {
-        var samples = await prom.QueryPrometheus(promql, ct, evalTime);
-        return samples.Count == 0 ? null : PrometheusTestClient.SumSampleValues(samples);
-    }
-
-    /// <summary>
     /// Build the <see cref="PromCounterSnapshot"/> from the before/after counter sets as WINDOWED DELTAS
-    /// (after − before). Dormant dedupe deltas are <c>null</c> when EITHER snapshot lacks the series
-    /// (absent stays absent). Non-completed outcome deltas are computed per outcome.
+    /// (after − before) for the four uniform Phase-74 counters (D-12: processor_messages_sent total is the
+    /// all-complete close-gate proxy for the old completed breakdown).
     /// </summary>
     private static PromCounterSnapshot BuildSnapshot(CounterSet before, CounterSet after)
-    {
-        var nonCompletedDelta = new Dictionary<string, double>(StringComparer.Ordinal);
-        foreach (var outcome in after.NonCompletedOutcomes.Keys)
+        => new PromCounterSnapshot
         {
-            var b = before.NonCompletedOutcomes.TryGetValue(outcome, out var bv) ? bv : 0;
-            nonCompletedDelta[outcome] = after.NonCompletedOutcomes[outcome] - b;
-        }
-
-        return new PromCounterSnapshot
-        {
-            DispatchSentDelta = after.DispatchSent - before.DispatchSent,
-            ResultConsumedDelta = after.ResultConsumed - before.ResultConsumed,
-            DispatchConsumedDelta = after.DispatchConsumed - before.DispatchConsumed,
-            ResultSentCompletedDelta = after.ResultSentCompleted - before.ResultSentCompleted,
-            KeeperReinjectDroppedDelta = after.KeeperReinjectDropped - before.KeeperReinjectDropped,
-            ResultDedupedDelta = DeltaOrNull(before.ResultDeduped, after.ResultDeduped),
-            DispatchDedupedDelta = DeltaOrNull(before.DispatchDeduped, after.DispatchDeduped),
-            NonCompletedOutcomes = nonCompletedDelta,
+            OrchestratorMessagesSentDelta = after.OrchestratorMessagesSent - before.OrchestratorMessagesSent,
+            OrchestratorMessagesConsumedDelta = after.OrchestratorMessagesConsumed - before.OrchestratorMessagesConsumed,
+            ProcessorMessagesConsumedDelta = after.ProcessorMessagesConsumed - before.ProcessorMessagesConsumed,
+            ProcessorMessagesSentDelta = after.ProcessorMessagesSent - before.ProcessorMessagesSent,
         };
-    }
-
-    /// <summary>A dormant-counter delta is null unless BOTH snapshots carried the series (absent ⇒ null).</summary>
-    private static double? DeltaOrNull(double? before, double? after)
-        => before is { } b && after is { } a ? a - b : null;
 }

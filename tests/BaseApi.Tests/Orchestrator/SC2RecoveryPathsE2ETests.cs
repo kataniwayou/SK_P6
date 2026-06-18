@@ -34,8 +34,9 @@ namespace BaseApi.Tests.Orchestrator;
 ///   author <see cref="KeeperReinject.Payload"/>) to <c>queue:{ProcessorId:D}</c>. Asserted on that
 ///   origin-queue depth.</item>
 ///   <item><b>REINJECT data-gone</b> (<c>ReinjectConsumer</c>) — do NOT seed the data key (STRLEN==0) →
-///   Phase 52 (D-06) makes this a BY-DESIGN silent drop (no throw, no send, no dead-letter; increments
-///   <c>keeper_reinject_dropped</c>). Asserted on the origin queue staying EMPTY (nothing re-injected) and
+///   Phase 52 (D-06) makes this a BY-DESIGN silent drop (no throw, no send, no dead-letter). Phase 74
+///   REMOVED the legacy <c>keeper_reinject_dropped</c> counter — the drop emits NO drop counter and NO
+///   <c>keeper_messages_sent</c>. Asserted on the origin queue staying EMPTY (nothing re-injected) and
 ///   the DLQ depth NOT incrementing — A18 "accepted silent losses".</item>
 ///   <item><b>INJECT</b> (<c>InjectConsumer</c>) — Phase 52 (KEEP-02) implements the A18 forward-only body:
 ///   write <c>L2[m.EntryId]=m.Data</c>, send a reconstructed <see cref="StepCompleted"/> to
@@ -152,8 +153,8 @@ public sealed class SC2RecoveryPathsE2ETests
             }, ct);
 
             // EFFECT (D-06): STRLEN==0 → silent drop — ack with no throw, no re-inject, no dead-letter, and
-            // a keeper_reinject_dropped increment (observability only). Allow a settle window, then assert
-            // the origin queue stayed EMPTY (nothing re-injected) and the DLQ depth did NOT climb.
+            // NO drop counter (Phase 74 removed keeper_reinject_dropped) and NO keeper_messages_sent. Allow a
+            // settle window, then assert the origin queue stayed EMPTY (nothing re-injected) and DLQ did NOT climb.
             await Task.Delay(5_000, ct);
             var originQueue = procId.ToString("D");
             var originDepth = await ReadQueueDepthAsync(originQueue, ct);

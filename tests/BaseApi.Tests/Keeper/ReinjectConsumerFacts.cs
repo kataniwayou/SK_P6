@@ -15,8 +15,14 @@ namespace BaseApi.Tests.Keeper;
 /// <summary>
 /// Phase 70 / req 6 (D-12): the Keeper REINJECT state reads L2[entryId]; present → re-injects a
 /// reconstructed EntryStepDispatch carrying the Payload to queue:{ProcessorId} with the outbound envelope
-/// MessageId overridden to the carried m.MessageId; absent/empty (STRLEN==0, no Redis exception) →
-/// BY-DESIGN silent drop (no throw, no send) + keeper_reinject_dropped counter (D-06/D-07).
+/// MessageId overridden to the carried m.MessageId AND emits keeper_messages_sent (Phase 74); absent/empty
+/// (STRLEN==0, no Redis exception) → BY-DESIGN silent drop (no throw, no send, no keeper_messages_sent).
+/// <para>
+/// Phase 74 / D-14: the legacy <c>keeper_reinject_dropped</c> counter is REMOVED — the by-design-drop test
+/// asserts that NO <c>keeper_reinject_dropped</c> series (and no <c>keeper_messages_sent</c>) is emitted on
+/// the drop path (one of the three removed-counter absence asserts), while the success path increments the
+/// uniform <c>keeper_messages_sent</c>.
+/// </para>
 /// </summary>
 public sealed class ReinjectConsumerFacts
 {
@@ -46,11 +52,24 @@ public sealed class ReinjectConsumerFacts
         db.StringLengthAsync(L2ProjectionKeys.ExecutionData(m.EntryId), Arg.Any<CommandFlags>())
             .Returns(10L);   // present
         var send = new RecoveryTestKit.CapturingSendProvider();
+        var metrics = RecoveryTestKit.Metrics();
+
+        // Phase 74 (REQ-3/D-14): the success path MUST increment the uniform keeper_messages_sent counter
+        // after the confirmed Send. Observe it by instrument name on the "Keeper" meter.
+        long sent = 0;
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, l) =>
+        {
+            if (instrument.Meter.Name == KeeperMetrics.MeterName && instrument.Name == "keeper_messages_sent")
+                l.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => Interlocked.Add(ref sent, measurement));
+        listener.Start();
 
         var consumer = new ReinjectConsumer(
             RecoveryTestKit.Mux(db), send,
             RecoveryTestKit.Retry(),
-            RecoveryTestKit.Metrics(), NullLogger<ReinjectConsumer>.Instance);
+            metrics, NullLogger<ReinjectConsumer>.Instance);
 
         await consumer.Consume(Ctx(m, ct));
 
@@ -67,6 +86,9 @@ public sealed class ReinjectConsumerFacts
 
         // req 6: the outbound envelope MessageId is overridden to the carried m.MessageId.
         Assert.Equal(m.MessageId, Assert.Single(send.SentMessageIds));
+
+        // Phase 74: the confirmed Send incremented the uniform keeper_messages_sent exactly once.
+        Assert.Equal(1, Interlocked.Read(ref sent));
     }
 
     [Fact]
@@ -94,11 +116,18 @@ public sealed class ReinjectConsumerFacts
         var metrics = RecoveryTestKit.Metrics();
 
         long sent = 0;
+        // D-14 absence assert: NO instrument named keeper_reinject_dropped may EVER be published under the
+        // "Keeper" meter (the removed counter emits no series). Capture every published Keeper instrument name.
+        var publishedKeeperInstruments = new System.Collections.Concurrent.ConcurrentBag<string>();
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == KeeperMetrics.MeterName && instrument.Name == "keeper_messages_sent")
-                l.EnableMeasurementEvents(instrument);
+            if (instrument.Meter.Name == KeeperMetrics.MeterName)
+            {
+                publishedKeeperInstruments.Add(instrument.Name);
+                if (instrument.Name == "keeper_messages_sent")
+                    l.EnableMeasurementEvents(instrument);
+            }
         };
         listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => Interlocked.Add(ref sent, measurement));
         listener.Start();
@@ -112,5 +141,7 @@ public sealed class ReinjectConsumerFacts
 
         Assert.Empty(send.Sent);                     // nothing re-injected when the data is gone
         Assert.Equal(0, Interlocked.Read(ref sent)); // T-74-06: keeper_messages_sent never fires on the drop path
+        // D-14: the removed keeper_reinject_dropped counter publishes NO series.
+        Assert.DoesNotContain("keeper_reinject_dropped", publishedKeeperInstruments);
     }
 }
