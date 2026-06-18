@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
-status: milestone_complete
-stopped_at: Completed 73-04-PLAN.md
-last_updated: "2026-06-17T22:23:16.381Z"
-last_activity: 2026-06-17
+status: executing
+stopped_at: Completed 74-01-PLAN.md
+last_updated: "2026-06-18T05:59:39.096Z"
+last_activity: 2026-06-18
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 0
   total_plans: 0
   completed_plans: 0
-  percent: 25
+  percent: 0
 ---
 
 # Project State
@@ -21,7 +21,7 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase 73 — verify-and-instrument-end-to-end-l2-data-delivery-across-a-f
+**Current focus:** Phase 74 — reshape-business-metrics-into-a-uniform-two-counter-model
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
@@ -29,12 +29,12 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 73
-Current Plan: Not started
+Phase: 74 (reshape-business-metrics-into-a-uniform-two-counter-model) — EXECUTING
+Current Plan: 1
 Total Plans: 3
-Plan: 4 of 4
-Status: Milestone complete
-Last activity: 2026-06-17
+Plan: 2 of 4
+Status: Ready to execute
+Last activity: 2026-06-18
 
 > Phase 72 Plan 03 — ✅ COMPLETE 2026-06-17 (Wave 2: the payoff — all four `TypedResultConsumer<T>` shells now run ONE uniform branch-free pre-pipeline flow + the Phase-71-deferred D-18 trip-end metric lands). **2 atomic feat commits** (`b501557` dropped BOTH `if (outcome == StepOutcome.Completed)` gates — the `out:` read and the delete now run for every outcome (D-09, riding Plan-01's always-write); consumed `SelectNext`'s `{Matches, UnresolvedIds}`; three-way read (read lambda returns null on clean-absent to split absent from fault, Pitfall 2): present → fan-out+delete / clean-absent → idempotent ack-skip (Processing rides it for free, D-05) / Redis fault → REINJECT (D-10); ExecutionId threaded unchanged D-13; `88dbd3f` `OrchestratorMetrics` ctor-injected (singleton→scoped, no Program.cs edit) + BOTH increments in the same change (no CS9113): stage-1 L1-miss + stage-3 `foreach` over `UnresolvedIds` (continue, never throws, D-02), `workflowId` label only; rewrote `OrchestratorPrePipelineFacts` in place D-12 — Failed/Cancelled present-blob fan-out+delete like Completed, clean-absent + Processing-rides-skip facts, dangling-next-step (resolvable still fans out + 1 increment), condition-skip + normal-fanout no-increment, `MeterCollector` tag-set assertions). SPEC-4/5/6. **2 deviations:** (1) Rule 3 (blocking) — migrated 3 other test ctor sites (`TypedResultConsumerFacts`/`ResultAckTests`/`StopConsumerLifecycleTests`) to `OrchestratorTestStubs.Metrics()` (the ctor-param add broke them); (2) Rule 1 (test) — `TypedResultConsumerFacts` Failed-gated sub-call now passes the SAME `entryId` whose `out:` blob is present (the Failed read is now uniform post-D-09). Hermetic: `OrchestratorPrePipelineFacts` **15/15** + affected orchestrator facts **40/40 GREEN**; **0-warning Debug + Release** (full solution). Full `dotnet test` shows 288 failures — ALL pre-existing Docker-bound E2E/Integration tests (sandbox lacks Redis/RabbitMQ/Postgres); none in the hermetic dispatch surface. Live-stack proof deferred-automated (SPEC AC #10). Summary: `.planning/phases/72-processor-always-write-to-l2-and-uniform-orchestrator-pre-pi/72-03-SUMMARY.md` (Self-Check PASSED). **Phase 72 ready for verification.**
 
@@ -62,6 +62,7 @@ Last activity: 2026-06-17
 
 ### Roadmap Evolution
 
+- 2026-06-18 — **Phase 74 added** (end of roadmap): `reshape-business-metrics-into-a-uniform-two-counter-model` — collapse every service's business counters into a uniform pair `{service}_messages_consumed`/`{service}_messages_sent` (snake_case, no `_total` in code; labels `workflowId`+`processorId` camelCase); rewrite `OrchestratorMetrics`/`ProcessorMetrics`/`KeeperMetrics` to the pair + removals (`ResultDeduped`/`DispatchDeduped`/`ReinjectDropped`, drop processor `outcome` label), inject `KeeperMetrics` into the 4 sending keeper consumers + `BitHealthLoop`, and rework `PassFailEngine`+`PromCounterSnapshot`+~11 metric test files. Source of truth: drafted spec at `Import/72-SPEC.md`+`Import/72-CONTEXT.md` (slugged "72" but renumbered to 74 — phases 72/73 already exist). Depends on Phase 73. **Numbering note (SAME RECURRING BUG):** `gsd-sdk query phase.add` AGAIN auto-numbered it `63` off the stale `STATE.milestone: v7.0.0` pointer (→ phases 59-62 → "next 63", colliding with shipped v8.0.0 phases 63-68). This time the tool's bogus `### Phase 63` ROADMAP insertion + empty `63-*` dir were reverted (`git checkout ROADMAP.md` + `rm -rf`), then the phase was added **manually** as **74** (max existing integer 73 + 1) with `Depends on: Phase 73`. **Root cause STILL unfixed** — `STATE.milestone` must be corrected (or `/gsd-health` run) before the next phase add or this recurs a 4th time.
 - 2026-06-17 — **Phase 73 added** (end of roadmap): `verify-and-instrument-end-to-end-l2-data-delivery-across-a-f` — prove + instrument end-to-end L2 data delivery across the fan-out DAG `A→B→C→{D1→E1→F1, D2→E2→F2}→G` (G = stateless per-branch terminal, NOT a join) per `correlationId`/`executionId` up to termination, via (a) a **hermetic zero-Docker metric-conservation proof** (`orchestrator_dispatch_sent==processor_dispatch_consumed`, `processor_result_sent==orchestrator_result_consumed`, `step_unresolved==spawn_dropped==*_deduped==0` over the real pipeline classes + dict-backed `IDatabase` L2 + `CapturingSendProvider` loop + `MeterCollector`, plus per-branch L2 hash-chain content) and (b) a **live-stack per-`executionId` ES auditor** (entry-step Mode-2 `SpawnToPost` mints one `executionId` per branch; each step logs `sha256(in)/sha256(out)` — hashes only, T-70-10 — and the auditor asserts hash continuity + path completeness + `completed-terminal` at G + zero silent-loss signals, anchored to the persisted terminal `skp:out:` blob), plus **execution-trip duration** (per-exec/per-corr ES `@timestamp` delta; optional `orchestrator_trip_duration_ms` histogram needing a threaded `TripStartedUtc`). Depends on Phase 72 (always-write + uniform branch-free pre-pipeline). **Numbering note:** `gsd-sdk query phase.add` AGAIN auto-numbered it `63` (same stale `STATE.milestone: v7.0.0` → phases 59-62 → "next 63" root cause noted on the Phase-71 entry below; collides with shipped v8.0.0 phases 63-68); manually corrected to **73** (max existing integer 72 + 1), dir renamed, and `Depends on` fixed from the tool's default `Phase 62` → `Phase 72`. **The stale milestone pointer is STILL the root cause and remains unfixed — run `/gsd-health` (or correct `STATE.milestone`) before the next phase add, or this recurs every time.**
 - 2026-06-17 — **Phase 71 added** (end of roadmap): `orchestrator-two-consumer-design-pre-process-post-process` — mirror the Phase-70 processor two-consumer pattern on the orchestrator side; closes the Phase-70-deferred `entryId`↔`messageId` threading (A1: processor result stamps `EntryId = output messageId`). Depends on Phase 70. **Numbering note:** `gsd-sdk query phase.add` auto-numbered it `63` (it keyed off the stale `STATE.milestone: v7.0.0` pointer → phases 59-62 → "next 63"), which collides with the archived v8.0.0 phases 63-68; manually corrected to **71** (max existing integer 70 + 1) and renamed the directory. The stale milestone pointer remains the root cause — to fix before the next milestone cycle.
 - 2026-06-13 — **Phase 62.1 inserted** after Phase 62 (URGENT, decimal): `decouple-liveness-refresh-from-ishealthy`. Fixes the Phase-60 liveness-refresh gap **G-62-01** surfaced by the Phase-62 live close run — liveness-timestamp refresh is `IsHealthy`-gated, so an alive-but-unhealthy (Gate-A-clash) replica stops being refreshed → its L2 gate key expires (absent, not observably Unhealthy) and its L1 watchdog timestamp goes stale (false "liveness loop stale" → needless K8s restart). Make refresh **identity-gated** (write current Healthy/Unhealthy status every interval), then re-run the Phase-62 close gate + the four lifecycle proofs to seal v7.0.0. TEST-01/02/03 stay unticked until then. Root cause + fix: `.planning/phases/62-live-proof-close-gate/62-GAP-liveness-refresh-coupling.md`.
@@ -1041,6 +1042,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 73 P02 | 31min | 3 tasks | 2 files |
 | Phase 73 P03 | 15min | 3 tasks | 5 files |
 | Phase 73 P04 | 10min | 3 tasks | 3 files |
+| Phase 74 P01 | 6 | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -1517,6 +1519,7 @@ Recent decisions affecting current work:
 - 73-03: live terminal-anchor PROXY = Step_G completed-terminal ES value seed+6; durable skp:out: blob proof owned by hermetic harness Plan 02 (ES-read-only auditor cannot read Redis)
 - 73-04: live RealStack auditor reads attributes.Produced + ES @timestamp trip-duration into the Plan-03 extended FromLabels/Analyze; Step_G seed+6 ES log is the live terminal-anchor proxy (ES-read-only, no Redis read)
 - 73-04: seeder builds G-extended DAG (10/10/10, Step_G lone sink, uniform number=1); phase-73-sweep.ps1 live Docker round-trip is deferred-automated, not a phase gate
+- Phase 74-01: orchestrator uniform two-counter model — orchestrator_messages_consumed/sent with camelCase workflowId+processorId; messageId not a label; every successful Send counts
 
 ### Roadmap Milestone Log
 
@@ -1623,8 +1626,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-17T22:23:07.491Z
-Stopped at: Completed 73-04-PLAN.md
+Last session: 2026-06-18T05:59:32.822Z
+Stopped at: Completed 74-01-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
@@ -1632,4 +1635,4 @@ Resume file: None
 
 **Previous Phase:** 11 (migrate-prometheus-and-elastic-containers-from-compose-stack) — 10/10 plans — verified 2026-05-28 (3 consecutive GREEN dotnet test runs at 142/142 facts each; byte-identical psql `\l` SHA-256 `0d98b0de…0aac127`; OBSERV-12 superseded; INFRA-06 amendment locked in)
 
-**Planned Phase:** 73 (verify-and-instrument-end-to-end-l2-data-delivery-across-a-f) — 4 plans — 2026-06-17T20:17:03.596Z
+**Planned Phase:** 74 (reshape-business-metrics-into-a-uniform-two-counter-model) — 4 plans — 2026-06-18T05:50:14.355Z

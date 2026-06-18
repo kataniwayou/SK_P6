@@ -740,7 +740,7 @@ Plans:
 **Plans:** 4 plans (2 waves)
 
 Plans:
-- [ ] 74-01-PLAN.md — Wave 1: Orchestrator uniform counters (rewrite OrchestratorMetrics; rebind StepDispatcher/PrePipeline/RelocateTail/TypedResultConsumer; count every outbound send) (REQ-1, REQ-6)
+- [x] 74-01-PLAN.md — Wave 1: Orchestrator uniform counters (rewrite OrchestratorMetrics; rebind StepDispatcher/PrePipeline/RelocateTail/TypedResultConsumer; count every outbound send) (REQ-1, REQ-6) — COMPLETE (`a51740c`/`0da5350`; 10/10 hermetic facts; 0-warning Debug+Release)
 - [ ] 74-02-PLAN.md — Wave 1: Processor uniform counters (rewrite ProcessorMetrics; drop outcome label + ResultOutcome helper; rebind EntryStepDispatchConsumer/OutputTail) (REQ-2, REQ-6)
 - [ ] 74-03-PLAN.md — Wave 1: Keeper uniform counters + keeper_l2_probe (rewrite KeeperMetrics; base Consume choke + CountSent; wire 6 consumers; BitHealthLoop heartbeat) (REQ-3, REQ-4, REQ-6)
 - [ ] 74-04-PLAN.md — Wave 2 (converging): analyzer rebind (PromCounterSnapshot/PassFailEngine, drop outcome WARNING) + migrate ~11 metric test files + 3 absence asserts + invert workflowId guard + hermetic & 0-warning gate (REQ-1, REQ-2, REQ-3, REQ-5, REQ-6)
