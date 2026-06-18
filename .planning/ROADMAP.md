@@ -737,7 +737,7 @@ Plans:
 **Goal:** Collapse every service's assorted business counters into a uniform pair `{service}_messages_consumed` / `{service}_messages_sent` (snake_case, no `_total` suffix in code — collector appends it), labeled `workflowId`+`processorId` (camelCase). Rewrite `OrchestratorMetrics` / `ProcessorMetrics` / `KeeperMetrics` to the pair + removals (`ResultDeduped`, `DispatchDeduped`, `ReinjectDropped`; drop the processor `outcome` label); inject `KeeperMetrics` into the 4 sending keeper consumers + `BitHealthLoop` via the existing `IMeterFactory` DI pattern; rework `PassFailEngine` + `PromCounterSnapshot` + the ~11 affected metric test files to the new names (drop the `outcome` corroboration WARNING path). (Source of truth: drafted spec at `Import/72-SPEC.md` + `Import/72-CONTEXT.md` — slugged "72" but renumbered here to 74 since phases 72/73 already exist.)
 **Requirements**: REQ-1, REQ-2, REQ-3, REQ-4, REQ-5, REQ-6 (locked in 74-SPEC.md)
 **Depends on:** Phase 73
-**Plans:** 4 plans (2 waves)
+**Plans:** 4/4 plans complete
 
 Plans:
 - [x] 74-01-PLAN.md — Wave 1: Orchestrator uniform counters (rewrite OrchestratorMetrics; rebind StepDispatcher/PrePipeline/RelocateTail/TypedResultConsumer; count every outbound send) (REQ-1, REQ-6) — COMPLETE (`a51740c`/`0da5350`; 10/10 hermetic facts; 0-warning Debug+Release)
