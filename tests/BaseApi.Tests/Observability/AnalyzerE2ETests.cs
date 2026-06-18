@@ -467,12 +467,38 @@ public sealed class AnalyzerE2ETests
     {
         timestamp = default;
         if (!source.TryGetProperty("@timestamp", out var tsEl)) return false;
-        if (tsEl.ValueKind != JsonValueKind.String) return false;
-        return DateTimeOffset.TryParse(
-            tsEl.GetString(),
-            System.Globalization.CultureInfo.InvariantCulture,
-            System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
-            out timestamp);
+
+        // Epoch-millis rendered as a bare JSON Number (defensive — some ES mappings).
+        if (tsEl.ValueKind == JsonValueKind.Number && tsEl.TryGetDouble(out var epochMsNum))
+        {
+            timestamp = DateTimeOffset.FromUnixTimeMilliseconds((long)epochMsNum);
+            return true;
+        }
+
+        if (tsEl.ValueKind == JsonValueKind.String)
+        {
+            var raw = tsEl.GetString();
+            // LIVE shape (phase-73 harness, verified against the live ES _source): the OTLP -> ES bridge
+            // serializes @timestamp as epoch MILLISECONDS rendered as a NUMERIC STRING with a sub-ms fraction
+            // (e.g. "1781754330089.184100") — NOT an ISO-8601 datetime. DateTimeOffset.TryParse REJECTS that
+            // bare numeric string, which is why the trip-duration maps came back empty on the live run. Parse
+            // it as epoch-ms FIRST; the fractional sub-millisecond part is irrelevant to a min->max span and
+            // is truncated by the (long) cast. (A genuine ISO-8601 string is non-numeric, so it falls through
+            // to the TryParse fallback below.)
+            if (double.TryParse(raw, System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out var epochMsStr))
+            {
+                timestamp = DateTimeOffset.FromUnixTimeMilliseconds((long)epochMsStr);
+                return true;
+            }
+            // Fallback: a genuine ISO-8601 string @timestamp (defensive — other ES mappings / standalone setups).
+            return DateTimeOffset.TryParse(
+                raw,
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                out timestamp);
+        }
+        return false;
     }
 
     // ── Prometheus windowed-delta counter set (OBS-03) ───────────────────────────────────────────────

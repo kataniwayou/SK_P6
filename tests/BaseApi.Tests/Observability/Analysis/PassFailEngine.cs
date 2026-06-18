@@ -44,13 +44,34 @@ namespace BaseApi.Tests.Observability.Analysis;
 public sealed class PassFailEngine
 {
     /// <summary>
-    /// The 10-label completeness set (verbatim — FanOutSeederE2ETests.cs NodeNumbers keys):
-    /// A→B→C→{D1→E1→F1, D2→E2→F2}→G, with the single shared convergent terminal Step_G reachable from
-    /// BOTH sinks (73, D-10). A COMPLETE run's DISTINCT set equals this exactly (10 distinct labels) — note
-    /// Step_G logs TWICE per run (the per-arrival fan-in), which inflates RAW count to 11 but DISTINCT to 10.
+    /// The 9 per-execution HOP labels (B→C→{D1→E1→F1, D2→E2→F2}→G), with the single shared convergent
+    /// terminal Step_G reachable from BOTH sinks (73, D-10). A COMPLETE per-(corr,exec) run's DISTINCT hop
+    /// set equals this exactly — Step_G logs TWICE per run (the per-arrival fan-in) but DISTINCT collapses it
+    /// to one.
+    /// <para>
+    /// Step_A is DELIBERATELY excluded: it is the SHARED Mode-2 entry/seed, logged ONCE per correlationId
+    /// with executionId=Guid.Empty (no per-execution log, no Produced value), so it is filtered out of the
+    /// per-execution Step_* cohort and NEVER appears in a per-(corr,exec) trace — verified LIVE (phase-73
+    /// harness: every Step_A hit surfaces with empty ExecutionId, while Step_B..Step_G carry minted
+    /// executionIds + Produced values). Step_A's correctness is proven via the value chain's seed (see
+    /// <see cref="ResolveSeed"/> / <see cref="PerHopOffset"/>, which already treat Step_A as the optional
+    /// offset-0 seed source). This REFINES D-10's "10-label DAG" to the per-execution completeness of its 9
+    /// observable hops; <see cref="IsComplete"/> tolerates Step_A's presence (synthetic facts pass it) or
+    /// absence (the live cohort) so the live and hermetic paths share one rule.
+    /// </para>
     /// </summary>
-    private static readonly HashSet<string> AllLabels = new(StringComparer.Ordinal)
-    { "Step_A", "Step_B", "Step_C", "Step_D1", "Step_E1", "Step_F1", "Step_D2", "Step_E2", "Step_F2", "Step_G" };
+    private static readonly HashSet<string> HopLabels = new(StringComparer.Ordinal)
+    { "Step_B", "Step_C", "Step_D1", "Step_E1", "Step_F1", "Step_D2", "Step_E2", "Step_F2", "Step_G" };
+
+    /// <summary>
+    /// A run is COMPLETE when its distinct labels — IGNORING the optional shared <c>Step_A</c> entry — are
+    /// exactly the 9 per-execution <see cref="HopLabels"/>. Stripping Step_A before the equality preserves the
+    /// strict "no missing hop, no unexpected label" check while tolerating Step_A being present (synthetic
+    /// facts include it) or absent (the live per-execution cohort never carries it).
+    /// </summary>
+    private static bool IsComplete(RunTrace r)
+        => r.DistinctLabels.Where(l => !l.Equals("Step_A", StringComparison.Ordinal))
+            .ToHashSet(StringComparer.Ordinal).SetEquals(HopLabels);
 
     /// <summary>
     /// The Prom dispatch-count basis for the (inert, non-binding) corroboration math — kept at 9, NOT 10.
@@ -130,9 +151,10 @@ public sealed class PassFailEngine
         // RunTrace each (each spawned execution is its own run).
         var startedRuns = runs.Count;
 
-        // COMPLETE (OBS-01): distinct StepLabel set equals the full 10-label set (both sinks + the
-        // convergent terminal Step_G). Step_G logs ×2 per run but DISTINCT collapses it to one (73, D-10).
-        var complete = runs.Where(r => r.DistinctLabels.SetEquals(AllLabels)).ToList();
+        // COMPLETE (OBS-01): the 9 per-execution hops (both sinks + the convergent terminal Step_G) all
+        // present, the shared Step_A entry ignored (IsComplete). Step_G logs ×2 per run but DISTINCT
+        // collapses it to one (73, D-10).
+        var complete = runs.Where(IsComplete).ToList();
 
         // MISSING (OBS-02): started-but-incomplete. Bound against the ES STARTED denominator — NOT the
         // Prom dispatch count. A fully-dead run (never started in ES) is invisible here and surfaces
@@ -142,10 +164,11 @@ public sealed class PassFailEngine
         if (missing > 0)
         {
             missingDetail.Add(
-                $"{missing} of {startedRuns} STARTED run(s) (distinct correlationId with ≥1 Step_* log) did NOT reach " +
-                "COMPLETE (all 10 labels incl. both sinks Step_F1 + Step_F2 and the convergent terminal Step_G).");
+                $"{missing} of {startedRuns} STARTED run(s) (distinct (correlationId, executionId) with ≥1 Step_* log) " +
+                "did NOT reach COMPLETE (all 9 per-execution hops incl. both sinks Step_F1 + Step_F2 and the convergent " +
+                "terminal Step_G; the shared Step_A entry/seed is verified via the value chain, not the hop set).");
             missingDetail.Add(
-                "A fully-dead run (dispatched but never logging Step_A) never started in ES and is NOT in this count; " +
+                "A fully-dead run (dispatched but never logging any Step_*) never started in ES and is NOT in this count; " +
                 "it surfaces as a Prom corroboration WARNING (impliedRuns > startedRuns). The specific missing " +
                 "correlationId for such a run is NOT recoverable from telemetry (research item #1).");
         }
@@ -190,7 +213,7 @@ public sealed class PassFailEngine
                 continue; // no surfaced values → checked for vacuous-pass below when a value oracle is supplied
             }
 
-            if (run.DistinctLabels.SetEquals(AllLabels))
+            if (IsComplete(run))
             {
                 completeRunsWithValues++;
             }
