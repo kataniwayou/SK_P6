@@ -112,8 +112,13 @@ try {
         # Per-scenario analyzer report discovery. The wrapper only READS + tabulates the analyzer's
         # already-computed values (Verdict / Missing / Duplicates / ValueChainOk / trip duration) — it
         # NEVER re-scores anything.
+        # IN-02: a multi-TFM/multi-config bin tree can hold more than one analyzer-reports/{id}.json from prior
+        # builds; sort by LastWriteTime DESCENDING so the FRESHEST report (the one the audit stage just wrote)
+        # is taken, never a stale enumeration-order artifact. (Only tabulates informational columns — the gate
+        # is anchored on the dotnet test exit codes, not the report contents.)
         $report = Get-ChildItem -Path (Join-Path $repoRoot 'tests/BaseApi.Tests/bin') -Recurse -Filter "$id.json" -ErrorAction SilentlyContinue |
-                  Where-Object { $_.FullName -match 'analyzer-reports' } | Select-Object -First 1
+                  Where-Object { $_.FullName -match 'analyzer-reports' } |
+                  Sort-Object LastWriteTime -Descending | Select-Object -First 1
         $json = if ($report) { Get-Content $report.FullName -Raw | ConvertFrom-Json } else { $null }
 
         # The scenario PASSES iff the seed and the audit both exited 0 (the round-trip stage is deferred).
