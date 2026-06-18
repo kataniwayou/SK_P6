@@ -3,9 +3,9 @@ gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
-status: executing
-stopped_at: Completed 74-03-PLAN.md
-last_updated: "2026-06-18T06:39:07.328Z"
+status: verifying
+stopped_at: Completed 74-04-PLAN.md
+last_updated: "2026-06-18T07:01:40.570Z"
 last_activity: 2026-06-18
 progress:
   total_phases: 4
@@ -33,7 +33,7 @@ Phase: 74 (reshape-business-metrics-into-a-uniform-two-counter-model) — EXECUT
 Current Plan: 1
 Total Plans: 3
 Plan: 4 of 4
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-06-18
 
 > Phase 72 Plan 03 — ✅ COMPLETE 2026-06-17 (Wave 2: the payoff — all four `TypedResultConsumer<T>` shells now run ONE uniform branch-free pre-pipeline flow + the Phase-71-deferred D-18 trip-end metric lands). **2 atomic feat commits** (`b501557` dropped BOTH `if (outcome == StepOutcome.Completed)` gates — the `out:` read and the delete now run for every outcome (D-09, riding Plan-01's always-write); consumed `SelectNext`'s `{Matches, UnresolvedIds}`; three-way read (read lambda returns null on clean-absent to split absent from fault, Pitfall 2): present → fan-out+delete / clean-absent → idempotent ack-skip (Processing rides it for free, D-05) / Redis fault → REINJECT (D-10); ExecutionId threaded unchanged D-13; `88dbd3f` `OrchestratorMetrics` ctor-injected (singleton→scoped, no Program.cs edit) + BOTH increments in the same change (no CS9113): stage-1 L1-miss + stage-3 `foreach` over `UnresolvedIds` (continue, never throws, D-02), `workflowId` label only; rewrote `OrchestratorPrePipelineFacts` in place D-12 — Failed/Cancelled present-blob fan-out+delete like Completed, clean-absent + Processing-rides-skip facts, dangling-next-step (resolvable still fans out + 1 increment), condition-skip + normal-fanout no-increment, `MeterCollector` tag-set assertions). SPEC-4/5/6. **2 deviations:** (1) Rule 3 (blocking) — migrated 3 other test ctor sites (`TypedResultConsumerFacts`/`ResultAckTests`/`StopConsumerLifecycleTests`) to `OrchestratorTestStubs.Metrics()` (the ctor-param add broke them); (2) Rule 1 (test) — `TypedResultConsumerFacts` Failed-gated sub-call now passes the SAME `entryId` whose `out:` blob is present (the Failed read is now uniform post-D-09). Hermetic: `OrchestratorPrePipelineFacts` **15/15** + affected orchestrator facts **40/40 GREEN**; **0-warning Debug + Release** (full solution). Full `dotnet test` shows 288 failures — ALL pre-existing Docker-bound E2E/Integration tests (sandbox lacks Redis/RabbitMQ/Postgres); none in the hermetic dispatch surface. Live-stack proof deferred-automated (SPEC AC #10). Summary: `.planning/phases/72-processor-always-write-to-l2-and-uniform-orchestrator-pre-pi/72-03-SUMMARY.md` (Self-Check PASSED). **Phase 72 ready for verification.**
@@ -1045,6 +1045,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 74 P01 | 6 | 3 tasks | 8 files |
 | Phase 74 P02 | 6 min | 2 tasks | 6 files |
 | Phase 74 P03 | 29min | 3 tasks | 16 files |
+| Phase 74 P04 | 19 | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -1524,6 +1525,8 @@ Recent decisions affecting current work:
 - Phase 74-01: orchestrator uniform two-counter model — orchestrator_messages_consumed/sent with camelCase workflowId+processorId; messageId not a label; every successful Send counts
 - 74-02: ProcessorMetrics reshaped to uniform pair (processor_messages_consumed/_sent, camelCase workflowId+processorId, no outcome label); DispatchDeduped removed, SpawnDropped kept; rebound 3 consume/send sites incl. the plan-undercounted PostProcessConsumer Post-hop (Rule 3)
 - 74-03: keeper_messages_consumed counts once at the RecoveryConsumerBase.Consume choke point (all 6 recovery consumers, incl. both Delete); keeper_messages_sent via shared CountSent on the 4 senders after a confirmed Send (never on the Reinject drop path); keeper_l2_probe label-less once per BitHealthLoop tick; keeper_reinject_dropped removed
+- 74-04: Repointed PassFailEngine to processor_messages_sent total + dropped the outcome corroboration WARNING (D-12/D-13)
+- 74-04: Renamed metric facts in-place + added 3 removed-counter absence asserts; inverted MetricsRoundTrip workflowId guard (now REQUIRED) (D-14)
 
 ### Roadmap Milestone Log
 
@@ -1630,8 +1633,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-18T06:39:00.643Z
-Stopped at: Completed 74-03-PLAN.md
+Last session: 2026-06-18T07:01:32.692Z
+Stopped at: Completed 74-04-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
