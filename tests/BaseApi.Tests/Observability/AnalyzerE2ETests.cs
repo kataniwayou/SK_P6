@@ -208,13 +208,26 @@ public sealed class AnalyzerE2ETests
         // into the extended engine. The value-chain check (incl. the Step_G-at-seed+6 terminal-anchor proxy)
         // then folds into the binding verdict; the trip-duration maps land in the report. NO metric-counter
         // assertion is added; NO Redis skp:out: blob is read (ES-read-only, D-11).
+        // B-CRITERION FEED (Plan 3): parse the harness RECOVERY_UTC seam (the all-tiers-healthy instant). A
+        // null/empty/malformed value (no-fault baseline TEST-01) yields false ⇒ pass recoveryUtc:null, so the
+        // engine treats every started-but-incomplete run as a binding miss (correct — a no-fault run has none).
+        // The first/last hop maps let the engine classify a tolerated in-flight-at-wipe loss (last hop <
+        // recovery) vs a binding post-recovery miss for a redis-wipe scenario.
+        DateTimeOffset? recoveryUtc =
+            TryParseUtc(Environment.GetEnvironmentVariable("RECOVERY_UTC"), out var parsedRecovery)
+                ? parsedRecovery
+                : null;
+
         var report = new PassFailEngine().Analyze(
             traces, promSnapshot, scenarioId,
             tripDurationMsByExecution: cohort.TripDurationMsByExecution,
             tripDurationMsByCorrelation: cohort.TripDurationMsByCorrelation,
             seedsByExecution: cohort.SeedsByExecution,
             expectsKeeperActivity: ExpectsKeeperActivity.GetValueOrDefault(scenarioId, false),
-            mg1Binding: Mg1Binding.GetValueOrDefault(scenarioId, true));
+            mg1Binding: Mg1Binding.GetValueOrDefault(scenarioId, true),
+            recoveryUtc: recoveryUtc,
+            firstHopUtcByExecution: cohort.FirstHopUtcByExecution,
+            lastHopUtcByExecution: cohort.LastHopUtcByExecution);
 
         // ── 8. WRITE-THEN-ASSERT (D-02 / OBS-04 / T-66-11) ───────────────────────────────────────────
         //    Serialize + write the JSON report FIRST so the artifact exists even on a red run, and the
@@ -303,6 +316,13 @@ public sealed class AnalyzerE2ETests
         public required IReadOnlyDictionary<string, double> TripDurationMsByExecution { get; init; } // keyed "corr|exec"
         public required IReadOnlyDictionary<string, double> TripDurationMsByCorrelation { get; init; } // keyed "corr"
         public required IReadOnlyDictionary<string, int> SeedsByExecution { get; init; }               // keyed "corr|exec"
+
+        // B-criterion (Plan 3): per-(corr,exec) first/last hop ES @timestamp, keyed "corr|exec" — the MIN and
+        // MAX of the same trip-duration span. The engine uses these vs RECOVERY_UTC to classify a started-but-
+        // incomplete run as a tolerated in-flight-at-wipe loss (last hop < recovery) vs a binding post-recovery
+        // miss. Derived from the SAME hits as the trip-duration span (no new ES query).
+        public required IReadOnlyDictionary<string, DateTimeOffset> FirstHopUtcByExecution { get; init; } // keyed "corr|exec"
+        public required IReadOnlyDictionary<string, DateTimeOffset> LastHopUtcByExecution { get; init; }  // keyed "corr|exec"
     }
 
     /// <summary>
@@ -394,6 +414,14 @@ public sealed class AnalyzerE2ETests
             kv => (kv.Value.Max - kv.Value.Min).TotalMilliseconds,
             StringComparer.Ordinal);
 
+        // B-criterion (Plan 3): per-(corr,exec) first/last hop = the MIN/MAX of the same @timestamp span,
+        // keyed "corr|exec" — mirrors TripDurationMsByExecution's key shape. The engine compares last hop vs
+        // RECOVERY_UTC to classify a tolerated in-flight-at-wipe loss vs a binding post-recovery miss.
+        var firstHopByExec = spanByInstance.ToDictionary(
+            kv => $"{kv.Key.Corr}|{kv.Key.Exec}", kv => kv.Value.Min, StringComparer.Ordinal);
+        var lastHopByExec = spanByInstance.ToDictionary(
+            kv => $"{kv.Key.Corr}|{kv.Key.Exec}", kv => kv.Value.Max, StringComparer.Ordinal);
+
         // Per-execution seed map (73, D-11): recover seed = Produced[Step_B] - 1 (the +1-per-hop chain).
         //
         // WR-01 — what this LIVE seed actually anchors. The seed here is DERIVED from the chain it then
@@ -423,6 +451,8 @@ public sealed class AnalyzerE2ETests
             TripDurationMsByExecution = tripByExec,
             TripDurationMsByCorrelation = tripByCorr,
             SeedsByExecution = seedsByExec,
+            FirstHopUtcByExecution = firstHopByExec,
+            LastHopUtcByExecution = lastHopByExec,
         };
     }
 

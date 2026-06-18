@@ -111,6 +111,13 @@ public sealed record AnalyzerReport
     /// </summary>
     public required IReadOnlyList<string> MissingDetail { get; init; }
 
+    /// <summary>B-criterion: started-but-incomplete runs whose last hop precedes RECOVERY_UTC — tolerated
+    /// in-flight-at-wipe losses (counted, do NOT fail unless &gt; MaxInFlightLoss). Distinct from Missing.</summary>
+    public required int InFlightLoss { get; init; }
+
+    /// <summary>Per-run evidence for each tolerated in-flight loss (corr|exec + last-hop vs recovery).</summary>
+    public required IReadOnlyList<string> InFlightLossDetail { get; init; }
+
     /// <summary>The traces that carried any duplicate (correlationId, StepLabel) — the fail-closed evidence (OBS-02).</summary>
     public required IReadOnlyList<RunTrace> Duplicates { get; init; }
 

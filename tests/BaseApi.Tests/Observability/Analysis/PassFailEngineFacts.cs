@@ -215,6 +215,61 @@ public sealed class PassFailEngineFacts
         Assert.Equal(Verdict.Pass, report.Verdict);
     }
 
+    // B-criterion: a started-but-stalled run (4 hops only, missing the rest) — used to drive the in-flight
+    // vs post-recovery classification facts below.
+    private static readonly string[] Missing4Hops = { "Step_A", "Step_B", "Step_C", "Step_D1" }; // started, stalled
+
+    [Fact]
+    public void InFlight_LossBeforeRecovery_IsTolerated_Yields_Pass()
+    {
+        var complete = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
+        var stalled  = RunTrace.FromLabels("corr-2", "exec-2", Missing4Hops);
+        var recovery = DateTimeOffset.Parse("2026-06-18T10:00:30Z");
+        var lastHop  = new Dictionary<string, DateTimeOffset> { ["corr-2|exec-2"] = DateTimeOffset.Parse("2026-06-18T10:00:10Z") };
+        var firstHop = new Dictionary<string, DateTimeOffset> { ["corr-2|exec-2"] = DateTimeOffset.Parse("2026-06-18T10:00:05Z") };
+        var snap = ConservingSnapshot(results: 9);
+
+        var report = new PassFailEngine().Analyze(new[] { complete, stalled }, snap, "TEST-05",
+            recoveryUtc: recovery, firstHopUtcByExecution: firstHop, lastHopUtcByExecution: lastHop);
+
+        Assert.Equal(1, report.InFlightLoss);
+        Assert.Equal(0, report.Missing);
+        Assert.Equal(Verdict.Pass, report.Verdict);
+    }
+
+    [Fact]
+    public void Incomplete_StartedAfterRecovery_Yields_Fail()
+    {
+        var stalled  = RunTrace.FromLabels("corr-9", "exec-9", Missing4Hops);
+        var recovery = DateTimeOffset.Parse("2026-06-18T10:00:30Z");
+        var lastHop  = new Dictionary<string, DateTimeOffset> { ["corr-9|exec-9"] = DateTimeOffset.Parse("2026-06-18T10:01:10Z") };
+        var firstHop = new Dictionary<string, DateTimeOffset> { ["corr-9|exec-9"] = DateTimeOffset.Parse("2026-06-18T10:01:05Z") };
+        var snap = ConservingSnapshot(results: 9);
+
+        var report = new PassFailEngine().Analyze(new[] { stalled }, snap, "TEST-05",
+            recoveryUtc: recovery, firstHopUtcByExecution: firstHop, lastHopUtcByExecution: lastHop);
+
+        Assert.Equal(1, report.Missing);
+        Assert.Equal(Verdict.Fail, report.Verdict);
+    }
+
+    [Fact]
+    public void InFlight_LossExceedsBound_Yields_Fail()
+    {
+        var runs = Enumerable.Range(1, 6)
+            .Select(i => RunTrace.FromLabels($"corr-{i}", $"exec-{i}", Missing4Hops)).ToArray();
+        var recovery = DateTimeOffset.Parse("2026-06-18T10:00:30Z");
+        var last  = runs.ToDictionary(r => $"{r.CorrelationId}|{r.ExecutionId}", _ => DateTimeOffset.Parse("2026-06-18T10:00:10Z"));
+        var first = runs.ToDictionary(r => $"{r.CorrelationId}|{r.ExecutionId}", _ => DateTimeOffset.Parse("2026-06-18T10:00:05Z"));
+        var snap = ConservingSnapshot(results: 9);
+
+        var report = new PassFailEngine().Analyze(runs, snap, "TEST-05",
+            recoveryUtc: recovery, firstHopUtcByExecution: first, lastHopUtcByExecution: last);
+
+        Assert.True(report.InFlightLoss > 4);
+        Assert.Equal(Verdict.Fail, report.Verdict);
+    }
+
     [Fact]
     public void RemovedDedupCounters_HaveNoSnapshotField_AbsenceProvenByCompile()
     {

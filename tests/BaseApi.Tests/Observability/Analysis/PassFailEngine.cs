@@ -104,7 +104,11 @@ public sealed class PassFailEngine
                                   IReadOnlyDictionary<string, double>? tripDurationMsByCorrelation = null,
                                   IReadOnlyDictionary<string, int>? seedsByExecution = null,
                                   bool expectsKeeperActivity = false,
-                                  bool mg1Binding = true)
+                                  bool mg1Binding = true,
+                                  DateTimeOffset? recoveryUtc = null,
+                                  IReadOnlyDictionary<string, DateTimeOffset>? firstHopUtcByExecution = null,
+                                  IReadOnlyDictionary<string, DateTimeOffset>? lastHopUtcByExecution = null,
+                                  int maxInFlightLoss = 4)
     {
         // ── ES-BINDING ARBITER (67-03) ────────────────────────────────────────────────────────────
 
@@ -117,21 +121,49 @@ public sealed class PassFailEngine
         // collapses it to one (73, D-10).
         var complete = runs.Where(IsComplete).ToList();
 
-        // MISSING (OBS-02): started-but-incomplete. Bound against the ES STARTED denominator — NOT the
-        // Prom dispatch count. A fully-dead run (never started in ES) is invisible here and is not
-        // detected by the current engine (the Prom dead-run corroboration warning was retired).
-        var missing = startedRuns - complete.Count;
+        // ── B-CRITERION: classify started-but-incomplete runs (in-flight-at-wipe vs post-recovery) ──
+        // MISSING (OBS-02) is now the BINDING subset of started-but-incomplete runs: those that are NOT a
+        // tolerated in-flight-at-wipe loss. A run is a tolerated in-flight loss iff its last hop precedes
+        // RECOVERY_UTC (stalled before the tier came back) AND it did not first appear after recovery — those
+        // are counted in InFlightLoss (do NOT fail unless > MaxInFlightLoss). With recoveryUtc == null (no
+        // fault) BOTH predicates are false, so every incomplete run falls to the binding-miss branch exactly
+        // as before. A fully-dead run (never started in ES) is invisible to either count.
+        var firstHop = firstHopUtcByExecution ?? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var lastHop  = lastHopUtcByExecution  ?? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+
+        var incomplete = runs.Where(r => !IsComplete(r)).ToList();
+        var inFlightLoss = 0;
+        var bindingMissing = 0;
+        var inFlightLossDetail = new List<string>();
         var missingDetail = new List<string>();
-        if (missing > 0)
+
+        foreach (var r in incomplete)
         {
-            missingDetail.Add(
-                $"{missing} of {startedRuns} STARTED run(s) (distinct (correlationId, executionId) with ≥1 Step_* log) " +
-                "did NOT reach COMPLETE (all 9 per-execution hops incl. both sinks Step_F1 + Step_F2 and the convergent " +
-                "terminal Step_G; the shared Step_A entry/seed is verified via the value chain, not the hop set).");
-            missingDetail.Add(
-                "A fully-dead run (dispatched but never logging any Step_*) never started in ES and is NOT in this count. " +
-                "The specific missing correlationId for such a run is NOT recoverable from telemetry (research item #1).");
+            var key = $"{r.CorrelationId}|{r.ExecutionId}";
+            var startedAfterRecovery = recoveryUtc is { } rec
+                && firstHop.TryGetValue(key, out var fh) && fh > rec;
+            var stalledBeforeRecovery = recoveryUtc is { } rec2
+                && lastHop.TryGetValue(key, out var lh) && lh < rec2;
+
+            if (stalledBeforeRecovery && !startedAfterRecovery)
+            {
+                inFlightLoss++;
+                inFlightLossDetail.Add(
+                    $"[{key}] in-flight loss: last hop {lastHop[key]:o} < recovery {recoveryUtc:o} (tolerated).");
+            }
+            else
+            {
+                bindingMissing++;
+                missingDetail.Add(
+                    $"[{key}] started-but-incomplete and NOT an in-flight-at-wipe loss → binding miss.");
+            }
         }
+
+        var missing = bindingMissing;
+        var inFlightOverBound = inFlightLoss > maxInFlightLoss;
+        if (inFlightOverBound)
+            missingDetail.Add(
+                $"in-flight loss {inFlightLoss} exceeds MaxInFlightLoss {maxInFlightLoss} — worse than a single wipe window.");
 
         // DUPLICATE (OBS-02, fail-closed, BINDING): any ILLEGITIMATE duplicate (correlationId, StepLabel) is a
         // FAIL. Reads the convergent-aware HasIllegitimateDuplicate (73, D-10), NOT the raw HasAnyDuplicateLabel,
@@ -240,7 +272,7 @@ public sealed class PassFailEngine
         // and the metric gate (MG-1/2/3, metricGateOk) is now ALSO binding — a failing gate flips a green
         // ES verdict to Fail and sets Reconciliation=Unreconciled (the legacy round(sent/9) corroboration
         // that was non-fatal is retired).
-        var pass = missing == 0 && !dupFail && valueChainOk && metricGateOk;
+        var pass = missing == 0 && !inFlightOverBound && !dupFail && valueChainOk && metricGateOk;
         var verdict = pass ? Verdict.Pass : Verdict.Fail;
 
         // Build the report (no IO).
@@ -252,6 +284,8 @@ public sealed class PassFailEngine
             CompleteRuns = complete.Count,
             Missing = missing,
             MissingDetail = missingDetail,
+            InFlightLoss = inFlightLoss,
+            InFlightLossDetail = inFlightLossDetail,
             Duplicates = duplicates,
             Reconciliation = recon,
             CorroborationDetail = corroborationDetail,
