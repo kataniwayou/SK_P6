@@ -324,10 +324,16 @@ try {
     while (([DateTimeOffset]::UtcNow - $windowStart).TotalSeconds -lt $windowSeconds) {
         Start-Sleep -Seconds 5
     }
-    $windowEnd = [DateTimeOffset]::UtcNow
-    Write-Phase "STEP F: window closed at $($windowEnd.ToString('o')) ($([int](($windowEnd - $windowStart).TotalSeconds))s)"
+    $windowCloseUtc = [DateTimeOffset]::UtcNow
+    Write-Phase "STEP F: observation window closed at $($windowCloseUtc.ToString('o')) ($([int](($windowCloseUtc - $windowStart).TotalSeconds))s)"
 
-    # STEP F.6 — DRAIN TO QUIESCENCE (MG-1 conservation holds only when no message is in flight).
+    # STEP F.6 — DRAIN TO QUIESCENCE, then pin windowEnd POST-DRAIN. MG-1 result conservation
+    # (orchestrator_messages_consumed == processor_messages_sent) only holds once nothing is in flight, and
+    # the analyzer reads the Prom delta TIME-PINNED to windowEnd. So windowEnd MUST be the post-drain instant,
+    # or the pinned [windowStart, windowEnd] delta captures the in-flight imbalance and the (now-binding) MG-1
+    # gate fails spuriously. The workflow is stopped first, so NO new fires occur during the drain → the ES
+    # [windowStart, windowEnd] cohort is unchanged (no Step_* hits after stop) and extending windowEnd past
+    # the drain is safe for ES while making the Prom conservation read settled.
     Write-Phase "STEP F.6: stop workflow + drain to quiescence (for metric-gate conservation)"
     $stopBody = ConvertTo-Json @($wfId)
     try { Invoke-WebRequest -Method Post -Uri 'http://localhost:8080/api/v1/orchestration/stop' `
@@ -339,7 +345,8 @@ try {
         if ($cur -eq $prev) { break }
         $prev = $cur
     } while ((Get-Date) -lt $stableDeadline)
-    Write-Phase "  drained (orchestrator_messages_sent flat at $cur)." 'Gray'
+    $windowEnd = [DateTimeOffset]::UtcNow
+    Write-Phase "  drained (orchestrator_messages_sent flat at $cur); windowEnd pinned post-drain at $($windowEnd.ToString('o'))." 'Gray'
 
     # -----------------------------------------------------------------------
     # STEP H — DRAIN + ANALYZE (FRAME 4 / D-04 / D-16; VERDICT — do NOT remap to an infra code).
