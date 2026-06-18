@@ -61,8 +61,8 @@ public sealed class PassFailEngineFacts
         DispatchDedupedDelta = null, // DORMANT — absent
     };
 
-    /// <summary>triggerCount mirrors the fixture: round(DispatchSentDelta). Corroboration evidence only (67-03).</summary>
-    private static int TriggerCountOf(PromCounterSnapshot s) => (int)System.Math.Round(s.DispatchSentDelta);
+    /// <summary>triggerCount mirrors the fixture via the shared <see cref="PassFailEngine.TriggerCountFrom"/> (IN-01) — corroboration evidence only (67-03).</summary>
+    private static int TriggerCountOf(PromCounterSnapshot s) => PassFailEngine.TriggerCountFrom(s);
 
     [Fact]
     public void Complete_AllStartedRuns_Yields_Pass()
