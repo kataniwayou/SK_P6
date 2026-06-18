@@ -31,11 +31,15 @@ namespace BaseApi.Tests.Observability.Analysis;
 ///   is NOT in this count.</item>
 /// <item>DUPLICATE (OBS-02, fail-closed, BINDING): ANY duplicate (correlationId, StepLabel) ⇒ Fail —
 ///   the live dedupe counters are dormant, so no redelivery can be corroborated.</item>
-/// <item>METRIC GATE (inert): the former Prom corroboration math (impliedRuns = round(sent/9),
-///   spawn-aware result reconciliation) was retired as miscalibrated; the gate is inert today and a
-///   later task repurposes it as a metric gate. The Reconciliation/CorroborationDetail report fields
-///   are kept for that future use.</item>
-/// <item>VERDICT: Pass iff (every started run complete) AND (no duplicate) AND (value-chain intact).</item>
+/// <item>METRIC GATE (BINDING): the former Prom corroboration math (impliedRuns = round(sent/9),
+///   spawn-aware result reconciliation) was retired as miscalibrated and replaced by three gates evaluated
+///   at quiescence — MG-1 result conservation (orchestrator_consumed == processor_sent, per-scenario
+///   binding via <paramref name="mg1Binding"/>; reporting-only where a tier restart resets a counter or an
+///   L2 wipe causes tolerated loss), MG-2 keeper-recovery activity (per-scenario via
+///   <paramref name="expectsKeeperActivity"/>), and MG-3 keeper-l2-probe liveness (universal). A failing
+///   BINDING gate flips the verdict and emits a CorroborationDetail line (Reconciliation=Unreconciled).</item>
+/// <item>VERDICT: Pass iff (every started run complete) AND (no duplicate) AND (value-chain intact) AND
+///   (the binding metric gate holds).</item>
 /// </list>
 /// </para>
 /// </summary>
