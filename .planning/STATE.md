@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 74-01-PLAN.md
-last_updated: "2026-06-18T05:59:39.096Z"
+stopped_at: Completed 74-02-PLAN.md
+last_updated: "2026-06-18T06:07:16.002Z"
 last_activity: 2026-06-18
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove per
 Phase: 74 (reshape-business-metrics-into-a-uniform-two-counter-model) — EXECUTING
 Current Plan: 1
 Total Plans: 3
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-06-18
 
@@ -1043,6 +1043,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 73 P03 | 15min | 3 tasks | 5 files |
 | Phase 73 P04 | 10min | 3 tasks | 3 files |
 | Phase 74 P01 | 6 | 3 tasks | 8 files |
+| Phase 74 P02 | 6 min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1520,6 +1521,7 @@ Recent decisions affecting current work:
 - 73-04: live RealStack auditor reads attributes.Produced + ES @timestamp trip-duration into the Plan-03 extended FromLabels/Analyze; Step_G seed+6 ES log is the live terminal-anchor proxy (ES-read-only, no Redis read)
 - 73-04: seeder builds G-extended DAG (10/10/10, Step_G lone sink, uniform number=1); phase-73-sweep.ps1 live Docker round-trip is deferred-automated, not a phase gate
 - Phase 74-01: orchestrator uniform two-counter model — orchestrator_messages_consumed/sent with camelCase workflowId+processorId; messageId not a label; every successful Send counts
+- 74-02: ProcessorMetrics reshaped to uniform pair (processor_messages_consumed/_sent, camelCase workflowId+processorId, no outcome label); DispatchDeduped removed, SpawnDropped kept; rebound 3 consume/send sites incl. the plan-undercounted PostProcessConsumer Post-hop (Rule 3)
 
 ### Roadmap Milestone Log
 
@@ -1626,8 +1628,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-18T05:59:32.822Z
-Stopped at: Completed 74-01-PLAN.md
+Last session: 2026-06-18T06:07:10.190Z
+Stopped at: Completed 74-02-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
