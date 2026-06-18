@@ -228,6 +228,11 @@ try {
     # scoring is the analyzer's job (ES-primary).
     # -----------------------------------------------------------------------
     $windowStart = [DateTimeOffset]::UtcNow
+    # RECOVERY_UTC seam (Plan 3 / B-criterion): the instant ALL crashed tiers returned healthy in STEP F.4.
+    # Stays $null for the no-fault baseline (TEST-01). Declared here so it is in scope in STEP H even on the
+    # no-fault path. The analyzer uses it to classify a started-but-incomplete run as a TOLERATED in-flight-at-
+    # wipe loss (last hop < recovery) vs a BINDING post-recovery miss.
+    $recoveryUtc = $null
     Write-Phase "STEP F: window open at $($windowStart.ToString('o'))"
 
     function Get-FireCount {
@@ -320,6 +325,9 @@ try {
             } while (-not $svcHealthy)
             Write-Phase "  tier '$svc' healthy again ($($instances.Count) instance(s))." 'Gray'
         }
+        # All crashed tiers confirmed healthy — record the recovery instant (B-criterion seam).
+        $recoveryUtc = [DateTimeOffset]::UtcNow
+        Write-Phase "  RECOVERY_UTC = $($recoveryUtc.ToString('o')) (all crashed tiers healthy)." 'Gray'
     }
     else {
         Write-Phase "STEP F.2: no-fault baseline — no injection (faultType='$($scenario.faultType)')"
@@ -373,6 +381,9 @@ try {
     $env:SCENARIO_ID      = $ScenarioId
     $env:WINDOW_START_UTC = $windowStart.ToString('o')
     $env:WINDOW_END_UTC   = $windowEnd.ToString('o')
+    # RECOVERY_UTC (B-criterion): the all-tiers-healthy instant for a fault run, or '' for the no-fault
+    # baseline (TEST-01). An empty value parses as no-recovery in the analyzer (all incompletes are binding).
+    $env:RECOVERY_UTC     = if ($recoveryUtc) { $recoveryUtc.ToString('o') } else { '' }
     # IN-03: clear the D-16 env seam in a `finally` so a terminating error inside the analyze block
     # ($ErrorActionPreference='Stop') cannot leak SCENARIO_ID / WINDOW_*_UTC into the parent shell
     # (matters when the body is dot-sourced / run interactively; harmless for the one-shot `pwsh -File`).
@@ -388,7 +399,7 @@ try {
         dotnet test tests/BaseApi.Tests/BaseApi.Tests.csproj -c Release -- --filter-method "*Analyze_Window_Yields_Pass*" 2>&1 | Out-String | Write-Host
         $analyzerExit = $LASTEXITCODE
     } finally {
-        Remove-Item Env:SCENARIO_ID, Env:WINDOW_START_UTC, Env:WINDOW_END_UTC -ErrorAction SilentlyContinue
+        Remove-Item Env:SCENARIO_ID, Env:WINDOW_START_UTC, Env:WINDOW_END_UTC, Env:RECOVERY_UTC -ErrorAction SilentlyContinue
     }
 
     # Locate + echo the analyzer report path (D-04 requires printing it).
