@@ -55,15 +55,20 @@ public sealed class ReinjectConsumerFacts
         var metrics = RecoveryTestKit.Metrics();
 
         // Phase 74 (REQ-3/D-14): the success path MUST increment the uniform keeper_messages_sent counter
-        // after the confirmed Send. Observe it by instrument name on the "Keeper" meter.
+        // after the confirmed Send. Scope the listener to THIS metrics instance's exact instrument (by
+        // reference identity) so the capture is hermetic under parallel test classes (a name-only filter
+        // would also catch a concurrently-running test's keeper_messages_sent).
         long sent = 0;
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == KeeperMetrics.MeterName && instrument.Name == "keeper_messages_sent")
+            if (ReferenceEquals(instrument, metrics.MessagesSent))
                 l.EnableMeasurementEvents(instrument);
         };
-        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => Interlocked.Add(ref sent, measurement));
+        listener.SetMeasurementEventCallback<long>((instrument, measurement, _, _) =>
+        {
+            if (ReferenceEquals(instrument, metrics.MessagesSent)) Interlocked.Add(ref sent, measurement);
+        });
         listener.Start();
 
         var consumer = new ReinjectConsumer(
@@ -116,20 +121,25 @@ public sealed class ReinjectConsumerFacts
         var metrics = RecoveryTestKit.Metrics();
 
         long sent = 0;
-        // D-14 absence assert: NO instrument named keeper_reinject_dropped may EVER be published under the
-        // "Keeper" meter (the removed counter emits no series). Capture every published Keeper instrument name.
+        // D-14 absence assert: NO instrument named keeper_reinject_dropped may EVER be published on THIS
+        // metrics instance's meter (the removed counter emits no series). Scope to this instance's meter (by
+        // reference) so a concurrent test's "Keeper" meter cannot pollute the capture.
+        var thisMeter = metrics.MessagesSent.Meter;
         var publishedKeeperInstruments = new System.Collections.Concurrent.ConcurrentBag<string>();
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == KeeperMetrics.MeterName)
+            if (ReferenceEquals(instrument.Meter, thisMeter))
             {
                 publishedKeeperInstruments.Add(instrument.Name);
-                if (instrument.Name == "keeper_messages_sent")
+                if (ReferenceEquals(instrument, metrics.MessagesSent))
                     l.EnableMeasurementEvents(instrument);
             }
         };
-        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => Interlocked.Add(ref sent, measurement));
+        listener.SetMeasurementEventCallback<long>((instrument, measurement, _, _) =>
+        {
+            if (ReferenceEquals(instrument, metrics.MessagesSent)) Interlocked.Add(ref sent, measurement);
+        });
         listener.Start();
 
         var consumer = new ReinjectConsumer(

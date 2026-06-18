@@ -58,14 +58,18 @@ public sealed class OrchestratorReinjectConsumerFacts
         var metrics = RecoveryTestKit.Metrics();
 
         // Phase 74 (REQ-3/D-14): the success path increments the uniform keeper_messages_sent after the send.
+        // Scope to THIS metrics instance's exact instrument (reference identity) — hermetic under parallelism.
         long sent = 0;
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == KeeperMetrics.MeterName && instrument.Name == "keeper_messages_sent")
+            if (ReferenceEquals(instrument, metrics.MessagesSent))
                 l.EnableMeasurementEvents(instrument);
         };
-        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => Interlocked.Add(ref sent, measurement));
+        listener.SetMeasurementEventCallback<long>((instrument, measurement, _, _) =>
+        {
+            if (ReferenceEquals(instrument, metrics.MessagesSent)) Interlocked.Add(ref sent, measurement);
+        });
         listener.Start();
 
         var consumer = new OrchestratorReinjectConsumer(
@@ -134,19 +138,24 @@ public sealed class OrchestratorReinjectConsumerFacts
         var metrics = RecoveryTestKit.Metrics();
 
         long sent = 0;
-        // D-14 absence assert: NO instrument named keeper_reinject_dropped may EVER publish under "Keeper".
+        // D-14 absence assert: NO instrument named keeper_reinject_dropped may EVER publish on THIS metrics
+        // instance's meter. Scope to this instance's meter (by reference) — hermetic under parallelism.
+        var thisMeter = metrics.MessagesSent.Meter;
         var publishedKeeperInstruments = new System.Collections.Concurrent.ConcurrentBag<string>();
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == KeeperMetrics.MeterName)
+            if (ReferenceEquals(instrument.Meter, thisMeter))
             {
                 publishedKeeperInstruments.Add(instrument.Name);
-                if (instrument.Name == "keeper_messages_sent")
+                if (ReferenceEquals(instrument, metrics.MessagesSent))
                     l.EnableMeasurementEvents(instrument);
             }
         };
-        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => Interlocked.Add(ref sent, measurement));
+        listener.SetMeasurementEventCallback<long>((instrument, measurement, _, _) =>
+        {
+            if (ReferenceEquals(instrument, metrics.MessagesSent)) Interlocked.Add(ref sent, measurement);
+        });
         listener.Start();
 
         var consumer = new OrchestratorReinjectConsumer(

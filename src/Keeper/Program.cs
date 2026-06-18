@@ -83,9 +83,10 @@ builder.Services.AddBaseConsoleMessaging(builder.Configuration, x =>
 builder.Services.AddSingleton<Keeper.Recovery.RecoveryEndpointHandle>();
 builder.Services.AddHostedService<Keeper.Recovery.RecoveryEndpointBinder>();
 
-// D-07 (Plan 01 handoff): the code-owned Keeper meter consumed by ReinjectConsumer (keeper_reinject_dropped),
+// D-07 (Plan 01 handoff): the code-owned Keeper meter consumed by the recovery consumers + BitHealthLoop
+// (the uniform keeper_messages_consumed / keeper_messages_sent counters + the keeper_l2_probe heartbeat),
 // + its OTel meter-provider registration (mirrors ProcessorMetrics' AddSingleton + AddMeter). Without the
-// AddSingleton the consumer cannot resolve KeeperMetrics at runtime; without the AddMeter the counter is
+// AddSingleton the consumer cannot resolve KeeperMetrics at runtime; without the AddMeter the counters are
 // created but never exported.
 builder.Services.AddSingleton<Keeper.Observability.KeeperMetrics>();
 builder.Services.ConfigureOpenTelemetryMeterProvider(
