@@ -24,15 +24,16 @@ public sealed record MetricGateResult
 public enum Verdict
 {
     /// <summary>
-    /// ES-binding green: every STARTED run (distinct correlationId with ≥1 Step_* log) is COMPLETE
-    /// (all 9 labels incl. both sinks) AND no duplicate (correlationId, StepLabel). Prometheus is
-    /// corroborating only — a Prom corroboration warning does NOT flip a green ES verdict (67-03).
+    /// Green: every STARTED run (distinct correlationId with ≥1 Step_* log) is COMPLETE (all 9 labels
+    /// incl. both sinks), no duplicate (correlationId, StepLabel), the value chain is intact, AND the
+    /// binding metric gate (MG-1 conservation / MG-2 keeper / MG-3 probe) holds.
     /// </summary>
     Pass,
 
     /// <summary>
-    /// ES-binding red: at least one started-but-incomplete run (1–8 labels) OR any duplicate
-    /// (fail-closed). Prometheus corroboration is non-binding and never the sole cause of a Fail.
+    /// Red: at least one started-but-incomplete run (1–8 labels) OR any duplicate (fail-closed) OR a
+    /// value-chain mismatch OR a failing binding metric-gate check (MG-1/2/3). A failing binding gate
+    /// flips the verdict and sets <see cref="ReconciliationOutcome.Unreconciled"/>.
     /// </summary>
     Fail,
 }
@@ -51,10 +52,11 @@ public enum ReconciliationOutcome
     Reconciled,
 
     /// <summary>
-    /// RESERVED for the future metric gate; NOT produced by the current engine. The former
-    /// round(OrchestratorMessagesSentDelta / 9) corroboration math was retired, so the engine leaves
-    /// <see cref="AnalyzerReport.CorroborationDetail"/> empty and <see cref="AnalyzerReport.Reconciliation"/>
-    /// is currently always <see cref="Reconciled"/>. A later task repurposes this outcome.
+    /// PRODUCED when a BINDING metric-gate check fails (MG-1 conservation / MG-2 keeper / MG-3 probe).
+    /// The engine sets this outcome and carries the MG-1/2/3 failure lines in
+    /// <see cref="AnalyzerReport.CorroborationDetail"/>; a binding metric-gate failure flips the verdict
+    /// to <see cref="Verdict.Fail"/>. (The former round(OrchestratorMessagesSentDelta / 9) corroboration
+    /// math was retired.)
     /// </summary>
     Unreconciled,
 
@@ -72,9 +74,11 @@ public enum ReconciliationOutcome
 /// <b>Verdict drivers (ES-binding):</b> <see cref="StartedRuns"/> is the binding denominator —
 /// distinct correlationIds with ≥1 Step_* log (runs that started). <see cref="CompleteRuns"/> /
 /// <see cref="Missing"/> account against THAT denominator, and the loud <see cref="Duplicates"/>
-/// stay fail-closed. <b>Metric gate (inert):</b> the former Prom corroboration math was retired;
-/// the <see cref="Prom"/> snapshot plus <see cref="Reconciliation"/> + <see cref="CorroborationDetail"/>
-/// are kept as report fields for a later task to repurpose as a metric gate.
+/// stay fail-closed. <b>Metric gate (BINDING):</b> the verdict folds in the ES value chain AND the
+/// binding metric gate (MG-1 conservation / MG-2 keeper / MG-3 probe); a failing binding gate flips the
+/// verdict to Fail and sets <see cref="Reconciliation"/> = <see cref="ReconciliationOutcome.Unreconciled"/>,
+/// with the MG-1/2/3 failure lines carried in <see cref="CorroborationDetail"/>. (The former Prom
+/// corroboration math was retired.)
 /// </para>
 /// </summary>
 public sealed record AnalyzerReport

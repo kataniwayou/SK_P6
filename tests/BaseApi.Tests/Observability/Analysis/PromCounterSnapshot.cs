@@ -9,6 +9,14 @@ namespace BaseApi.Tests.Observability.Analysis;
 /// two scrapes; the engine reconciles them.
 ///
 /// <para>
+/// <b>EXCEPTION — two windowEnd-CUMULATIVE fields.</b> <see cref="OrchestratorMessagesConsumedAtEnd"/>
+/// and <see cref="ProcessorMessagesSentAtEnd"/> are NOT deltas — they are the windowEnd-CUMULATIVE
+/// counter values. MG-1 conservation compares them directly (not the windowed delta) because the
+/// force-recreate corrupts the windowStart delta baseline, leaving the windowEnd cumulative as the only
+/// valid conservation measure.
+/// </para>
+///
+/// <para>
 /// A PURE DTO — no Prom/Http dependency. Synthetic snapshots drive the hermetic facts; real
 /// scrapes feed the same shape from the fixture.
 /// </para>

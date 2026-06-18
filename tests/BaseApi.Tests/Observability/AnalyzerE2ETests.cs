@@ -271,8 +271,8 @@ public sealed class AnalyzerE2ETests
     /// This prevents scoring an in-flight run as MISSING.
     /// <para>
     /// Stability requires a non-zero count: a transient empty result (ES 404 lazy-index, backend blip)
-    /// returning <c>0 == 0</c> across two polls would be incorrectly accepted as stable, producing
-    /// <c>Missing = triggerCount - 0 > 0</c> → Fail on a backend hiccup rather than a real defect.
+    /// returning <c>0 == 0</c> across two polls would be incorrectly accepted as stable, scoring an empty
+    /// cohort → a spurious Fail on a backend hiccup rather than a real defect.
     /// If the window genuinely contains zero runs (e.g. no dispatches fired), the loop exhausts its
     /// budget and returns the empty list — the precondition assert (WR-04) then surfaces the root cause.
     /// </para>
@@ -295,7 +295,7 @@ public sealed class AnalyzerE2ETests
                 // stable across two polls AND we actually have hits — safe to score.
                 // Requiring Count > 0 prevents a transient empty ES result (404 lazy-index,
                 // backend blip) from being accepted as "stable" and producing a spurious
-                // triggerCount-missing FAIL. (WR-02 fix — 66-REVIEW.md.)
+                // FAIL on an empty cohort. (WR-02 fix — 66-REVIEW.md.)
                 return current;
             }
             last = current;

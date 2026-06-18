@@ -296,7 +296,8 @@ public sealed class PassFailEngine
             TripDurationMsByExecution = tripByExec,
             TripDurationMsByCorrelation = tripByCorr,
             HumanSummary = BuildSummary(
-                scenarioId, verdict, startedRuns, complete.Count, missing, dupFail, valueChainOk, recon, corroborationDetail),
+                scenarioId, verdict, startedRuns, complete.Count, missing, dupFail, valueChainOk,
+                metricGateOk, inFlightOverBound, recon, corroborationDetail),
             MetricGate = metricGate,
         };
     }
@@ -381,22 +382,25 @@ public sealed class PassFailEngine
     }
 
     private static string BuildSummary(string scenarioId, Verdict verdict, int startedRuns,
-        int completeRuns, int missing, bool dupFail, bool valueChainOk, ReconciliationOutcome recon,
+        int completeRuns, int missing, bool dupFail, bool valueChainOk, bool metricGateOk,
+        bool inFlightOverBound, ReconciliationOutcome recon,
         IReadOnlyList<string> corroborationDetail)
     {
         var reasons = new List<string>();
         if (missing > 0) reasons.Add($"{missing} started-but-incomplete");
+        if (inFlightOverBound) reasons.Add("in-flight loss over bound");
         if (dupFail) reasons.Add("illegitimate duplicate (fail-closed)");
         if (!valueChainOk) reasons.Add("value-chain mismatch (seed + hop-count / Step_G terminal anchor)");
+        if (!metricGateOk) reasons.Add("metric gate (MG-1/2/3)");
 
         var driver = verdict == Verdict.Pass
-            ? "every started run complete, no illegitimate duplicate, value-chain intact (ES-binding)"
+            ? "every started run complete, no illegitimate duplicate, value-chain intact, metric gate holds"
             : string.Join("; ", reasons);
 
-        // Prom corroboration is reported alongside the (ES-binding) verdict, never as its cause.
+        // The metric gate is BINDING: an Unreconciled outcome is a FATAL gate failure, not a warning.
         var corroboration = recon == ReconciliationOutcome.Reconciled
-            ? "Prom corroboration clean"
-            : $"Prom corroboration WARNING [{corroborationDetail.Count}] (non-fatal)";
+            ? "metric gate clean"
+            : $"metric gate [{corroborationDetail.Count} detail(s)]";
 
         return $"[{scenarioId}] {verdict}: {completeRuns}/{startedRuns} started runs complete — {driver}; {corroboration}.";
     }
