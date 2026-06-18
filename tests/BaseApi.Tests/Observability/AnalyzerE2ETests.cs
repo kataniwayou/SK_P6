@@ -67,6 +67,15 @@ public sealed class AnalyzerE2ETests
     // caller-supplied id can never traverse out of the fixed reports dir (no '/', '\', '.', etc.).
     private static readonly Regex ScenarioIdPattern = new(@"^[A-Za-z0-9_-]+$", RegexOptions.Compiled);
 
+    // MG-2 calibration: which scenarios recover THROUGH the keeper. Seeded false (reporting-only); set true
+    // after the first reporting-only sweep reveals non-zero keeper_messages_* deltas for a scenario.
+    private static readonly IReadOnlyDictionary<string, bool> ExpectsKeeperActivity =
+        new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["TEST-01"] = false, ["TEST-02"] = false, ["TEST-03"] = false, ["TEST-04"] = false,
+            ["TEST-05"] = false, ["TEST-06"] = false, ["TEST-07"] = false,
+        };
+
     // D-16 env-var seam — try to parse a harness-supplied round-trip ("o"-format) UTC timestamp,
     // reporting SUCCESS/FAILURE. The fixture uses the result to decide whether the D-16 window seam is
     // genuinely PRESENT (both WINDOW_*_UTC parsed) and so whether to time-pin the Prom counter reads
@@ -188,7 +197,8 @@ public sealed class AnalyzerE2ETests
             traces, promSnapshot, scenarioId,
             tripDurationMsByExecution: cohort.TripDurationMsByExecution,
             tripDurationMsByCorrelation: cohort.TripDurationMsByCorrelation,
-            seedsByExecution: cohort.SeedsByExecution);
+            seedsByExecution: cohort.SeedsByExecution,
+            expectsKeeperActivity: ExpectsKeeperActivity.GetValueOrDefault(scenarioId, false));
 
         // ── 8. WRITE-THEN-ASSERT (D-02 / OBS-04 / T-66-11) ───────────────────────────────────────────
         //    Serialize + write the JSON report FIRST so the artifact exists even on a red run, and the
@@ -496,6 +506,16 @@ public sealed class AnalyzerE2ETests
         public required double OrchestratorMessagesConsumed { get; init; }
         public required double ProcessorMessagesConsumed { get; init; }
         public required double ProcessorMessagesSent { get; init; }
+
+        // Phase 74+ metric gate (MG-2): keeper consumed/sent totals, read as windowed deltas (after − before)
+        // exactly like the four uniform counters above.
+        public required double KeeperMessagesConsumed { get; init; }
+        public required double KeeperMessagesSent { get; init; }
+
+        // Phase 74+ metric gate (MG-3): the keeper BIT probe CADENCE as an INSTANT rate(...[2m]) sample read at
+        // this snapshot instant (NOT a windowed delta — it is already a per-second rate). The before-set's value
+        // is unused; BuildSnapshot takes the after-set's (windowEnd) rate.
+        public required double KeeperL2ProbeRate { get; init; }
     }
 
     /// <summary>
@@ -519,6 +539,18 @@ public sealed class AnalyzerE2ETests
             OrchestratorMessagesConsumed = await SumOrZeroAsync(prom, LiveMetricNames.OrchestratorMessagesConsumedTotal, ct, evalTime),
             ProcessorMessagesConsumed = await SumOrZeroAsync(prom, LiveMetricNames.ProcessorMessagesConsumedTotal, ct, evalTime),
             ProcessorMessagesSent = await SumOrZeroAsync(prom, LiveMetricNames.ProcessorMessagesSentTotal, ct, evalTime),
+
+            // MG-2: keeper consumed/sent totals — same windowed-delta pattern as the four uniform counters.
+            KeeperMessagesConsumed = await SumOrZeroAsync(prom, LiveMetricNames.KeeperMessagesConsumedTotal, ct, evalTime),
+            KeeperMessagesSent = await SumOrZeroAsync(prom, LiveMetricNames.KeeperMessagesSentTotal, ct, evalTime),
+
+            // MG-3: keeper L2 probe CADENCE as an instant rate(...[2m]) query, pinned to this snapshot instant
+            // (evalTime) via the existing PrometheusTestClient.QueryPrometheus time= seam — NOT a before/after
+            // delta (it is already a per-second rate). A 2m window comfortably spans the keeper's probe cadence.
+            // SumOrZeroAsync sums the rate vector (one series per keeper instance) and yields 0 for an absent
+            // series (probe dead / keeper down).
+            KeeperL2ProbeRate = await SumOrZeroAsync(
+                prom, $"rate({LiveMetricNames.KeeperL2ProbeTotal}[2m])", ct, evalTime),
         };
     }
 
@@ -540,5 +572,12 @@ public sealed class AnalyzerE2ETests
             OrchestratorMessagesConsumedDelta = after.OrchestratorMessagesConsumed - before.OrchestratorMessagesConsumed,
             ProcessorMessagesConsumedDelta = after.ProcessorMessagesConsumed - before.ProcessorMessagesConsumed,
             ProcessorMessagesSentDelta = after.ProcessorMessagesSent - before.ProcessorMessagesSent,
+
+            // MG-2: keeper consumed/sent as windowed deltas (after − before), same shape as the four above.
+            KeeperMessagesConsumedDelta = after.KeeperMessagesConsumed - before.KeeperMessagesConsumed,
+            KeeperMessagesSentDelta = after.KeeperMessagesSent - before.KeeperMessagesSent,
+
+            // MG-3: probe rate is an INSTANT cadence, not a delta — take the after-set's (windowEnd) rate sample.
+            KeeperL2ProbeRate = after.KeeperL2ProbeRate,
         };
 }

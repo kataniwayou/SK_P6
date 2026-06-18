@@ -327,6 +327,20 @@ try {
     $windowEnd = [DateTimeOffset]::UtcNow
     Write-Phase "STEP F: window closed at $($windowEnd.ToString('o')) ($([int](($windowEnd - $windowStart).TotalSeconds))s)"
 
+    # STEP F.6 — DRAIN TO QUIESCENCE (MG-1 conservation holds only when no message is in flight).
+    Write-Phase "STEP F.6: stop workflow + drain to quiescence (for metric-gate conservation)"
+    $stopBody = ConvertTo-Json @($wfId)
+    try { Invoke-WebRequest -Method Post -Uri 'http://localhost:8080/api/v1/orchestration/stop' `
+            -ContentType 'application/json' -Body $stopBody -TimeoutSec 15 -ErrorAction Stop | Out-Null } catch { }
+    $prev = -1; $stableDeadline = (Get-Date).AddSeconds(120)
+    do {
+        Start-Sleep -Seconds 20
+        $cur = Get-FireCount
+        if ($cur -eq $prev) { break }
+        $prev = $cur
+    } while ((Get-Date) -lt $stableDeadline)
+    Write-Phase "  drained (orchestrator_messages_sent flat at $cur)." 'Gray'
+
     # -----------------------------------------------------------------------
     # STEP H — DRAIN + ANALYZE (FRAME 4 / D-04 / D-16; VERDICT — do NOT remap to an infra code).
     # Set the D-16 env seam (SCENARIO_ID / WINDOW_START_UTC / WINDOW_END_UTC) from the recorded
