@@ -66,17 +66,14 @@ public sealed class PassFailEngineValueChainFacts
         return RunTrace.FromLabels(corr, exec, labels, ChainValues(seed));
     }
 
-    /// <summary>A Prom snapshot corroborating <paramref name="startedRuns"/> runs (LabelsPerRun=9 dispatch basis) — kept clean so a fact isolates the value-chain branch.</summary>
-    private static PromCounterSnapshot CleanSnapshot(int startedRuns) => new()
+    /// <summary>A clean 4-delta snapshot; no per-run scaling (corroboration retired) — kept so a fact isolates the value-chain branch.</summary>
+    private static PromCounterSnapshot CleanSnapshot() => new()
     {
-        OrchestratorMessagesSentDelta = startedRuns * PassFailEngine.LabelsPerRun,
-        OrchestratorMessagesConsumedDelta = startedRuns * PassFailEngine.LabelsPerRun,
-        ProcessorMessagesConsumedDelta = startedRuns * PassFailEngine.LabelsPerRun,
-        ProcessorMessagesSentDelta = startedRuns * PassFailEngine.LabelsPerRun,
+        OrchestratorMessagesSentDelta = 0,
+        OrchestratorMessagesConsumedDelta = 0,
+        ProcessorMessagesConsumedDelta = 0,
+        ProcessorMessagesSentDelta = 0,
     };
-
-    /// <summary>triggerCount via the shared <see cref="PassFailEngine.TriggerCountFrom"/> (IN-01) — corroboration evidence only.</summary>
-    private static int TriggerCountOf(PromCounterSnapshot s) => PassFailEngine.TriggerCountFrom(s);
 
     // seeds locked by D-02: exec_a 100 (→ Step_G 106), exec_b 200 (→ Step_G 206).
     private const int SeedA = 100;
@@ -88,9 +85,9 @@ public sealed class PassFailEngineValueChainFacts
         // exec_a seed 100 (Step_G 106), exec_b seed 200 (Step_G 206); each all 10 labels, Step_G ×2, correct chain.
         var execA = RunFor("corr-1", "exec-a", SeedA);
         var execB = RunFor("corr-2", "exec-b", SeedB);
-        var snap = CleanSnapshot(startedRuns: 2);
+        var snap = CleanSnapshot();
 
-        var report = new PassFailEngine().Analyze(new[] { execA, execB }, snap, TriggerCountOf(snap), "unit-value-chain");
+        var report = new PassFailEngine().Analyze(new[] { execA, execB }, snap, "unit-value-chain");
 
         Assert.Equal(Verdict.Pass, report.Verdict);
         Assert.True(report.ValueChainOk);
@@ -113,9 +110,9 @@ public sealed class PassFailEngineValueChainFacts
         var values = ChainValues(SeedA);
         values.Remove("Step_E1");
         var run = RunTrace.FromLabels("corr-1", "exec-a", labels, values);
-        var snap = CleanSnapshot(startedRuns: 1);
+        var snap = CleanSnapshot();
 
-        var report = new PassFailEngine().Analyze(new[] { run }, snap, TriggerCountOf(snap), "unit-value-chain");
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-value-chain");
 
         Assert.Equal(Verdict.Fail, report.Verdict);
         Assert.True(report.Missing > 0);
@@ -128,9 +125,9 @@ public sealed class PassFailEngineValueChainFacts
         // Step_G appears ONCE (one arrival) → HasIllegitimateDuplicate (count != 2) → Fail.
         var labels = NonTerminalLabels.Concat(new[] { "Step_G" }).ToArray();
         var run = RunTrace.FromLabels("corr-1", "exec-a", labels, ChainValues(SeedA));
-        var snap = CleanSnapshot(startedRuns: 1);
+        var snap = CleanSnapshot();
 
-        var report = new PassFailEngine().Analyze(new[] { run }, snap, TriggerCountOf(snap), "unit-value-chain");
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-value-chain");
 
         Assert.True(run.HasIllegitimateDuplicate);
         Assert.Equal(Verdict.Fail, report.Verdict);
@@ -143,9 +140,9 @@ public sealed class PassFailEngineValueChainFacts
         // Step_G appears THREE times (same-entryId redelivery) → HasIllegitimateDuplicate (count != 2) → Fail.
         var labels = NonTerminalLabels.Concat(new[] { "Step_G", "Step_G", "Step_G" }).ToArray();
         var run = RunTrace.FromLabels("corr-1", "exec-a", labels, ChainValues(SeedA));
-        var snap = CleanSnapshot(startedRuns: 1);
+        var snap = CleanSnapshot();
 
-        var report = new PassFailEngine().Analyze(new[] { run }, snap, TriggerCountOf(snap), "unit-value-chain");
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-value-chain");
 
         Assert.True(run.HasIllegitimateDuplicate);
         Assert.Contains("Step_G", run.DuplicateLabels);
@@ -161,9 +158,9 @@ public sealed class PassFailEngineValueChainFacts
         values["Step_C"] = 999;
         var labels = NonTerminalLabels.Concat(new[] { "Step_G", "Step_G" }).ToArray();
         var run = RunTrace.FromLabels("corr-1", "exec-a", labels, values);
-        var snap = CleanSnapshot(startedRuns: 1);
+        var snap = CleanSnapshot();
 
-        var report = new PassFailEngine().Analyze(new[] { run }, snap, TriggerCountOf(snap), "unit-value-chain");
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-value-chain");
 
         Assert.False(report.ValueChainOk);
         Assert.Equal(Verdict.Fail, report.Verdict);
@@ -180,9 +177,9 @@ public sealed class PassFailEngineValueChainFacts
         values["Step_G"] = 105; // should be 106
         var labels = NonTerminalLabels.Concat(new[] { "Step_G", "Step_G" }).ToArray();
         var run = RunTrace.FromLabels("corr-1", "exec-a", labels, values);
-        var snap = CleanSnapshot(startedRuns: 1);
+        var snap = CleanSnapshot();
 
-        var report = new PassFailEngine().Analyze(new[] { run }, snap, TriggerCountOf(snap), "unit-value-chain");
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-value-chain");
 
         Assert.False(report.ValueChainOk);
         Assert.Equal(Verdict.Fail, report.Verdict);
@@ -196,9 +193,9 @@ public sealed class PassFailEngineValueChainFacts
         // HasIllegitimateDuplicate → Fail (the fail-closed rule is preserved for every non-convergent label).
         var labels = NonTerminalLabels.Concat(new[] { "Step_C", "Step_G", "Step_G" }).ToArray();
         var run = RunTrace.FromLabels("corr-1", "exec-a", labels, ChainValues(SeedA));
-        var snap = CleanSnapshot(startedRuns: 1);
+        var snap = CleanSnapshot();
 
-        var report = new PassFailEngine().Analyze(new[] { run }, snap, TriggerCountOf(snap), "unit-value-chain");
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-value-chain");
 
         Assert.True(run.HasIllegitimateDuplicate);
         Assert.Contains("Step_C", run.DuplicateLabels);
@@ -218,14 +215,14 @@ public sealed class PassFailEngineValueChainFacts
         var labels = NonTerminalLabels.Concat(new[] { "Step_G", "Step_G" }).ToArray();
         var emptyValues = new Dictionary<string, int>(StringComparer.Ordinal); // ZERO surfaced Produced values
         var run = RunTrace.FromLabels("corr-1", "exec-a", labels, emptyValues);
-        var snap = CleanSnapshot(startedRuns: 1);
+        var snap = CleanSnapshot();
 
         // The value oracle is SUPPLIED (non-null) — this is what gates the new rule. The legacy
         // completeness-only callers (PassFailEngineFacts) pass null here and stay unaffected.
         var seedOracle = new Dictionary<string, int>(StringComparer.Ordinal) { ["corr-1|exec-a"] = SeedA };
 
         var report = new PassFailEngine().Analyze(
-            new[] { run }, snap, TriggerCountOf(snap), "unit-value-chain",
+            new[] { run }, snap, "unit-value-chain",
             seedsByExecution: seedOracle);
 
         Assert.Equal(0, report.Missing);          // completeness alone is satisfied (all 10 labels present)
@@ -242,9 +239,9 @@ public sealed class PassFailEngineValueChainFacts
         // as the migrated PassFailEngineFacts rely on. completeness + duplicate alone gate the verdict.
         var labels = NonTerminalLabels.Concat(new[] { "Step_G", "Step_G" }).ToArray();
         var run = RunTrace.FromLabels("corr-1", "exec-a", labels); // no values, no oracle
-        var snap = CleanSnapshot(startedRuns: 1);
+        var snap = CleanSnapshot();
 
-        var report = new PassFailEngine().Analyze(new[] { run }, snap, TriggerCountOf(snap), "unit-value-chain");
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-value-chain");
 
         Assert.True(report.ValueChainOk);          // not value-chain-checked (no oracle) → stays true
         Assert.Equal(Verdict.Pass, report.Verdict);
@@ -257,7 +254,7 @@ public sealed class PassFailEngineValueChainFacts
         // evidence — proving the new AnalyzerReport fields are wired even on a green run.
         var execA = RunFor("corr-1", "exec-a", SeedA);
         var execB = RunFor("corr-2", "exec-b", SeedB);
-        var snap = CleanSnapshot(startedRuns: 2);
+        var snap = CleanSnapshot();
 
         var tripByExec = new Dictionary<string, double>(StringComparer.Ordinal)
         {
@@ -271,7 +268,7 @@ public sealed class PassFailEngineValueChainFacts
         };
 
         var report = new PassFailEngine().Analyze(
-            new[] { execA, execB }, snap, TriggerCountOf(snap), "unit-value-chain",
+            new[] { execA, execB }, snap, "unit-value-chain",
             tripDurationMsByExecution: tripByExec, tripDurationMsByCorrelation: tripByCorr);
 
         Assert.Equal(Verdict.Pass, report.Verdict);

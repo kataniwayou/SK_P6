@@ -162,50 +162,30 @@ public sealed class AnalyzerE2ETests
             : (before!, standaloneAfter!);
         var promSnapshot = BuildSnapshot(beforeSet, afterSet);
 
-        // ── 6. PROM CORROBORATION INPUT (67-03 — NO LONGER the per-run denominator) ──────────────────
-        //    Derive triggerCount from the orchestrator_messages_sent_total WINDOWED DELTA (rounded).
-        //    67-03: this is CORROBORATION evidence only — the orchestrator dispatches once per STEP, so
-        //    OrchestratorMessagesSentDelta is ~9× the run count and must NOT be used as the per-run denominator (the
-        //    old conflation scored a perfect 10-run window as 71 "missing": 81 = 9×9 vs ES 10). The
-        //    BINDING denominator is the ES started-run count (distinct correlationIds with ≥1 Step_*
-        //    log) computed inside the engine from `traces`. The engine derives impliedRuns =
-        //    round(OrchestratorMessagesSentDelta / 9) for the corroboration cross-check. There is NO per-fire
-        //    correlationId orchestrator log (item #1), so the IDENTITY of a fully-dead run is NOT
-        //    recoverable — it surfaces as a non-fatal Prom corroboration warning, never named.
-        // triggerCount via the shared PassFailEngine.TriggerCountFrom (IN-01) so the live fixture and the
-        // hermetic facts cannot drift in rounding semantics. Math.Round defaults to MidpointRounding.ToEven;
-        // triggerCount is Prom corroboration evidence only (never the binding denominator) and the engine's
-        // ±1-run tolerance absorbs any single-unit rounding wobble, so ToEven is intentionally accepted.
-        var triggerCount = PassFailEngine.TriggerCountFrom(promSnapshot);
-
-        // Precondition: the fan-out must have actually fired in the window. The BINDING evidence of a
-        // fire is the ES started-run count (distinct correlationIds with >=1 Step_* log), NOT the raw Prom
-        // counter delta. A force-recreate / orchestrator restart resets orchestrator_messages_sent_total
-        // AND leaves the pre-restart container's series lingering in Prom's ~5min instant-query lookback,
-        // so the windowed delta can sum to a NEGATIVE value (counter reset) even when the DAG fired
-        // normally — observed live (phase-73 harness run): OrchestratorMessagesSentDelta=-2337 with 20 ES started runs.
-        // Per this guard's own documented intent ("a zero OrchestratorMessagesSentDelta AND zero ES traces would let
-        // the verdict pass vacuously"), the broken precondition is ONLY a true no-fire: no Prom delta AND
-        // no ES traces. Phase 73 is ES-primary and explicitly defers metric assertions, so a Prom-only
-        // counter-reset artifact must never abort the ES value-chain audit. (WR-04 + phase-73 live fix.)
-        Assert.True(triggerCount > 0 || traces.Count > 0,
+        // ── 6. FAN-OUT FIRE PRECONDITION (ES-binding) ────────────────────────────────────────────────
+        //    The fan-out must have actually fired in the window. The BINDING evidence of a fire is the ES
+        //    started-run count (distinct correlationIds with >=1 Step_* log), NOT the raw Prom counter
+        //    delta. A force-recreate / orchestrator restart resets orchestrator_messages_sent_total AND
+        //    leaves the pre-restart container's series lingering in Prom's ~5min instant-query lookback, so
+        //    the windowed delta can sum to a NEGATIVE value (counter reset) even when the DAG fired normally
+        //    — observed live (phase-73 harness run): OrchestratorMessagesSentDelta=-2337 with 20 ES started
+        //    runs. Per this guard's own documented intent ("a zero OrchestratorMessagesSentDelta AND zero ES
+        //    traces would let the verdict pass vacuously"), the broken precondition is ONLY a true no-fire:
+        //    no Prom delta AND no ES traces. Phase 73 is ES-primary and explicitly defers metric
+        //    assertions, so a Prom-only counter-reset artifact must never abort the ES value-chain audit.
+        //    (WR-04 + phase-73 live fix.)
+        Assert.True(promSnapshot.OrchestratorMessagesSentDelta != 0 || traces.Count > 0,
             $"No fan-out fire observed in the window: OrchestratorMessagesSentDelta={promSnapshot.OrchestratorMessagesSentDelta} " +
             $"AND zero ES Step_* traces (started runs={traces.Count}); the precondition is not satisfied.");
 
         // ── 7. RUN THE ENGINE (pure — no IO) ─────────────────────────────────────────────────────────
-        //    SPAWN-AWARE OBS-03: the entry step emits 2 results from 1 dispatch, so OrchestratorMessagesConsumed runs
-        //    ahead of OrchestratorMessagesSent by one extra result per entry dispatch. spawnExtra = the number of entry
-        //    dispatches = cron fires = distinct correlationIds — DERIVED from the traces (the per-instance
-        //    RunTraces collapse back to their correlationId), NEVER hard-coded 2.
-        var spawnExtra = traces.Select(t => t.CorrelationId).Distinct(StringComparer.Ordinal).Count();
-
         // VALUE-CHAIN + TRIP-DURATION FEED (73, D-11/D-12): pass the per-label Produced values (already on
         // each RunTrace via FromLabels), the @timestamp trip-duration maps, and the per-execution seed oracle
         // into the extended engine. The value-chain check (incl. the Step_G-at-seed+6 terminal-anchor proxy)
         // then folds into the binding verdict; the trip-duration maps land in the report. NO metric-counter
         // assertion is added; NO Redis skp:out: blob is read (ES-read-only, D-11).
         var report = new PassFailEngine().Analyze(
-            traces, promSnapshot, triggerCount, scenarioId, spawnExtra,
+            traces, promSnapshot, scenarioId,
             tripDurationMsByExecution: cohort.TripDurationMsByExecution,
             tripDurationMsByCorrelation: cohort.TripDurationMsByCorrelation,
             seedsByExecution: cohort.SeedsByExecution);
@@ -535,10 +515,10 @@ public sealed class AnalyzerE2ETests
     {
         return new CounterSet
         {
-            OrchestratorMessagesSent = await SumOrZeroAsync(prom, "orchestrator_messages_sent_total", ct, evalTime),
-            OrchestratorMessagesConsumed = await SumOrZeroAsync(prom, "orchestrator_messages_consumed_total", ct, evalTime),
-            ProcessorMessagesConsumed = await SumOrZeroAsync(prom, "processor_messages_consumed_total", ct, evalTime),
-            ProcessorMessagesSent = await SumOrZeroAsync(prom, "processor_messages_sent_total", ct, evalTime),
+            OrchestratorMessagesSent = await SumOrZeroAsync(prom, LiveMetricNames.OrchestratorMessagesSentTotal, ct, evalTime),
+            OrchestratorMessagesConsumed = await SumOrZeroAsync(prom, LiveMetricNames.OrchestratorMessagesConsumedTotal, ct, evalTime),
+            ProcessorMessagesConsumed = await SumOrZeroAsync(prom, LiveMetricNames.ProcessorMessagesConsumedTotal, ct, evalTime),
+            ProcessorMessagesSent = await SumOrZeroAsync(prom, LiveMetricNames.ProcessorMessagesSentTotal, ct, evalTime),
         };
     }
 

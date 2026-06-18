@@ -54,10 +54,9 @@ public enum ReconciliationOutcome
 /// <b>Verdict drivers (ES-binding):</b> <see cref="StartedRuns"/> is the binding denominator —
 /// distinct correlationIds with ≥1 Step_* log (runs that started). <see cref="CompleteRuns"/> /
 /// <see cref="Missing"/> account against THAT denominator, and the loud <see cref="Duplicates"/>
-/// stay fail-closed. <b>Prom corroboration (non-binding):</b> <see cref="TriggerCount"/> (the
-/// dispatch-derived denominator) and the full <see cref="Prom"/> snapshot feed the corroboration
-/// math only — <see cref="PromImpliedRuns"/> + <see cref="Reconciliation"/> +
-/// <see cref="CorroborationDetail"/> surface a warning without gating the verdict.
+/// stay fail-closed. <b>Metric gate (inert):</b> the former Prom corroboration math was retired;
+/// the <see cref="Prom"/> snapshot plus <see cref="Reconciliation"/> + <see cref="CorroborationDetail"/>
+/// are kept as report fields for a later task to repurpose as a metric gate.
 /// </para>
 /// </summary>
 public sealed record AnalyzerReport
@@ -75,14 +74,6 @@ public sealed record AnalyzerReport
     /// missing accounting is founded on this, NOT on the Prom dispatch count. The verdict driver.
     /// </summary>
     public required int StartedRuns { get; init; }
-
-    /// <summary>
-    /// CORROBORATION ONLY (67-03): the dispatch-derived count
-    /// (round(orchestrator_dispatch_sent_total delta)). Retained as Prom evidence — the orchestrator
-    /// emits one dispatch per STEP, so this is ~9× the run count and is NO LONGER the per-run
-    /// denominator. Feeds <see cref="PromImpliedRuns"/>, never the binding verdict.
-    /// </summary>
-    public required int TriggerCount { get; init; }
 
     /// <summary>The number of started runs whose distinct StepLabel set equals the full 9-label set (OBS-01).</summary>
     public required int CompleteRuns { get; init; }
@@ -103,28 +94,6 @@ public sealed record AnalyzerReport
 
     /// <summary>The traces that carried any duplicate (correlationId, StepLabel) — the fail-closed evidence (OBS-02).</summary>
     public required IReadOnlyList<RunTrace> Duplicates { get; init; }
-
-    /// <summary>
-    /// CORROBORATION ONLY (67-03): round(OrchestratorMessagesSentDelta / 9) — the run count IMPLIED by the Prom
-    /// dispatch counter (9 dispatches per run). Compared against <see cref="StartedRuns"/> within the
-    /// boundary tolerance; a positive excess (implied &gt; started, beyond tolerance) is the dead-run
-    /// corroboration warning. Informational — never gates the verdict.
-    /// </summary>
-    public required int PromImpliedRuns { get; init; }
-
-    /// <summary>
-    /// CORROBORATION ONLY (spawn-aware OBS-03): the number of EXTRA results the entry fan-out emits beyond
-    /// the dispatch count = entry-dispatch count = distinct correlationIds (derived from data, never
-    /// hard-coded). The expected result count is <see cref="Prom"/>.OrchestratorMessagesSentDelta + this. Informational.
-    /// </summary>
-    public required int SpawnExtra { get; init; }
-
-    /// <summary>
-    /// CORROBORATION ONLY (spawn-aware OBS-03): the reconciled expectation for the result counter —
-    /// <c>OrchestratorMessagesSentDelta + <see cref="SpawnExtra"/></c>. OrchestratorMessagesConsumedDelta is reconciled against THIS
-    /// (within ±1-run result slack); a mismatch beyond slack is a non-fatal warning. Informational.
-    /// </summary>
-    public required double ExpectedResultConsumed { get; init; }
 
     /// <summary>
     /// The Prometheus CORROBORATION outcome (OBS-03; 67-03 non-binding). Reconciled = within ±1-run

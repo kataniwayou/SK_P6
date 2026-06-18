@@ -28,16 +28,14 @@ namespace BaseApi.Tests.Observability.Analysis;
 ///   (necessarily both sinks Step_F1 + Step_F2).</item>
 /// <item>MISSING (OBS-02): <c>StartedRuns − CompleteRuns</c> — started-but-incomplete (1–8 labels);
 ///   &gt; 0 ⇒ Fail. A FULLY-dead run (dispatched but never logging Step_A) never started in ES, so it
-///   is NOT in this count — it surfaces via the Prom corroboration warning instead.</item>
+///   is NOT in this count.</item>
 /// <item>DUPLICATE (OBS-02, fail-closed, BINDING): ANY duplicate (correlationId, StepLabel) ⇒ Fail —
 ///   the live dedupe counters are dormant, so no redelivery can be corroborated.</item>
-/// <item>PROM CORROBORATION (OBS-03, NON-BINDING, 67-03): compute impliedRuns =
-///   round(OrchestratorMessagesSentDelta / 9) and compare to StartedRuns within a ±1-run boundary tolerance. A
-///   positive excess beyond tolerance (impliedRuns − StartedRuns &gt; tolerance) — a dispatched run
-///   ES never observed — is a WARNING, NOT a Fail. Any non-completed terminal outcome is also a
-///   warning. The documented ~1-run window-edge mismatch (81 = 9×9 vs ES 10) is inside tolerance.</item>
-/// <item>VERDICT: Pass iff (every started run complete) AND (no duplicate). Prom corroboration is
-///   non-fatal — it never flips a green ES verdict.</item>
+/// <item>METRIC GATE (inert): the former Prom corroboration math (impliedRuns = round(sent/9),
+///   spawn-aware result reconciliation) was retired as miscalibrated; the gate is inert today and a
+///   later task repurposes it as a metric gate. The Reconciliation/CorroborationDetail report fields
+///   are kept for that future use.</item>
+/// <item>VERDICT: Pass iff (every started run complete) AND (no duplicate) AND (value-chain intact).</item>
 /// </list>
 /// </para>
 /// </summary>
@@ -74,37 +72,6 @@ public sealed class PassFailEngine
             .ToHashSet(StringComparer.Ordinal).SetEquals(HopLabels);
 
     /// <summary>
-    /// The Prom dispatch-count basis for the (inert, non-binding) corroboration math — kept at 9, NOT 10.
-    /// The convergent Step_G's ×2 fan-in is intentionally NOT folded into this count: metrics are DEFERRED
-    /// out of this phase (SPEC out-of-scope — no metric-counter assertions), and the BINDING verdict is
-    /// value-chain + completeness, NEVER Prom. Folding Step_G's ×2 here would distort the inert
-    /// promImpliedRuns / spawnReconSlack arithmetic without protecting any binding outcome (73, D-10). The
-    /// corroboration block stays structurally intact and can never gate the value-chain verdict.
-    /// </summary>
-    public const int LabelsPerRun = 9;
-
-    /// <summary>
-    /// Boundary tolerance (in RUNS) for the Prometheus corroboration cross-check. The orchestrator
-    /// emits one dispatch per step, so a window-edge run can be counted by Prom but fall just outside
-    /// the ES range (or vice versa) — the documented ~1-run Prom/ES window-edge mismatch (e.g. Prom
-    /// 81 = 9×9 ⇒ impliedRuns 9 vs ES StartedRuns 10). A ±1-run tolerance prevents that boundary
-    /// artifact from raising a spurious corroboration warning. (67-03 — replaces the old 0.5-count
-    /// DeltaTolerance, which operated on the now-retired binding delta arithmetic.)
-    /// </summary>
-    public const int CorroborationRunTolerance = 1;
-
-    /// <summary>
-    /// The single canonical trigger-count derivation (IN-01): <c>round(OrchestratorMessagesSentDelta)</c>. Prom
-    /// CORROBORATION evidence only — NEVER the binding per-run denominator (the orchestrator dispatches once
-    /// per step). Hoisted here so the live fixture and the hermetic facts share ONE rounding semantics and the
-    /// three former call sites cannot drift (e.g. one being "fixed" to <c>MidpointRounding.AwayFromZero</c>
-    /// while the others stay <c>ToEven</c>). <c>Math.Round</c> defaults to <c>MidpointRounding.ToEven</c>; the
-    /// ±1-run <see cref="CorroborationRunTolerance"/> absorbs any single-unit wobble and corroboration never
-    /// gates the verdict, so ToEven is intentionally accepted.
-    /// </summary>
-    public static int TriggerCountFrom(PromCounterSnapshot prom) => (int)Math.Round(prom.OrchestratorMessagesSentDelta);
-
-    /// <summary>
     /// Score a set of per-correlationId traces against the live Prometheus counter deltas, producing
     /// the single per-scenario <see cref="AnalyzerReport"/>. PURE: no IO — the caller (fixture) writes
     /// the report.
@@ -114,19 +81,7 @@ public sealed class PassFailEngine
     /// ES-binding STARTED set (the denominator).
     /// </param>
     /// <param name="prom">The windowed Prometheus counter deltas — corroboration evidence only (67-03).</param>
-    /// <param name="triggerCount">
-    /// The dispatch-derived count (round(OrchestratorMessagesSentDelta)) — kept as Prom corroboration evidence,
-    /// NOT the binding denominator. The orchestrator dispatches per step, so this is ~9× the run count.
-    /// </param>
     /// <param name="scenarioId">The scenario id for the report + path.</param>
-    /// <param name="spawnExtra">
-    /// SPAWN-AWARE OBS-03 corroboration (non-binding): the number of EXTRA results the entry fan-out emits
-    /// beyond the dispatch count. The entry step now spawns 2 results from 1 dispatch, so
-    /// <c>OrchestratorMessagesConsumedDelta ≈ OrchestratorMessagesSentDelta + spawnExtra</c> where <c>spawnExtra</c> = the number of
-    /// entry dispatches = cron fires = distinct correlationIds. Derived from data by the caller (the fixture
-    /// passes <c>traces.Select(t =&gt; t.CorrelationId).Distinct().Count()</c>) — NEVER hard-coded. Default 0
-    /// keeps every pre-spawn caller's behaviour identical.
-    /// </param>
     /// <param name="tripDurationMsByExecution">
     /// VALUE-CHAIN/TRIP evidence (73, D-12): per-<c>(corr, exec)</c> trip duration ms keyed
     /// <c>"correlationId|executionId"</c> (first-step → Step_G-terminal ES <c>@timestamp</c> delta). The engine
@@ -140,7 +95,7 @@ public sealed class PassFailEngine
     /// recovered from the chain itself (<c>Values["Step_B"] - 1</c>). Default null ⇒ recover-from-chain for all.
     /// </param>
     public AnalyzerReport Analyze(IReadOnlyList<RunTrace> runs, PromCounterSnapshot prom,
-                                  int triggerCount, string scenarioId, int spawnExtra = 0,
+                                  string scenarioId,
                                   IReadOnlyDictionary<string, double>? tripDurationMsByExecution = null,
                                   IReadOnlyDictionary<string, double>? tripDurationMsByCorrelation = null,
                                   IReadOnlyDictionary<string, int>? seedsByExecution = null)
@@ -242,63 +197,9 @@ public sealed class PassFailEngine
         var tripByExec = tripDurationMsByExecution ?? new Dictionary<string, double>(StringComparer.Ordinal);
         var tripByCorr = tripDurationMsByCorrelation ?? new Dictionary<string, double>(StringComparer.Ordinal);
 
-        // ── PROM CORROBORATION (OBS-03, NON-BINDING, 67-03) ────────────────────────────────────────
-        // The three retired conflations (#1 OrchestratorMessagesSentDelta as per-run denom; #2 ResultSentCompleted
-        // ≥ complete × 9 as binding; #3 |OrchestratorMessagesSentDelta − triggerCount| as binding) survive ONLY as
-        // corroboration math here — they never gate the verdict.
-        //
-        //   impliedRuns = round(OrchestratorMessagesSentDelta / 9): the run count IMPLIED by the per-step dispatch
-        //   counter. A positive excess over StartedRuns beyond tolerance means Prom saw more runs
-        //   dispatched than ES observed start — i.e. a fully-dead run. WARNING, not a fail.
-        // Math.Round defaults to MidpointRounding.ToEven (banker's rounding). A half-step delta is
-        // already pathological (OrchestratorMessagesSentDelta is an integer counter delta, so /9 lands on a half only
-        // for non-multiples), and the ±1-run CorroborationRunTolerance absorbs any single-run rounding
-        // wobble — corroboration never gates the verdict — so ToEven is intentionally accepted here (IN-01).
-        var promImpliedRuns = (int)Math.Round(prom.OrchestratorMessagesSentDelta / LabelsPerRun);
+        // ── METRIC GATE (a later task fills this in; for now inert — verdict stays ES-binding) ──
+        var metricGateOk = true;
         var corroborationDetail = new List<string>();
-
-        // ASYMMETRY (intentional, 67-03 / WR-01): only the POSITIVE direction (Prom implies MORE
-        // dispatched runs than ES observed STARTED) raises a warning, because that is precisely the
-        // dead-run signal this harness is built to detect (a run dispatched but never logging Step_A).
-        // The negative direction (ES STARTED > Prom implied — a dispatch under-count, a scrape gap, or
-        // ES double-counting correlationIds) is deliberately NOT a warning here: it cannot indicate a
-        // dead run, and Prom is corroboration-only (it never gates the verdict), so flagging it would
-        // add noise without protecting the binding outcome. If a future need arises to surface telemetry
-        // under-counting, guard `Math.Abs(deadRunExcess)` with a distinct, clearly-labelled message — do
-        // NOT fold it into this dead-run warning.
-        var deadRunExcess = promImpliedRuns - startedRuns;
-        if (deadRunExcess > CorroborationRunTolerance)
-        {
-            corroborationDetail.Add(
-                $"Prom corroboration WARNING: OrchestratorMessagesSentDelta={prom.OrchestratorMessagesSentDelta} ⇒ ~{promImpliedRuns} dispatched run(s), " +
-                $"but ES observed only {startedRuns} STARTED run(s) (excess {deadRunExcess} > ±{CorroborationRunTolerance} tolerance). " +
-                "This is how a fully-dead run (dispatched, Step_A never logged) surfaces. NON-FATAL (Prom is corroborating only, 67-03).");
-        }
-
-        // (D-13) The non-completed `outcome` corroboration WARNING path is REMOVED: the processor
-        // `outcome` label no longer exists in the uniform two-counter model (Phase 74), so there is no
-        // failed/cancelled/processing breakdown to corroborate. The primary completion math is unaffected.
-
-        // SPAWN-AWARE OBS-03 (NON-BINDING): the entry step now emits 2 results from 1 dispatch, so the
-        // result counter runs AHEAD of the dispatch counter by exactly one extra result per entry dispatch.
-        // Reconcile OrchestratorMessagesConsumedDelta against OrchestratorMessagesSentDelta + spawnExtra (spawnExtra = entry-dispatch
-        // count = distinct correlationIds, derived from data by the caller — never hard-coded). The excess is
-        // measured in RESULT units; allow the same ±1-run boundary slack (CorroborationRunTolerance × 9
-        // result-emitting steps) so a window-edge run does not raise a spurious warning. A mismatch beyond
-        // that slack is a WARNING only — it never flips a green ES verdict.
-        var expectedResultConsumed = prom.OrchestratorMessagesSentDelta + spawnExtra;
-        var spawnReconExcess = prom.OrchestratorMessagesConsumedDelta - expectedResultConsumed;
-        var spawnReconSlack = CorroborationRunTolerance * LabelsPerRun;
-        if (Math.Abs(spawnReconExcess) > spawnReconSlack)
-        {
-            corroborationDetail.Add(
-                $"Prom corroboration WARNING (spawn-aware OBS-03): OrchestratorMessagesConsumedDelta={prom.OrchestratorMessagesConsumedDelta} " +
-                $"vs expected OrchestratorMessagesSentDelta({prom.OrchestratorMessagesSentDelta}) + spawnExtra({spawnExtra}) = {expectedResultConsumed} " +
-                $"(off by {spawnReconExcess}, beyond ±{spawnReconSlack} result-step slack). The entry fan-out emits one " +
-                "extra result per entry dispatch; an unexpected gap means a result/dispatch imbalance. " +
-                "NON-FATAL (Prom is corroborating only, 67-03).");
-        }
-
         var recon = corroborationDetail.Count == 0
             ? ReconciliationOutcome.Reconciled
             : ReconciliationOutcome.Unreconciled;
@@ -306,7 +207,7 @@ public sealed class PassFailEngine
         // ── VERDICT (ES-binding; Prom corroboration is non-fatal) ──────────────────────────────────
         // The value-chain check (incl. the Step_G-at-seed+6 terminal-anchor proxy) is BINDING (73, D-11);
         // Prom corroboration remains non-fatal and never flips a green ES verdict.
-        var pass = missing == 0 && !dupFail && valueChainOk;
+        var pass = missing == 0 && !dupFail && valueChainOk && metricGateOk;
         var verdict = pass ? Verdict.Pass : Verdict.Fail;
 
         // Build the report (no IO).
@@ -315,14 +216,10 @@ public sealed class PassFailEngine
             ScenarioId = scenarioId,
             Verdict = verdict,
             StartedRuns = startedRuns,
-            TriggerCount = triggerCount,
             CompleteRuns = complete.Count,
             Missing = missing,
             MissingDetail = missingDetail,
             Duplicates = duplicates,
-            PromImpliedRuns = promImpliedRuns,
-            SpawnExtra = spawnExtra,
-            ExpectedResultConsumed = expectedResultConsumed,
             Reconciliation = recon,
             CorroborationDetail = corroborationDetail,
             Prom = prom,
