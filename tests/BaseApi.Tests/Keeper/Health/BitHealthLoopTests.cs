@@ -98,7 +98,8 @@ public sealed class BitHealthLoopTests
         L2ProbeRecovery probe, IL2HealthGate gate, IBus bus, RecoveryEndpointHandle holder,
         TimeProvider? clock = null, IKeeperLivenessState? liveness = null) =>
         new(probe, gate, bus, holder, ZeroDelay(), NullLogger<BitHealthLoop>.Instance,
-            clock ?? TimeProvider.System, liveness ?? new KeeperLivenessState());
+            clock ?? TimeProvider.System, liveness ?? new KeeperLivenessState(),
+            RecoveryTestKit.Metrics());   // Phase 74 (REQ-4): keeper_l2_probe heartbeat counter holder
 
     /// <summary>
     /// KEEP-04 (D-04): a populated <see cref="RecoveryEndpointHandle"/> over a substituted

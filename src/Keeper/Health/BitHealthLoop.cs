@@ -3,6 +3,7 @@ using Messaging.Contracts;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Keeper.Observability;
 using Keeper.Recovery;
 
 namespace Keeper.Health;
@@ -26,7 +27,8 @@ public sealed class BitHealthLoop(
     IOptions<ProbeOptions> opts,
     ILogger<BitHealthLoop> logger,
     TimeProvider clock,
-    IKeeperLivenessState liveness) : BackgroundService
+    IKeeperLivenessState liveness,
+    KeeperMetrics metrics) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -42,6 +44,11 @@ public sealed class BitHealthLoop(
         while (!stoppingToken.IsCancellationRequested)
         {
             var healthy = await probe.ProbeOnceAsync(stoppingToken);   // RedisException → false INSIDE; non-Redis propagates
+
+            // REQ-4 / D-11: keeper_l2_probe heartbeat — UNCONDITIONAL, once per tick (one per ProbeOnceAsync
+            // call) regardless of healthy/unhealthy, OUTSIDE the edge guard, label-less. rate(keeper_l2_probe_total
+            // [5m]) > 0 proves the Keeper is actively probing L2. Same every-tick placement as liveness.Update.
+            metrics.L2Probe.Add(1);
 
             // Keeper self-watchdog stamp (260614-b5c): UNCONDITIONAL — every tick, OUTSIDE the edge guard,
             // regardless of healthy/unhealthy. A hang in ProbeOnceAsync OR in the trailing Task.Delay below
