@@ -30,9 +30,8 @@ public sealed class ProcessorMetricsFacts
 
         var metrics = new ProcessorMetrics(meterFactory);
 
-        Assert.NotNull(metrics.DispatchConsumed);
-        Assert.NotNull(metrics.ResultSent);
-        Assert.NotNull(metrics.DispatchDeduped);
-        Assert.NotNull(metrics.SpawnDropped);   // IN-03: spawn-drop has its own counter
+        Assert.NotNull(metrics.MessagesConsumed);   // processor_messages_consumed (Phase 74)
+        Assert.NotNull(metrics.MessagesSent);       // processor_messages_sent (Phase 74)
+        Assert.NotNull(metrics.SpawnDropped);       // IN-03: spawn-drop has its own counter (kept)
     }
 }
