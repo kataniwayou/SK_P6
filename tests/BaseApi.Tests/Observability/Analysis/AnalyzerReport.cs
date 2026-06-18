@@ -33,10 +33,10 @@ public enum ReconciliationOutcome
     Reconciled,
 
     /// <summary>
-    /// The Prom counter deltas DISAGREE with the ES-binding count beyond tolerance — a corroboration
-    /// WARNING (e.g. round(OrchestratorMessagesSentDelta / 9) implies more runs than ES distinct-correlationId
-    /// count: a fully-dead run dispatched but never logging Step_A). NON-FATAL by default (67-03):
-    /// surfaced in the report + HumanSummary, but does NOT flip a green ES verdict.
+    /// RESERVED for the future metric gate; NOT produced by the current engine. The former
+    /// round(OrchestratorMessagesSentDelta / 9) corroboration math was retired, so the engine leaves
+    /// <see cref="AnalyzerReport.CorroborationDetail"/> empty and <see cref="AnalyzerReport.Reconciliation"/>
+    /// is currently always <see cref="Reconciled"/>. A later task repurposes this outcome.
     /// </summary>
     Unreconciled,
 
@@ -81,7 +81,8 @@ public sealed record AnalyzerReport
     /// <summary>
     /// StartedRuns − CompleteRuns (ES-binding): started-but-incomplete runs (1–8 labels). Missing &gt; 0
     /// forces Verdict.Fail (OBS-02). A fully-DEAD run (dispatched but never logging Step_A) is NOT in
-    /// this count — it never started in ES; it surfaces via the Prom corroboration warning instead.
+    /// this count — it never started in ES, so it is simply NOT detected by the current engine (the Prom
+    /// dead-run corroboration warning was retired).
     /// </summary>
     public required int Missing { get; init; }
 

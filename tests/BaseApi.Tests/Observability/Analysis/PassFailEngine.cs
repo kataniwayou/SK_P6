@@ -112,8 +112,8 @@ public sealed class PassFailEngine
         var complete = runs.Where(IsComplete).ToList();
 
         // MISSING (OBS-02): started-but-incomplete. Bound against the ES STARTED denominator — NOT the
-        // Prom dispatch count. A fully-dead run (never started in ES) is invisible here and surfaces
-        // only in the Prom corroboration warning below.
+        // Prom dispatch count. A fully-dead run (never started in ES) is invisible here and is not
+        // detected by the current engine (the Prom dead-run corroboration warning was retired).
         var missing = startedRuns - complete.Count;
         var missingDetail = new List<string>();
         if (missing > 0)
@@ -123,9 +123,8 @@ public sealed class PassFailEngine
                 "did NOT reach COMPLETE (all 9 per-execution hops incl. both sinks Step_F1 + Step_F2 and the convergent " +
                 "terminal Step_G; the shared Step_A entry/seed is verified via the value chain, not the hop set).");
             missingDetail.Add(
-                "A fully-dead run (dispatched but never logging any Step_*) never started in ES and is NOT in this count; " +
-                "it surfaces as a Prom corroboration WARNING (impliedRuns > startedRuns). The specific missing " +
-                "correlationId for such a run is NOT recoverable from telemetry (research item #1).");
+                "A fully-dead run (dispatched but never logging any Step_*) never started in ES and is NOT in this count. " +
+                "The specific missing correlationId for such a run is NOT recoverable from telemetry (research item #1).");
         }
 
         // DUPLICATE (OBS-02, fail-closed, BINDING): any ILLEGITIMATE duplicate (correlationId, StepLabel) is a
@@ -198,6 +197,8 @@ public sealed class PassFailEngine
         var tripByCorr = tripDurationMsByCorrelation ?? new Dictionary<string, double>(StringComparer.Ordinal);
 
         // ── METRIC GATE (a later task fills this in; for now inert — verdict stays ES-binding) ──
+        // corroborationDetail is intentionally kept always-empty for now, preserving the report shape
+        // (Reconciliation/CorroborationDetail fields) for the future metric gate.
         var metricGateOk = true;
         var corroborationDetail = new List<string>();
         var recon = corroborationDetail.Count == 0
