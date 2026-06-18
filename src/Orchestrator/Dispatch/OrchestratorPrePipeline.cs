@@ -134,6 +134,14 @@ public sealed class OrchestratorPrePipeline(
             var sent = await RetryLoop.ExecuteAsync(
                 async () => { await post.Send((object)handoff, CancellationToken.None); return true; }, limit, ct);
             if (!sent.Succeeded) throw sent.Error!;    // send-exhaust → throw → broker redelivery (NO delete)
+
+            // Phase 74 (REQ-1/D-02): count-AFTER-success, ONCE per successful fan-out post.Send — N matches
+            // ⇒ N increments. D-06: the orchestrator-result-post queue recipient is NOT a processor, so use
+            // the PRODUCING processor's id off the inbound result `m` (the only processor identity present);
+            // workflowId = m.WorkflowId. camelCase labels (D-07); messageId never a label (D-04).
+            metrics.MessagesSent.Add(1,
+                new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")),
+                new KeyValuePair<string, object?>("processorId", m.ProcessorId.ToString("D")));
         }
 
         // stage-3: each dangling next-step id in selection.UnresolvedIds logs + increments
@@ -170,6 +178,13 @@ public sealed class OrchestratorPrePipeline(
             return true;
         }, limit, ct);
         if (!sent.Succeeded) throw sent.Error!;
+
+        // Phase 74 (REQ-1/D-02): count-AFTER-success — this single SendKeeper covers BOTH the REINJECT
+        // escalation (read-fault) AND the DELETE escalation (delete-exhaust). D-06: the keeper-recovery
+        // recipient is not a processor → use the producing processor's id off the IKeeperRecoverable `msg`.
+        metrics.MessagesSent.Add(1,
+            new KeyValuePair<string, object?>("workflowId", msg.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>("processorId", msg.ProcessorId.ToString("D")));
     }
 
     /// <summary>D-02/D-03: the REINJECT re-asserts the SAME inbound envelope <paramref name="messageId"/> on

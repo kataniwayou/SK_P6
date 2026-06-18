@@ -5,6 +5,7 @@ using Messaging.Contracts.Configuration;  // RetryOptions
 using Messaging.Contracts.Projections;    // L2ProjectionKeys
 using Microsoft.Extensions.Options;
 using Orchestrator.Configuration;          // OrchestratorOutputOptions
+using Orchestrator.Observability;          // OrchestratorMetrics (MessagesSent counter)
 using StackExchange.Redis;
 
 namespace Orchestrator.Dispatch;
@@ -30,7 +31,8 @@ public sealed class RelocateTail(
     IStepDispatcher dispatcher,
     ISendEndpointProvider sendProvider,
     IOptions<RetryOptions> retryOptions,
-    IOptions<OrchestratorOutputOptions> options)
+    IOptions<OrchestratorOutputOptions> options,
+    OrchestratorMetrics metrics)
 {
     /// <summary>D-17: the jittered <c>random[OutputDataTtl, 2×OutputDataTtl]</c> TTL on the <c>data:</c>
     /// write — the policy is the single source of truth in <see cref="L2ProjectionKeys.OutputDataTtl"/>;
@@ -95,5 +97,12 @@ public sealed class RelocateTail(
             return true;
         }, limit, ct);
         if (!sent.Succeeded) throw sent.Error!;   // propagate → throw → broker redelivery
+
+        // Phase 74 (REQ-1/D-02): count-AFTER-success — the INJECT write-exhaust keeper escalation. D-06: the
+        // keeper-recovery recipient is not a processor → use the producing processor's id off the
+        // IKeeperRecoverable `msg` (== the BuildInject source's WorkflowId/ProcessorId). camelCase (D-07).
+        metrics.MessagesSent.Add(1,
+            new KeyValuePair<string, object?>("workflowId", msg.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>("processorId", msg.ProcessorId.ToString("D")));
     }
 }
