@@ -30,8 +30,8 @@ public sealed class OrchestratorMetricsFacts
 
         var metrics = new OrchestratorMetrics(meterFactory);
 
-        Assert.NotNull(metrics.DispatchSent);
-        Assert.NotNull(metrics.ResultConsumed);
+        Assert.NotNull(metrics.MessagesSent);
+        Assert.NotNull(metrics.MessagesConsumed);
         Assert.NotNull(metrics.StepUnresolved);
     }
 }
