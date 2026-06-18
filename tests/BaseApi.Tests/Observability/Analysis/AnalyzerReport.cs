@@ -34,7 +34,7 @@ public enum ReconciliationOutcome
 
     /// <summary>
     /// The Prom counter deltas DISAGREE with the ES-binding count beyond tolerance — a corroboration
-    /// WARNING (e.g. round(DispatchSentDelta / 9) implies more runs than ES distinct-correlationId
+    /// WARNING (e.g. round(OrchestratorMessagesSentDelta / 9) implies more runs than ES distinct-correlationId
     /// count: a fully-dead run dispatched but never logging Step_A). NON-FATAL by default (67-03):
     /// surfaced in the report + HumanSummary, but does NOT flip a green ES verdict.
     /// </summary>
@@ -105,7 +105,7 @@ public sealed record AnalyzerReport
     public required IReadOnlyList<RunTrace> Duplicates { get; init; }
 
     /// <summary>
-    /// CORROBORATION ONLY (67-03): round(DispatchSentDelta / 9) — the run count IMPLIED by the Prom
+    /// CORROBORATION ONLY (67-03): round(OrchestratorMessagesSentDelta / 9) — the run count IMPLIED by the Prom
     /// dispatch counter (9 dispatches per run). Compared against <see cref="StartedRuns"/> within the
     /// boundary tolerance; a positive excess (implied &gt; started, beyond tolerance) is the dead-run
     /// corroboration warning. Informational — never gates the verdict.
@@ -115,13 +115,13 @@ public sealed record AnalyzerReport
     /// <summary>
     /// CORROBORATION ONLY (spawn-aware OBS-03): the number of EXTRA results the entry fan-out emits beyond
     /// the dispatch count = entry-dispatch count = distinct correlationIds (derived from data, never
-    /// hard-coded). The expected result count is <see cref="Prom"/>.DispatchSentDelta + this. Informational.
+    /// hard-coded). The expected result count is <see cref="Prom"/>.OrchestratorMessagesSentDelta + this. Informational.
     /// </summary>
     public required int SpawnExtra { get; init; }
 
     /// <summary>
     /// CORROBORATION ONLY (spawn-aware OBS-03): the reconciled expectation for the result counter —
-    /// <c>DispatchSentDelta + <see cref="SpawnExtra"/></c>. ResultConsumedDelta is reconciled against THIS
+    /// <c>OrchestratorMessagesSentDelta + <see cref="SpawnExtra"/></c>. OrchestratorMessagesConsumedDelta is reconciled against THIS
     /// (within ±1-run result slack); a mismatch beyond slack is a non-fatal warning. Informational.
     /// </summary>
     public required double ExpectedResultConsumed { get; init; }

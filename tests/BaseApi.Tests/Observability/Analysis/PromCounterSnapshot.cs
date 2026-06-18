@@ -14,46 +14,30 @@ namespace BaseApi.Tests.Observability.Analysis;
 /// </para>
 ///
 /// <para>
-/// <b>Live vs dormant counters.</b> The five non-nullable deltas are LIVE (have increment sites).
-/// The two nullable dedupe deltas are DORMANT — no code increments them today; <c>null</c> means
-/// "absent / no series", and they feed NO reconciliation arithmetic (they are reported as
-/// <c>Absent</c>, never gate PASS — 66-RESEARCH.md Counter Reality).
+/// <b>Phase 74 uniform two-counter model.</b> The four LIVE deltas are the new
+/// <c>{service}_messages_consumed</c> / <c>{service}_messages_sent</c> counters (D-12/D-13). The
+/// legacy per-type names (<c>orchestrator_dispatch_sent</c>, <c>orchestrator_result_consumed</c>,
+/// <c>processor_dispatch_consumed</c>, <c>processor_result_sent{outcome=…}</c>) and the three removed
+/// dedup/drop counters (<c>orchestrator_result_deduped</c>, <c>processor_dispatch_deduped</c>,
+/// <c>keeper_reinject_dropped</c>) plus the <c>outcome</c>-keyed breakdown are GONE — they emit no
+/// series and have no field here.
 /// </para>
 /// </summary>
 public sealed record PromCounterSnapshot
 {
-    /// <summary>orchestrator_dispatch_sent_total — windowed delta. The trigger denominator cross-check.</summary>
-    public required double DispatchSentDelta { get; init; }
+    /// <summary>orchestrator_messages_sent_total — windowed delta. The trigger denominator cross-check (D-13).</summary>
+    public required double OrchestratorMessagesSentDelta { get; init; }
 
-    /// <summary>orchestrator_result_consumed_total — windowed delta.</summary>
-    public required double ResultConsumedDelta { get; init; }
+    /// <summary>orchestrator_messages_consumed_total — windowed delta (D-13).</summary>
+    public required double OrchestratorMessagesConsumedDelta { get; init; }
 
-    /// <summary>processor_dispatch_consumed_total — windowed delta.</summary>
-    public required double DispatchConsumedDelta { get; init; }
-
-    /// <summary>processor_result_sent_total{outcome="completed"} — windowed delta. Expected = COMPLETE runs × 9.</summary>
-    public required double ResultSentCompletedDelta { get; init; }
-
-    /// <summary>keeper_reinject_dropped_total — windowed delta.</summary>
-    public required double KeeperReinjectDroppedDelta { get; init; }
+    /// <summary>processor_messages_consumed_total — windowed delta (D-13).</summary>
+    public required double ProcessorMessagesConsumedDelta { get; init; }
 
     /// <summary>
-    /// orchestrator_result_deduped_total — windowed delta. NULLABLE: <c>null</c> == absent (DORMANT,
-    /// no increment site). Feeds no arithmetic; reported as Absent.
+    /// processor_messages_sent_total — windowed delta (D-12: repointed from the old
+    /// <c>processor_result_sent{outcome="completed"}</c>; the close-gate fixture is all-complete so
+    /// total == completed and Expected = COMPLETE runs × 9 still holds; the <c>outcome</c> label is gone).
     /// </summary>
-    public double? ResultDedupedDelta { get; init; }
-
-    /// <summary>
-    /// processor_dispatch_deduped_total — windowed delta. NULLABLE: <c>null</c> == absent (DORMANT,
-    /// no increment site). Feeds no arithmetic; reported as Absent.
-    /// </summary>
-    public double? DispatchDedupedDelta { get; init; }
-
-    /// <summary>
-    /// processor_result_sent_total for the NON-completed outcomes (failed/cancelled/processing),
-    /// windowed deltas keyed by outcome. Expected empty / all-zero in a clean proof; any non-zero
-    /// terminal outcome is report-surfaced evidence feeding fail-closed reconciliation (D-08).
-    /// </summary>
-    public IReadOnlyDictionary<string, double> NonCompletedOutcomes { get; init; }
-        = new Dictionary<string, double>(StringComparer.Ordinal);
+    public required double ProcessorMessagesSentDelta { get; init; }
 }
