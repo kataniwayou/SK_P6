@@ -147,13 +147,22 @@ public sealed record AnalyzerReport
     public required IReadOnlyList<RunTrace> Traces { get; init; }
 
     /// <summary>
-    /// BINDING (73, D-11): true iff EVERY started run's deterministic value chain holds —
+    /// BINDING (73, D-11): true iff EVERY checked run's deterministic value chain holds —
     /// <c>Values[label] == seed + hop-count</c> per <c>(corr, exec)</c>, with both <c>Step_G</c> arrivals
-    /// at the terminal <c>seed + 6</c> (the LIVE terminal-anchor proxy: the <c>Step_G</c> completed-terminal
-    /// ES log carrying <c>seed + 6</c> — 106 for exec_a/seed 100, 206 for exec_b/seed 200). A wrong mid-chain
-    /// or terminal value sets this false and folds into Verdict.Fail (<c>pass = … &amp;&amp; ValueChainOk</c>).
-    /// The durable <c>skp:out:</c> blob presence/value proof is owned by the hermetic harness (Plan 02),
-    /// NOT re-read here — the ES-read-only auditor cannot read Redis (D-11).
+    /// at the terminal <c>seed + 6</c>. A wrong mid-chain or terminal value sets this false and folds into
+    /// Verdict.Fail (<c>pass = … &amp;&amp; ValueChainOk</c>).
+    /// <para>
+    /// WR-01 — what the LIVE auditor pins. On the live ES-read-only path the seed is recovered from the chain
+    /// itself (<c>Step_B - 1</c>), so this field binds the inter-hop <c>+1</c> DELTAS (and the <c>Step_G</c> ×2
+    /// agreement at the shared terminal <c>seed + 6</c>), NOT the ABSOLUTE base value — a uniform constant shift
+    /// of the whole live chain would still pass. The ABSOLUTE-value terminal-anchor proof (<c>Step_G</c> at 106
+    /// for exec_a/seed 100, 206 for exec_b/seed 200) is owned by the hermetic harness (Plan 02), which reads the
+    /// durable <c>skp:out:</c> L2 blob; the ES-read-only auditor cannot read Redis and does NOT re-prove it here.
+    /// </para>
+    /// <para>
+    /// WR-02 — when a value oracle is supplied (live fixture), a COMPLETE run that surfaced ZERO <c>Produced</c>
+    /// values sets this false (UNVERIFIED), so a complete-but-unmapped cohort can no longer pass vacuously.
+    /// </para>
     /// </summary>
     public required bool ValueChainOk { get; init; }
 

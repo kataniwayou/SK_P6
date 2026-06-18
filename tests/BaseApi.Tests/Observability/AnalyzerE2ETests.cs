@@ -172,10 +172,11 @@ public sealed class AnalyzerE2ETests
         //    round(DispatchSentDelta / 9) for the corroboration cross-check. There is NO per-fire
         //    correlationId orchestrator log (item #1), so the IDENTITY of a fully-dead run is NOT
         //    recoverable — it surfaces as a non-fatal Prom corroboration warning, never named.
-        // Math.Round defaults to MidpointRounding.ToEven; triggerCount is Prom corroboration evidence
-        // only (never the binding denominator) and the engine's ±1-run tolerance absorbs any single-unit
-        // rounding wobble, so ToEven is intentionally accepted here (IN-01).
-        var triggerCount = (int)Math.Round(promSnapshot.DispatchSentDelta);
+        // triggerCount via the shared PassFailEngine.TriggerCountFrom (IN-01) so the live fixture and the
+        // hermetic facts cannot drift in rounding semantics. Math.Round defaults to MidpointRounding.ToEven;
+        // triggerCount is Prom corroboration evidence only (never the binding denominator) and the engine's
+        // ±1-run tolerance absorbs any single-unit rounding wobble, so ToEven is intentionally accepted.
+        var triggerCount = PassFailEngine.TriggerCountFrom(promSnapshot);
 
         // Precondition: at least one dispatch must have fired in the window. A zero DispatchSentDelta
         // AND zero ES traces would let the ES-binding verdict pass vacuously (0 started, 0 missing) even
@@ -382,9 +383,20 @@ public sealed class AnalyzerE2ETests
             kv => (kv.Value.Max - kv.Value.Min).TotalMilliseconds,
             StringComparer.Ordinal);
 
-        // Per-execution seed map (73, D-11): recover seed = Produced[Step_B] - 1 (the +1-per-hop chain). The
-        // engine also recovers this internally when absent (ResolveSeed), so this is the explicit oracle —
-        // a run that never surfaced Step_B is simply omitted (the engine falls back to its own recovery).
+        // Per-execution seed map (73, D-11): recover seed = Produced[Step_B] - 1 (the +1-per-hop chain).
+        //
+        // WR-01 — what this LIVE seed actually anchors. The seed here is DERIVED from the chain it then
+        // validates (Step_B - 1), NOT an independent absolute oracle. A live fixture-level absolute oracle
+        // (100→exec_a, 200→exec_b) is NOT cleanly feasible: the live executionId is a framework-generated GUID
+        // with no independent executionId→seed mapping available to this ES-read-only auditor (Mode-2 Step_A
+        // logs only "seeded the following numbers" with no Produced attribute, so Step_A never enters Values).
+        // Consequently the live value-chain check pins the inter-hop +1 DELTAS (B→C→…→G each +1, and the
+        // Step_G ×2 arrivals agreeing at the shared terminal) — it does NOT independently pin the ABSOLUTE base
+        // value. Step_B's own assertion is therefore a tautology (b == (b-1)+1), and a uniform constant shift of
+        // the whole chain would still pass the live gate. The ABSOLUTE-value proof (101..106 / 201..206 against
+        // the fixed 100/200 seeds) is owned by the hermetic harness (FanInHermeticHarnessFacts, Plan 02), which
+        // reads the durable L2 blob — not claimed here. The engine also recovers this internally when absent
+        // (ResolveSeed), so this is the explicit oracle — a run that never surfaced Step_B is simply omitted.
         var seedsByExec = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var (key, values) in valuesByInstance)
         {
