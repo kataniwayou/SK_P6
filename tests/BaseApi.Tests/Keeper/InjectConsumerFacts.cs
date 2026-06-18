@@ -61,7 +61,7 @@ public sealed class InjectConsumerFacts
 
         var consumer = new InjectConsumer(
             RecoveryTestKit.Mux(db), send,
-            RecoveryTestKit.Retry(), Recovery());
+            RecoveryTestKit.Retry(), Recovery(), RecoveryTestKit.Metrics());
 
         await consumer.Consume(Ctx(m, ct));
 
@@ -105,7 +105,7 @@ public sealed class InjectConsumerFacts
 
         var consumer = new InjectConsumer(
             RecoveryTestKit.Mux(db), send,
-            RecoveryTestKit.Retry(), Recovery());
+            RecoveryTestKit.Retry(), Recovery(), RecoveryTestKit.Metrics());
 
         await consumer.Consume(Ctx(m, ct));
 
@@ -134,7 +134,7 @@ public sealed class InjectConsumerFacts
 
         var consumer = new InjectConsumer(
             RecoveryTestKit.Mux(db), send,
-            RecoveryTestKit.Retry(), Recovery());
+            RecoveryTestKit.Retry(), Recovery(), RecoveryTestKit.Metrics());
 
         await consumer.Consume(Ctx(m, ct));
 

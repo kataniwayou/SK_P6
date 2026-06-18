@@ -1,4 +1,5 @@
 using BaseConsole.Core.Resilience;
+using Keeper.Observability;
 using MassTransit;
 using Messaging.Contracts;
 using Messaging.Contracts.Configuration;
@@ -22,7 +23,8 @@ namespace Keeper.Recovery;
 public abstract class RecoveryConsumerBase<TMessage>(
     IConnectionMultiplexer redis,
     ISendEndpointProvider sendProvider,
-    IOptions<RetryOptions> retryOptions) : IConsumer<TMessage>
+    IOptions<RetryOptions> retryOptions,
+    KeeperMetrics metrics) : IConsumer<TMessage>
     where TMessage : class, IKeeperRecoverable
 {
     // IN-02: resolve the logical database once per consumer lifetime (redis is a DI singleton, so the
@@ -32,7 +34,16 @@ public abstract class RecoveryConsumerBase<TMessage>(
     protected int RetryLimit => retryOptions.Value.Limit;
 
     public Task Consume(ConsumeContext<TMessage> context)
-        => HandleAsync(context.Message, context.CancellationToken);   // gate now enforced at the ENDPOINT (D-04)
+    {
+        var m = context.Message;
+        // D-08 (REQ-3): count keeper_messages_consumed ONCE here — the single choke point all six recovery
+        // consumers funnel through (REINJECT/INJECT/DELETE for both processor and orchestrator). Labels are
+        // the camelCase workflowId+processorId from IKeeperRecoverable.
+        metrics.MessagesConsumed.Add(1,
+            new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>("processorId", m.ProcessorId.ToString("D")));
+        return HandleAsync(m, context.CancellationToken);   // gate now enforced at the ENDPOINT (D-04)
+    }
 
     /// <summary>The per-state body (REINJECT/INJECT/DELETE). Every L2 op + Send inside it should go
     /// through <see cref="Guard"/>/<see cref="Guard{T}"/>.</summary>
@@ -50,4 +61,14 @@ public abstract class RecoveryConsumerBase<TMessage>(
     /// <summary>Void-op overload of <see cref="Guard{T}"/> for Sends and deletes whose result is ignored.</summary>
     protected Task Guard(Func<Task> op, CancellationToken ct)
         => Guard(async () => { await op(); return true; }, ct);
+
+    /// <summary>D-09 (REQ-3): the shared <c>keeper_messages_sent</c> increment. Each of the four SENDING
+    /// consumers calls this AFTER a successful <c>ep.Send</c> (never on the Reinject drop/early-return path —
+    /// a dropped or exhausted send does not count, T-74-06); the two Delete consumers send nothing and never
+    /// call it. Centralizes the camelCase <c>workflowId</c>+<c>processorId</c> label construction next to the
+    /// consumed-counter increment (DRY).</summary>
+    protected void CountSent(Guid workflowId, Guid processorId) =>
+        metrics.MessagesSent.Add(1,
+            new KeyValuePair<string, object?>("workflowId", workflowId.ToString("D")),
+            new KeyValuePair<string, object?>("processorId", processorId.ToString("D")));
 }

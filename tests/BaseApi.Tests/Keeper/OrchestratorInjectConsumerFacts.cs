@@ -63,7 +63,7 @@ public sealed class OrchestratorInjectConsumerFacts
 
         var consumer = new OrchestratorInjectConsumer(
             RecoveryTestKit.Mux(db), send,
-            RecoveryTestKit.Retry(), Recovery());
+            RecoveryTestKit.Retry(), Recovery(), RecoveryTestKit.Metrics());
 
         await consumer.Consume(Ctx(m, ct));
 
@@ -108,7 +108,7 @@ public sealed class OrchestratorInjectConsumerFacts
 
         var consumer = new OrchestratorInjectConsumer(
             RecoveryTestKit.Mux(db), send,
-            RecoveryTestKit.Retry(), Recovery());
+            RecoveryTestKit.Retry(), Recovery(), RecoveryTestKit.Metrics());
 
         await consumer.Consume(Ctx(m, ct));
 
@@ -138,7 +138,7 @@ public sealed class OrchestratorInjectConsumerFacts
 
         var consumer = new OrchestratorInjectConsumer(
             RecoveryTestKit.Mux(db), send,
-            RecoveryTestKit.Retry(), Recovery());
+            RecoveryTestKit.Retry(), Recovery(), RecoveryTestKit.Metrics());
 
         await consumer.Consume(Ctx(m, ct));
 
@@ -147,14 +147,18 @@ public sealed class OrchestratorInjectConsumerFacts
         await db.DidNotReceive().StringLengthAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
 
         // By construction the consumer has no L1 store dependency: its single public ctor takes exactly the
-        // 4 recovery deps (no IWorkflowL1Store / advancement param).
+        // 4 recovery deps plus the Phase-74 KeeperMetrics counter holder (no IWorkflowL1Store / advancement
+        // param). Phase 74 (REQ-3): KeeperMetrics is injected for the shared keeper_messages_sent CountSent.
         var ctor = Assert.Single(typeof(OrchestratorInjectConsumer).GetConstructors());
         var paramTypes = ctor.GetParameters().Select(p => p.ParameterType).ToArray();
-        Assert.Equal(4, paramTypes.Length);
+        Assert.Equal(5, paramTypes.Length);
         Assert.Equal(typeof(IConnectionMultiplexer), paramTypes[0]);
         Assert.Equal(typeof(ISendEndpointProvider), paramTypes[1]);
         Assert.Equal(typeof(IOptions<RetryOptions>), paramTypes[2]);
         Assert.Equal(typeof(IOptions<RecoveryOptions>), paramTypes[3]);
+        Assert.Equal(typeof(global::Keeper.Observability.KeeperMetrics), paramTypes[4]);
+        // The point of this guard survives: NO IWorkflowL1Store / advancement param is present.
+        Assert.DoesNotContain(paramTypes, t => t.Name.Contains("L1") || t.Name.Contains("Advancement"));
     }
 
     [Fact]
@@ -169,7 +173,7 @@ public sealed class OrchestratorInjectConsumerFacts
 
         var consumer = new OrchestratorInjectConsumer(
             RecoveryTestKit.Mux(db), send,
-            RecoveryTestKit.Retry(), Recovery());
+            RecoveryTestKit.Retry(), Recovery(), RecoveryTestKit.Metrics());
 
         await consumer.Consume(Ctx(m, ct));
 

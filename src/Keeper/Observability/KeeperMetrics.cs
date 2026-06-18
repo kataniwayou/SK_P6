@@ -10,22 +10,45 @@ namespace Keeper.Observability;
 /// <c>ConfigureOpenTelemetryMeterProvider(mp =&gt; mp.AddMeter(KeeperMetrics.MeterName))</c> registration
 /// (the meter is wired in Plan 02's Program.cs edit).
 /// <para>
-/// The counter name is snake_case with NO Prometheus counter suffix: the collector's prometheus exporter
-/// <c>add_metric_suffixes</c> default appends the suffix itself (matches <c>processor_dispatch_deduped</c>).
+/// Phase 74 (REQ-3/REQ-4/REQ-6): the legacy label-less reinject-drop counter is
+/// REMOVED and replaced by the uniform two-counter pair shared across the whole platform —
+/// <c>keeper_messages_consumed</c> (incremented ONCE at the <c>RecoveryConsumerBase.Consume</c> choke point
+/// all six recovery consumers funnel through) and <c>keeper_messages_sent</c> (incremented after every
+/// successful outbound <c>ep.Send</c> across the four SENDING consumers via the shared
+/// <c>RecoveryConsumerBase.CountSent</c> helper) — both labeled camelCase <c>workflowId</c>+<c>processorId</c>.
+/// A third, label-less <c>keeper_l2_probe</c> heartbeat increments once per <c>BitHealthLoop</c> tick so
+/// <c>rate(keeper_l2_probe_total[5m]) &gt; 0</c> proves the Keeper is actively probing L2.
+/// </para>
+/// <para>
+/// Counter names are snake_case with NO Prometheus counter suffix: the collector's prometheus exporter
+/// <c>add_metric_suffixes</c> default appends the <c>_total</c> suffix itself.
 /// </para></summary>
 public sealed class KeeperMetrics
 {
     /// <summary>The meter name — MUST equal the <c>AddMeter("Keeper")</c> registration.</summary>
     public const string MeterName = "Keeper";
 
-    /// <summary>D-07: <c>keeper_reinject_dropped</c> — incremented at the REINJECT by-design absent-data
-    /// drop (L2[entryId] absent/empty, no Redis exception) so a drop spike is distinguishable from
-    /// healthy expected drops.</summary>
-    public Counter<long> ReinjectDropped { get; }
+    /// <summary>REQ-3 — <c>keeper_messages_consumed</c>: incremented ONCE in
+    /// <c>RecoveryConsumerBase.Consume</c> (the single choke point all six recovery consumers funnel
+    /// through), labeled camelCase <c>workflowId</c>+<c>processorId</c> from <c>IKeeperRecoverable</c>.</summary>
+    public Counter<long> MessagesConsumed { get; }
+
+    /// <summary>REQ-3 — <c>keeper_messages_sent</c>: incremented after every successful outbound
+    /// <c>ep.Send</c> across the four SENDING consumers via the shared <c>RecoveryConsumerBase.CountSent</c>
+    /// helper (never on the Reinject drop/early-return path; the two Delete consumers send nothing).
+    /// Labeled camelCase <c>workflowId</c>+<c>processorId</c>.</summary>
+    public Counter<long> MessagesSent { get; }
+
+    /// <summary>REQ-4 — <c>keeper_l2_probe</c>: a LABEL-LESS heartbeat incremented once per
+    /// <c>BitHealthLoop</c> tick (one per <c>probe.ProbeOnceAsync</c> call, regardless of healthy/unhealthy
+    /// result). Proves the Keeper is actively probing L2.</summary>
+    public Counter<long> L2Probe { get; }
 
     public KeeperMetrics(IMeterFactory meterFactory)
     {
         var meter = meterFactory.Create(MeterName);
-        ReinjectDropped = meter.CreateCounter<long>("keeper_reinject_dropped");   // collector appends the suffix
+        MessagesConsumed = meter.CreateCounter<long>("keeper_messages_consumed");   // collector appends _total
+        MessagesSent     = meter.CreateCounter<long>("keeper_messages_sent");       // collector appends _total
+        L2Probe          = meter.CreateCounter<long>("keeper_l2_probe");            // collector appends _total
     }
 }

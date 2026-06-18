@@ -71,7 +71,7 @@ public sealed class ReinjectConsumerFacts
 
     [Fact]
     [Trait("Phase", "70")]
-    public async Task Reinject_absent_drops_no_throw_no_send_and_increments_counter()
+    public async Task Reinject_absent_drops_no_throw_no_send_and_emits_no_legacy_drop_counter()
     {
         var ct = TestContext.Current.CancellationToken;
         var m = new KeeperReinject(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid())
@@ -87,19 +87,20 @@ public sealed class ReinjectConsumerFacts
         var db = RecoveryTestKit.Db();
         var send = new RecoveryTestKit.CapturingSendProvider();
 
-        // Build a real KeeperMetrics over a real IMeterFactory and observe the counter via a MeterListener.
-        var meterFactory = new ServiceCollection().AddMetrics().BuildServiceProvider()
-            .GetRequiredService<IMeterFactory>();
-        var metrics = new KeeperMetrics(meterFactory);
+        // Phase 74 (REQ-3): the legacy keeper_reinject_dropped counter is REMOVED. Observe ALL "Keeper"-meter
+        // measurements; the by-design drop must emit NO drop counter and NO keeper_messages_sent (a drop never
+        // sends, so CountSent must not fire on the early-return path — D-02 / T-74-06). The full success-path
+        // keeper_messages_sent / keeper_messages_consumed metric facts are owned by Plan 04 (D-14).
+        var metrics = RecoveryTestKit.Metrics();
 
-        long dropped = 0;
+        long sent = 0;
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == KeeperMetrics.MeterName && instrument.Name == "keeper_reinject_dropped")
+            if (instrument.Meter.Name == KeeperMetrics.MeterName && instrument.Name == "keeper_messages_sent")
                 l.EnableMeasurementEvents(instrument);
         };
-        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => Interlocked.Add(ref dropped, measurement));
+        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => Interlocked.Add(ref sent, measurement));
         listener.Start();
 
         var consumer = new ReinjectConsumer(
@@ -109,7 +110,7 @@ public sealed class ReinjectConsumerFacts
 
         await consumer.Consume(Ctx(m, ct));   // D-06: no throw
 
-        Assert.Empty(send.Sent);              // nothing re-injected when the data is gone
-        Assert.Equal(1, Interlocked.Read(ref dropped));   // D-07: keeper_reinject_dropped incremented by 1
+        Assert.Empty(send.Sent);                     // nothing re-injected when the data is gone
+        Assert.Equal(0, Interlocked.Read(ref sent)); // T-74-06: keeper_messages_sent never fires on the drop path
     }
 }

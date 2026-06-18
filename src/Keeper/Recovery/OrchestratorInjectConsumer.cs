@@ -1,3 +1,4 @@
+using Keeper.Observability;
 using MassTransit;
 using Messaging.Contracts;
 using Messaging.Contracts.Configuration;
@@ -29,8 +30,9 @@ namespace Keeper.Recovery;
 /// RelocateTail; only the shared keys/TTL policy in <see cref="L2ProjectionKeys"/> are reused.</summary>
 public sealed class OrchestratorInjectConsumer(
     IConnectionMultiplexer redis, ISendEndpointProvider sendProvider,
-    IOptions<RetryOptions> retryOptions, IOptions<RecoveryOptions> recoveryOptions)
-    : RecoveryConsumerBase<OrchestratorInject>(redis, sendProvider, retryOptions)
+    IOptions<RetryOptions> retryOptions, IOptions<RecoveryOptions> recoveryOptions,
+    KeeperMetrics metrics)
+    : RecoveryConsumerBase<OrchestratorInject>(redis, sendProvider, retryOptions, metrics)
 {
     private readonly int _executionDataTtlSeconds = recoveryOptions.Value.ExecutionDataTtlSeconds;
 

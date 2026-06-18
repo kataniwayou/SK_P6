@@ -100,7 +100,7 @@ public sealed class OrchestratorReinjectConsumerFacts
 
     [Fact]
     [Trait("Phase", "71")]
-    public async Task Absent_out_entry_drops_and_counts()
+    public async Task Absent_out_entry_drops_and_emits_no_legacy_drop_counter()
     {
         var ct = TestContext.Current.CancellationToken;
         var m = NewReinject(StepOutcome.Completed);
@@ -108,18 +108,19 @@ public sealed class OrchestratorReinjectConsumerFacts
         var db = RecoveryTestKit.Db();
         var send = new RecoveryTestKit.CapturingSendProvider();
 
-        var meterFactory = new ServiceCollection().AddMetrics().BuildServiceProvider()
-            .GetRequiredService<IMeterFactory>();
-        var metrics = new KeeperMetrics(meterFactory);
+        // Phase 74 (REQ-3): the legacy keeper_reinject_dropped counter is REMOVED. The by-design drop must emit
+        // NO keeper_messages_sent (a drop never sends → CountSent must not fire on the early-return path —
+        // D-02 / T-74-06). The full success-path metric facts are owned by Plan 04 (D-14).
+        var metrics = RecoveryTestKit.Metrics();
 
-        long dropped = 0;
+        long sent = 0;
         using var listener = new MeterListener();
         listener.InstrumentPublished = (instrument, l) =>
         {
-            if (instrument.Meter.Name == KeeperMetrics.MeterName && instrument.Name == "keeper_reinject_dropped")
+            if (instrument.Meter.Name == KeeperMetrics.MeterName && instrument.Name == "keeper_messages_sent")
                 l.EnableMeasurementEvents(instrument);
         };
-        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => Interlocked.Add(ref dropped, measurement));
+        listener.SetMeasurementEventCallback<long>((_, measurement, _, _) => Interlocked.Add(ref sent, measurement));
         listener.Start();
 
         var consumer = new OrchestratorReinjectConsumer(
@@ -129,8 +130,8 @@ public sealed class OrchestratorReinjectConsumerFacts
 
         await consumer.Consume(Ctx(m, ct));   // no throw
 
-        Assert.Empty(send.Sent);                            // nothing re-injected when the out: blob is gone
-        Assert.Equal(1, Interlocked.Read(ref dropped));     // the shared reinject-dropped counter incremented
+        Assert.Empty(send.Sent);                     // nothing re-injected when the out: blob is gone
+        Assert.Equal(0, Interlocked.Read(ref sent)); // T-74-06: keeper_messages_sent never fires on the drop path
     }
 
     [Fact]

@@ -13,17 +13,19 @@ namespace Keeper.Recovery;
 /// still present, then re-injects a reconstructed <see cref="EntryStepDispatch"/> (carrying the D-01
 /// <see cref="KeeperReinject.Payload"/> step config) to <c>queue:{ProcessorId:D}</c> — the same target a
 /// direct dispatch uses. Phase 52 (D-06/D-07): an absent/empty L2[entryId] (STRLEN==0, NO Redis exception)
-/// is now a BY-DESIGN silent drop — ack with no throw and no send, incrementing
-/// <see cref="KeeperMetrics.ReinjectDropped"/> + a structured warning (A18 "accepted silent losses": the
-/// data is genuinely gone, so a replay can't proceed and nothing downstream is lost). A Redis EXCEPTION on
-/// the read is still infra → <see cref="RecoveryConsumerBase{TMessage}.Guard"/> → exhaustion policy (D-01),
-/// NOT swallowed as a drop. IN-04: STRLEN (not StringGet) returns 0 for BOTH a missing key AND an empty
-/// value without pulling the blob.</summary>
+/// is now a BY-DESIGN silent drop — ack with no throw and no send, emitting a structured warning
+/// (A18 "accepted silent losses": the data is genuinely gone, so a replay can't proceed and nothing
+/// downstream is lost). Phase 74 (REQ-3): the legacy <c>keeper_reinject_dropped</c> drop counter is removed —
+/// the only counter on the success path is the shared <see cref="RecoveryConsumerBase{TMessage}.CountSent"/>
+/// (<c>keeper_messages_sent</c>), called after the confirmed send and NEVER on this drop branch. A Redis
+/// EXCEPTION on the read is still infra → <see cref="RecoveryConsumerBase{TMessage}.Guard"/> → exhaustion
+/// policy (D-01), NOT swallowed as a drop. IN-04: STRLEN (not StringGet) returns 0 for BOTH a missing key
+/// AND an empty value without pulling the blob.</summary>
 public sealed class ReinjectConsumer(
     IConnectionMultiplexer redis, ISendEndpointProvider sendProvider,
     IOptions<RetryOptions> retryOptions,
     KeeperMetrics metrics, ILogger<ReinjectConsumer> logger)
-    : RecoveryConsumerBase<KeeperReinject>(redis, sendProvider, retryOptions)
+    : RecoveryConsumerBase<KeeperReinject>(redis, sendProvider, retryOptions, metrics)
 {
     protected override async Task HandleAsync(KeeperReinject m, CancellationToken ct)
     {
@@ -35,8 +37,10 @@ public sealed class ReinjectConsumer(
             ct) != 0;
         if (!present)
         {
-            metrics.ReinjectDropped.Add(1);                                                  // D-07
-            logger.LogWarning("REINJECT drop: L2 data gone EntryId={EntryId}", m.EntryId);   // D-07 structured hole (never log Payload)
+            // Phase 74 (REQ-3): the legacy keeper_reinject_dropped counter is REMOVED; the by-design-drop
+            // structured warning survives (never log the Payload). No keeper_messages_sent here — a drop
+            // never sends, so CountSent must NEVER fire on this early-return path (D-02 / T-74-06).
+            logger.LogWarning("REINJECT drop: L2 data gone EntryId={EntryId}", m.EntryId);   // structured hole (never log Payload)
             return;                                                                          // D-06 silent ack
         }
 

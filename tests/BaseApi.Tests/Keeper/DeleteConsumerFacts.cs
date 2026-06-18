@@ -41,7 +41,7 @@ public sealed class DeleteConsumerFacts
 
         var consumer = new DeleteConsumer(
             RecoveryTestKit.Mux(db), send,
-            RecoveryTestKit.Retry());
+            RecoveryTestKit.Retry(), RecoveryTestKit.Metrics());
 
         var m = NewDelete();
 
@@ -68,7 +68,7 @@ public sealed class DeleteConsumerFacts
 
         var consumer = new DeleteConsumer(
             RecoveryTestKit.Mux(db), send,
-            RecoveryTestKit.Retry());
+            RecoveryTestKit.Retry(), RecoveryTestKit.Metrics());
 
         var m = NewDelete();
 

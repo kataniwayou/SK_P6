@@ -15,8 +15,10 @@ namespace Keeper.Recovery;
 /// Step-result (NOT a dispatch) to <c>queue:{OrchestratorQueues.Result}</c> with the outbound envelope
 /// <c>MessageId</c> overridden to the carried <see cref="OrchestratorReinject.MessageId"/> (D-03 — "same
 /// messageId"). An absent/empty <c>out:</c> blob (STRLEN==0, NO Redis exception) is a BY-DESIGN silent drop —
-/// ack with no throw and no send, incrementing <see cref="KeeperMetrics.ReinjectDropped"/> (the shared drop
-/// counter — reused, not a new instrument) + a structured warning (ids only, never the payload). A Redis
+/// ack with no throw and no send, emitting a structured warning (ids only, never the payload). Phase 74
+/// (REQ-3): the legacy <c>keeper_reinject_dropped</c> drop counter is removed — the only success-path counter
+/// is the shared <see cref="RecoveryConsumerBase{TMessage}.CountSent"/> (<c>keeper_messages_sent</c>), called
+/// after the confirmed send and NEVER on this drop branch. A Redis
 /// EXCEPTION on the read is still infra → <see cref="RecoveryConsumerBase{TMessage}.Guard"/> → exhaustion
 /// policy, NOT a drop. Pitfall 6: STRLEN (not KeyExists) — 0 covers BOTH a missing key AND an empty value
 /// (KeyExists would be WRONG: an empty-string key EXISTS). The original Step* is rebuilt faithfully from the
@@ -26,7 +28,7 @@ public sealed class OrchestratorReinjectConsumer(
     IConnectionMultiplexer redis, ISendEndpointProvider sendProvider,
     IOptions<RetryOptions> retryOptions,
     KeeperMetrics metrics, ILogger<OrchestratorReinjectConsumer> logger)
-    : RecoveryConsumerBase<OrchestratorReinject>(redis, sendProvider, retryOptions)
+    : RecoveryConsumerBase<OrchestratorReinject>(redis, sendProvider, retryOptions, metrics)
 {
     protected override async Task HandleAsync(OrchestratorReinject m, CancellationToken ct)
     {
@@ -39,7 +41,9 @@ public sealed class OrchestratorReinjectConsumer(
             ct) != 0;
         if (!present)
         {
-            metrics.ReinjectDropped.Add(1);                                                            // reuse the shared drop counter
+            // Phase 74 (REQ-3): the legacy keeper_reinject_dropped counter is REMOVED; the by-design-drop
+            // structured warning survives (ids only — never log the relocated blob). No keeper_messages_sent
+            // here — a drop never sends, so CountSent must NEVER fire on this early-return path (D-02 / T-74-06).
             logger.LogWarning("Orchestrator REINJECT drop: out: gone EntryId={EntryId}", m.EntryId);   // ids only — never log the relocated blob
             return;                                                                                    // silent ack
         }

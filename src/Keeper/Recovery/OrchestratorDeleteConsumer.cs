@@ -1,3 +1,4 @@
+using Keeper.Observability;
 using MassTransit;
 using Messaging.Contracts;
 using Messaging.Contracts.Configuration;
@@ -15,8 +16,8 @@ namespace Keeper.Recovery;
 /// exhaustion to broker nack-requeue (D-04); gating happens at the endpoint (D-04).</summary>
 public sealed class OrchestratorDeleteConsumer(
     IConnectionMultiplexer redis, ISendEndpointProvider sendProvider,
-    IOptions<RetryOptions> retryOptions)
-    : RecoveryConsumerBase<OrchestratorDelete>(redis, sendProvider, retryOptions)
+    IOptions<RetryOptions> retryOptions, KeeperMetrics metrics)
+    : RecoveryConsumerBase<OrchestratorDelete>(redis, sendProvider, retryOptions, metrics)
 {
     protected override async Task HandleAsync(OrchestratorDelete m, CancellationToken ct)
         => await Guard(() => Db.KeyDeleteAsync(L2ProjectionKeys.OutputData(m.EntryId)), ct);

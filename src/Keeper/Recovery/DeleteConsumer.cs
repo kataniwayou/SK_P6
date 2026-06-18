@@ -1,3 +1,4 @@
+using Keeper.Observability;
 using MassTransit;
 using Messaging.Contracts;
 using Messaging.Contracts.Configuration;
@@ -15,8 +16,8 @@ namespace Keeper.Recovery;
 /// endpoint (D-04).</summary>
 public sealed class DeleteConsumer(
     IConnectionMultiplexer redis, ISendEndpointProvider sendProvider,
-    IOptions<RetryOptions> retryOptions)
-    : RecoveryConsumerBase<KeeperDelete>(redis, sendProvider, retryOptions)
+    IOptions<RetryOptions> retryOptions, KeeperMetrics metrics)
+    : RecoveryConsumerBase<KeeperDelete>(redis, sendProvider, retryOptions, metrics)
 {
     protected override async Task HandleAsync(KeeperDelete m, CancellationToken ct)
         => await Guard(() => Db.KeyDeleteAsync(L2ProjectionKeys.ExecutionData(m.EntryId)), ct);

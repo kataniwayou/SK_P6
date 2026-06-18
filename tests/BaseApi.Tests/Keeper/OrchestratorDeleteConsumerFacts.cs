@@ -41,7 +41,7 @@ public sealed class OrchestratorDeleteConsumerFacts
 
         var consumer = new OrchestratorDeleteConsumer(
             RecoveryTestKit.Mux(db), send,
-            RecoveryTestKit.Retry());
+            RecoveryTestKit.Retry(), RecoveryTestKit.Metrics());
 
         var m = NewDelete();
 

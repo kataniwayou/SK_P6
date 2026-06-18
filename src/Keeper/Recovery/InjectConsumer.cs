@@ -1,3 +1,4 @@
+using Keeper.Observability;
 using MassTransit;
 using Messaging.Contracts;
 using Messaging.Contracts.Configuration;
@@ -25,8 +26,9 @@ namespace Keeper.Recovery;
 /// out: on the orchestrator Pre; the non-completed arms keep the <c>Guid.Empty</c> placeholder.</summary>
 public sealed class InjectConsumer(
     IConnectionMultiplexer redis, ISendEndpointProvider sendProvider,
-    IOptions<RetryOptions> retryOptions, IOptions<RecoveryOptions> recoveryOptions)
-    : RecoveryConsumerBase<KeeperInject>(redis, sendProvider, retryOptions)
+    IOptions<RetryOptions> retryOptions, IOptions<RecoveryOptions> recoveryOptions,
+    KeeperMetrics metrics)
+    : RecoveryConsumerBase<KeeperInject>(redis, sendProvider, retryOptions, metrics)
 {
     private readonly int _executionDataTtlSeconds = recoveryOptions.Value.ExecutionDataTtlSeconds;
 
