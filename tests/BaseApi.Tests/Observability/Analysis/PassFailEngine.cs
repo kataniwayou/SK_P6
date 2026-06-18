@@ -228,9 +228,11 @@ public sealed class PassFailEngine
         var metricGateOk = conservationOk && keeperRecoveryOk && probeLiveOk;
         var recon = corroborationDetail.Count == 0 ? ReconciliationOutcome.Reconciled : ReconciliationOutcome.Unreconciled;
 
-        // ── VERDICT (ES-binding; Prom corroboration is non-fatal) ──────────────────────────────────
-        // The value-chain check (incl. the Step_G-at-seed+6 terminal-anchor proxy) is BINDING (73, D-11);
-        // Prom corroboration remains non-fatal and never flips a green ES verdict.
+        // ── VERDICT (ES-binding + binding metric gate) ─────────────────────────────────────────────
+        // The value-chain check (incl. the Step_G-at-seed+6 terminal-anchor proxy) is BINDING (73, D-11),
+        // and the metric gate (MG-1/2/3, metricGateOk) is now ALSO binding — a failing gate flips a green
+        // ES verdict to Fail and sets Reconciliation=Unreconciled (the legacy round(sent/9) corroboration
+        // that was non-fatal is retired).
         var pass = missing == 0 && !dupFail && valueChainOk && metricGateOk;
         var verdict = pass ? Verdict.Pass : Verdict.Fail;
 
