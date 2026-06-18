@@ -13,6 +13,11 @@ public sealed record MetricGateResult
     public required bool ProbeLiveOk { get; init; }
     /// <summary>True iff this scenario's recovery path runs through the keeper (drives MG-2's direction).</summary>
     public required bool ExpectsKeeperActivity { get; init; }
+    /// <summary>True iff MG-1 conservation is BINDING for this scenario. False for scenarios where a
+    /// conservation-counter-owning tier restarts (counter reset) or L2 is wiped (tolerated in-flight loss),
+    /// so the windowed delta is not a valid conservation measure — ConservationOk is still reported but
+    /// does NOT gate the verdict.</summary>
+    public required bool Mg1Binding { get; init; }
 }
 
 /// <summary>The single per-scenario correctness verdict.</summary>

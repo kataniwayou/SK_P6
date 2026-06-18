@@ -168,6 +168,20 @@ public sealed class PassFailEngineFacts
     }
 
     [Fact]
+    public void MetricGate_ConservationOff_NotBinding_Yields_Pass()
+    {
+        // A scenario whose conservation counter reset (or L2 was wiped) shows ConservationOk=false, but
+        // because MG-1 is reporting-only for it (mg1Binding:false), the verdict is NOT gated on it.
+        var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
+        var snap = ConservingSnapshot(results: 9) with { OrchestratorMessagesConsumedDelta = 9, ProcessorMessagesSentDelta = 4 };
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "TEST-02", mg1Binding: false);
+        Assert.False(report.MetricGate.ConservationOk);   // still reported
+        Assert.False(report.MetricGate.Mg1Binding);       // but not binding
+        Assert.Empty(report.CorroborationDetail);         // no FAIL line emitted (silent)
+        Assert.Equal(Verdict.Pass, report.Verdict);       // verdict not gated on MG-1 here
+    }
+
+    [Fact]
     public void MetricGate_ProbeDead_Yields_Fail()
     {
         var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);

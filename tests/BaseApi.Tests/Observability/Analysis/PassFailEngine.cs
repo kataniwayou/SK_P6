@@ -99,7 +99,8 @@ public sealed class PassFailEngine
                                   IReadOnlyDictionary<string, double>? tripDurationMsByExecution = null,
                                   IReadOnlyDictionary<string, double>? tripDurationMsByCorrelation = null,
                                   IReadOnlyDictionary<string, int>? seedsByExecution = null,
-                                  bool expectsKeeperActivity = false)
+                                  bool expectsKeeperActivity = false,
+                                  bool mg1Binding = true)
     {
         // ── ES-BINDING ARBITER (67-03) ────────────────────────────────────────────────────────────
 
@@ -207,7 +208,7 @@ public sealed class PassFailEngine
         var probeLiveOk = prom.KeeperL2ProbeRate > 0;
 
         var corroborationDetail = new List<string>();
-        if (!conservationOk)
+        if (!conservationOk && mg1Binding)
             corroborationDetail.Add(
                 $"MG-1 conservation FAIL: orchestrator_consumed={prom.OrchestratorMessagesConsumedDelta} != " +
                 $"processor_sent={prom.ProcessorMessagesSentDelta} (>{ConservationTol}) — message loss or leak.");
@@ -218,14 +219,16 @@ public sealed class PassFailEngine
         if (!probeLiveOk)
             corroborationDetail.Add($"MG-3 probe FAIL: keeper_l2_probe rate={prom.KeeperL2ProbeRate} (expected > 0).");
 
+        var conservationContributes = !mg1Binding || conservationOk;   // reporting-only scenarios never fail on MG-1
         var metricGate = new MetricGateResult
         {
             ConservationOk = conservationOk,
             KeeperRecoveryOk = keeperRecoveryOk,
             ProbeLiveOk = probeLiveOk,
             ExpectsKeeperActivity = expectsKeeperActivity,
+            Mg1Binding = mg1Binding,
         };
-        var metricGateOk = conservationOk && keeperRecoveryOk && probeLiveOk;
+        var metricGateOk = conservationContributes && keeperRecoveryOk && probeLiveOk;
         var recon = corroborationDetail.Count == 0 ? ReconciliationOutcome.Reconciled : ReconciliationOutcome.Unreconciled;
 
         // ── VERDICT (ES-binding + binding metric gate) ─────────────────────────────────────────────

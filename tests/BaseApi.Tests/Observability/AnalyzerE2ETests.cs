@@ -76,6 +76,17 @@ public sealed class AnalyzerE2ETests
             ["TEST-05"] = false, ["TEST-06"] = false, ["TEST-07"] = false,
         };
 
+    // MG-1 binding per scenario: conservation (a windowed Prom delta) is a VALID measure only where no
+    // conservation-counter-owning tier restarts (a crash resets that process's counters) and no L2 wipe
+    // occurs (a wipe causes tolerated in-flight loss). Binding on the clean scenarios; reporting-only on the
+    // processor/orchestrator crashes (counter reset) and the redis-wipe scenarios. Default true (TEST-01-like).
+    private static readonly IReadOnlyDictionary<string, bool> Mg1Binding =
+        new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["TEST-01"] = true,  ["TEST-02"] = false, ["TEST-03"] = false, ["TEST-04"] = true,
+            ["TEST-05"] = false, ["TEST-06"] = true,  ["TEST-07"] = false,
+        };
+
     // D-16 env-var seam — try to parse a harness-supplied round-trip ("o"-format) UTC timestamp,
     // reporting SUCCESS/FAILURE. The fixture uses the result to decide whether the D-16 window seam is
     // genuinely PRESENT (both WINDOW_*_UTC parsed) and so whether to time-pin the Prom counter reads
@@ -198,7 +209,8 @@ public sealed class AnalyzerE2ETests
             tripDurationMsByExecution: cohort.TripDurationMsByExecution,
             tripDurationMsByCorrelation: cohort.TripDurationMsByCorrelation,
             seedsByExecution: cohort.SeedsByExecution,
-            expectsKeeperActivity: ExpectsKeeperActivity.GetValueOrDefault(scenarioId, false));
+            expectsKeeperActivity: ExpectsKeeperActivity.GetValueOrDefault(scenarioId, false),
+            mg1Binding: Mg1Binding.GetValueOrDefault(scenarioId, true));
 
         // ── 8. WRITE-THEN-ASSERT (D-02 / OBS-04 / T-66-11) ───────────────────────────────────────────
         //    Serialize + write the JSON report FIRST so the artifact exists even on a red run, and the
