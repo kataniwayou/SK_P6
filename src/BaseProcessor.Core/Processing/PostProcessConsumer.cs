@@ -39,10 +39,13 @@ public sealed class PostProcessConsumer(
             return;
         }
 
-        // Reuse the dispatch-consumed counter for the Post hop (tagged ProcessorId). context.Id is resolved
-        // here — the -post endpoint binds only post-identity (mirrors the entry consumer's bang).
-        metrics.DispatchConsumed.Add(1,
-            new KeyValuePair<string, object?>("ProcessorId", self.ToString("D")));
+        // Phase 74 (REQ-2/D-03): count the Post hop as a consumed message on the uniform counter, tagged
+        // camelCase workflowId+processorId. context.Id is resolved here — the -post endpoint binds only
+        // post-identity (mirrors the entry consumer's bang). workflowId from the DataResult (IExecutionCorrelated);
+        // processorId = this processor's own id (== ctx.Message.ProcessorId, asserted by the provenance guard above).
+        metrics.MessagesConsumed.Add(1,
+            new KeyValuePair<string, object?>("workflowId", ctx.Message.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>("processorId", self.ToString("D")));
 
         // Post never touches an entry → deleteEntryId = Guid.Empty (the INJECT delete no-ops on it).
         await outputTail.RunAsync(ctx.Message, Guid.Empty, ctx.CancellationToken);

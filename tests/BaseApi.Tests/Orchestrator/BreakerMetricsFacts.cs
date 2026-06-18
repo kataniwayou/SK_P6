@@ -41,12 +41,16 @@ public sealed class BreakerMetricsFacts
     [Fact]
     public void Processor_New_Counters_Construct_NonNull()
     {
+        // Phase 74 (REQ-2): processor_dispatch_deduped was REMOVED. The full absence-assert migration of this
+        // fixture is owned by Plan 04 (D-14); here we only keep the holder constructible by probing the
+        // surviving uniform counters instead of the gone DispatchDeduped probe.
         var meterFactory = NewMeterFactory(out var provider);
         using (provider)
         {
             var metrics = new ProcessorMetrics(meterFactory);
 
-            Assert.NotNull(metrics.DispatchDeduped);
+            Assert.NotNull(metrics.MessagesConsumed);
+            Assert.NotNull(metrics.MessagesSent);
         }
     }
 
@@ -67,12 +71,16 @@ public sealed class BreakerMetricsFacts
     }
 
     [Fact]
-    public void Recorded_Measurement_Carries_ProcessorId_But_No_WorkflowId_Label()
+    public void Recorded_Measurement_Carries_Expected_Label_Keys()
     {
-        // Drive each new counter with the same ProcessorId tag the real increment sites use
-        // (value .ToString("D")), then verify via a MeterListener that the measurement carries a
-        // ProcessorId tag and NO workflowId/WorkflowId tag key (the cardinality guard, T-32-04).
+        // Phase 74 (REQ-2): the dedup-counter this guard targeted (processor_dispatch_deduped) was REMOVED.
+        // The full absence-assert rewrite is owned by Plan 04 (D-14). MINIMAL compile-unblock: repoint the
+        // MeterListener probe to a surviving uniform counter (processor_messages_sent) and assert the NEW
+        // camelCase label contract — workflowId+processorId present (the uniform model now REQUIRES workflowId,
+        // inverting the old cardinality guard). Scope the listener to THIS test's exact instrument instance (by
+        // reference identity), NOT by meter name, so the capture is hermetic under parallelism.
         var processorId = new System.Guid("99999999-9999-9999-9999-999999999999").ToString("D");
+        var workflowId  = new System.Guid("11111111-1111-1111-1111-111111111111").ToString("D");
 
         var capturedTagKeySets = new List<string[]>();
 
@@ -81,32 +89,28 @@ public sealed class BreakerMetricsFacts
         {
             var procMetrics = new ProcessorMetrics(procFactory);
 
-            // Phase 74 (REQ-1): the orchestrator-side leg of this guard (orchestrator_result_deduped) was
-            // REMOVED — only the processor-side processor_dispatch_deduped survives here (Plan 02 removes it,
-            // Plan 04 owns the absence-assert rewrite). Scope the listener to THIS test's exact instrument
-            // instance (by reference identity), NOT by meter name, so the capture is hermetic under parallelism.
             using var listener = new MeterListener
             {
                 InstrumentPublished = (instrument, l) =>
                 {
-                    if (ReferenceEquals(instrument, procMetrics.DispatchDeduped))
+                    if (ReferenceEquals(instrument, procMetrics.MessagesSent))
                         l.EnableMeasurementEvents(instrument);
                 }
             };
             listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) =>
             {
-                if (ReferenceEquals(instrument, procMetrics.DispatchDeduped))
+                if (ReferenceEquals(instrument, procMetrics.MessagesSent))
                     capturedTagKeySets.Add(tags.ToArray().Select(t => t.Key).ToArray());
             });
             listener.Start();
 
-            var tag = new KeyValuePair<string, object?>("ProcessorId", processorId);
-            procMetrics.DispatchDeduped.Add(1, tag);
+            procMetrics.MessagesSent.Add(1,
+                new KeyValuePair<string, object?>("workflowId", workflowId),
+                new KeyValuePair<string, object?>("processorId", processorId));
         }
 
         var keys = Assert.Single(capturedTagKeySets);
-        Assert.Contains("ProcessorId", keys);
-        Assert.DoesNotContain("workflowId", keys);
-        Assert.DoesNotContain("WorkflowId", keys);
+        Assert.Contains("workflowId", keys);
+        Assert.Contains("processorId", keys);
     }
 }

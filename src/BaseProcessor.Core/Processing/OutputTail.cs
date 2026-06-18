@@ -109,8 +109,8 @@ public sealed class OutputTail(
         };
 
     // ---- Send owners: copied from ProcessorPipeline.SendResult/SendKeeper (object-cast, throw-on-exhaust,
-    //      metrics.ResultSent tag). The inline/Post send does NOT override the envelope MessageId — the
-    //      inbound envelope already carries it on the Pre path, and Post re-emits to the orchestrator on the
+    //      Phase-74 metrics.MessagesSent tag). The inline/Post send does NOT override the envelope MessageId —
+    //      the inbound envelope already carries it on the Pre path, and Post re-emits to the orchestrator on the
     //      Result queue (parity with the existing SendResult). The keeper INJECT applies the override. ----
 
     private async Task SendResult(IStepResult result, int limit, CancellationToken ct)
@@ -126,21 +126,13 @@ public sealed class OutputTail(
         }, limit, ct);
         if (!sent.Succeeded) throw sent.Error!;   // propagate → throw → broker redelivery (no _error)
 
-        metrics.ResultSent.Add(1,
-            new KeyValuePair<string, object?>("ProcessorId", context.Id!.Value.ToString("D")),
-            new KeyValuePair<string, object?>("outcome", ResultOutcome(result)));
+        // Phase 74 (REQ-2/D-02): count-after-success, tagged camelCase workflowId+processorId. The Phase-32
+        // `outcome` label is REMOVED (and the ResultOutcome helper deleted). D-05/D-06: processorId = this
+        // producing processor's own id; workflowId from result.WorkflowId (IStepResult : IExecutionCorrelated).
+        metrics.MessagesSent.Add(1,
+            new KeyValuePair<string, object?>("workflowId", result.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>("processorId", context.Id!.Value.ToString("D")));
     }
-
-    private static string ResultOutcome(IStepResult result) => result switch
-    {
-        StepCompleted  => "completed",
-        StepFailed     => "failed",
-        StepCancelled  => "cancelled",
-        StepProcessing => "processing",
-        // IN-03: the set is closed today (BuildStep covers all four), so this is unreachable — but tag a
-        // future IStepResult subtype "unknown" rather than masquerading it as "failed" in ResultSent telemetry.
-        _              => "unknown",
-    };
 
     private async Task SendKeeper(IKeeperRecoverable msg, int limit, CancellationToken ct)
     {

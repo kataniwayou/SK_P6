@@ -30,12 +30,14 @@ public sealed class EntryStepDispatchConsumer(
 {
     public async Task Consume(ConsumeContext<EntryStepDispatch> ctx)
     {
-        // METRIC-05 / D-07: count EVERY dispatch consumed at the entry point, tagged ProcessorId.
-        // context.Id is Guid? but Consume runs ONLY post-MarkHealthy (the runtime binds queue:{id:D}
-        // AFTER Healthy), so identity IS resolved here — the bang is justified (not a NRE). Tag key is
-        // literal PascalCase "ProcessorId"; value .ToString("D") matches queue:{id:D}.
-        metrics.DispatchConsumed.Add(1,
-            new KeyValuePair<string, object?>("ProcessorId", context.Id!.Value.ToString("D")));
+        // Phase 74 (REQ-2/D-03): count EVERY dispatch consumed once at the entry point, tagged camelCase
+        // workflowId+processorId. context.Id is Guid? but Consume runs ONLY post-MarkHealthy (the runtime
+        // binds queue:{id:D} AFTER Healthy), so identity IS resolved here — the bang is justified (not a NRE).
+        // workflowId comes from the consumed EntryStepDispatch (IExecutionCorrelated); processorId is the
+        // consuming processor's own context.Id (the value already used today). value .ToString("D") matches queue:{id:D}.
+        metrics.MessagesConsumed.Add(1,
+            new KeyValuePair<string, object?>("workflowId", ctx.Message.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>("processorId", context.Id!.Value.ToString("D")));
 
         // D-09/T-51-03: the broker MessageId is the slot-array branch key — fail-fast on null rather than
         // synthesize a Guid.Empty key that would collide across messages.
