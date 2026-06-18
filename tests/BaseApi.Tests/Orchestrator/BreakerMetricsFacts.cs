@@ -53,12 +53,16 @@ public sealed class BreakerMetricsFacts
     [Fact]
     public void Orchestrator_New_Counter_Constructs_NonNull()
     {
+        // Phase 74 (REQ-1): orchestrator_result_deduped was REMOVED. The full absence-assert migration of
+        // this fixture is owned by Plan 04 (D-14); here we only keep the holder constructible and assert the
+        // dormant dedup counter is gone by replacing the old ResultDeduped probe with the surviving members.
         var meterFactory = NewMeterFactory(out var provider);
         using (provider)
         {
             var metrics = new OrchestratorMetrics(meterFactory);
 
-            Assert.NotNull(metrics.ResultDeduped);
+            Assert.NotNull(metrics.MessagesConsumed);
+            Assert.NotNull(metrics.MessagesSent);
         }
     }
 
@@ -73,47 +77,36 @@ public sealed class BreakerMetricsFacts
         var capturedTagKeySets = new List<string[]>();
 
         var procFactory = NewMeterFactory(out var procProvider);
-        var orchFactory = NewMeterFactory(out var orchProvider);
         using (procProvider)
-        using (orchProvider)
         {
             var procMetrics = new ProcessorMetrics(procFactory);
-            var orchMetrics = new OrchestratorMetrics(orchFactory);
 
-            // Scope the listener to THIS test's exact instrument instances (by reference identity),
-            // NOT by meter name. The meter names ("BaseProcessor"/"Orchestrator") are process-global, so
-            // under the full parallel suite a sibling test constructing its own ProcessorMetrics/
-            // OrchestratorMetrics records measurements on same-named meters that a name-filtered listener
-            // would capture too — yielding a non-deterministic count (observed 3 instead of 2). Matching the
-            // specific Counter<long> instances created here makes the capture hermetic under parallelism.
+            // Phase 74 (REQ-1): the orchestrator-side leg of this guard (orchestrator_result_deduped) was
+            // REMOVED — only the processor-side processor_dispatch_deduped survives here (Plan 02 removes it,
+            // Plan 04 owns the absence-assert rewrite). Scope the listener to THIS test's exact instrument
+            // instance (by reference identity), NOT by meter name, so the capture is hermetic under parallelism.
             using var listener = new MeterListener
             {
                 InstrumentPublished = (instrument, l) =>
                 {
-                    if (ReferenceEquals(instrument, procMetrics.DispatchDeduped) ||
-                        ReferenceEquals(instrument, orchMetrics.ResultDeduped))
+                    if (ReferenceEquals(instrument, procMetrics.DispatchDeduped))
                         l.EnableMeasurementEvents(instrument);
                 }
             };
             listener.SetMeasurementEventCallback<long>((instrument, measurement, tags, state) =>
             {
-                if (ReferenceEquals(instrument, procMetrics.DispatchDeduped) ||
-                    ReferenceEquals(instrument, orchMetrics.ResultDeduped))
+                if (ReferenceEquals(instrument, procMetrics.DispatchDeduped))
                     capturedTagKeySets.Add(tags.ToArray().Select(t => t.Key).ToArray());
             });
             listener.Start();
 
             var tag = new KeyValuePair<string, object?>("ProcessorId", processorId);
             procMetrics.DispatchDeduped.Add(1, tag);
-            orchMetrics.ResultDeduped.Add(1, tag);
         }
 
-        Assert.Equal(2, capturedTagKeySets.Count);
-        foreach (var keys in capturedTagKeySets)
-        {
-            Assert.Contains("ProcessorId", keys);
-            Assert.DoesNotContain("workflowId", keys);
-            Assert.DoesNotContain("WorkflowId", keys);
-        }
+        var keys = Assert.Single(capturedTagKeySets);
+        Assert.Contains("ProcessorId", keys);
+        Assert.DoesNotContain("workflowId", keys);
+        Assert.DoesNotContain("WorkflowId", keys);
     }
 }

@@ -2,11 +2,13 @@ using MassTransit;
 using Messaging.Contracts;
 using Messaging.Contracts.Configuration;
 using Messaging.Contracts.Projections;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orchestrator.Configuration;
 using Orchestrator.Consumers;
 using Orchestrator.Dispatch;
+using Orchestrator.Observability;
 using StackExchange.Redis;
 using Xunit;
 
@@ -128,10 +130,19 @@ public sealed class OrchestratorPostProcessConsumerFacts
     private static IOptions<OrchestratorOutputOptions> OutOptions(int ttl = 300) =>
         Options.Create(new OrchestratorOutputOptions { OutputDataTtlSeconds = ttl });
 
+    /// <summary>Phase 74: RelocateTail now ctor-injects <see cref="OrchestratorMetrics"/> (for the INJECT
+    /// keeper-escalation <c>orchestrator_messages_sent</c> increment). Build it from a real
+    /// <see cref="System.Diagnostics.Metrics.IMeterFactory"/> — the blessed DI pattern, no static Meter.</summary>
+    private static OrchestratorMetrics NewMetrics()
+    {
+        var provider = new ServiceCollection().AddMetrics().BuildServiceProvider();
+        return new OrchestratorMetrics(provider.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>());
+    }
+
     private static OrchestratorPostProcessConsumer Build(
         IConnectionMultiplexer redis, IStepDispatcher dispatcher, ISendEndpointProvider send)
     {
-        var tail = new RelocateTail(redis, dispatcher, send, Retry(3), OutOptions(300));
+        var tail = new RelocateTail(redis, dispatcher, send, Retry(3), OutOptions(300), NewMetrics());
         return new OrchestratorPostProcessConsumer(tail);
     }
 
