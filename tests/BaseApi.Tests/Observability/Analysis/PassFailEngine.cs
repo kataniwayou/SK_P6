@@ -73,6 +73,17 @@ public sealed class PassFailEngine
     public const int CorroborationRunTolerance = 1;
 
     /// <summary>
+    /// The single canonical trigger-count derivation (IN-01): <c>round(DispatchSentDelta)</c>. Prom
+    /// CORROBORATION evidence only — NEVER the binding per-run denominator (the orchestrator dispatches once
+    /// per step). Hoisted here so the live fixture and the hermetic facts share ONE rounding semantics and the
+    /// three former call sites cannot drift (e.g. one being "fixed" to <c>MidpointRounding.AwayFromZero</c>
+    /// while the others stay <c>ToEven</c>). <c>Math.Round</c> defaults to <c>MidpointRounding.ToEven</c>; the
+    /// ±1-run <see cref="CorroborationRunTolerance"/> absorbs any single-unit wobble and corroboration never
+    /// gates the verdict, so ToEven is intentionally accepted.
+    /// </summary>
+    public static int TriggerCountFrom(PromCounterSnapshot prom) => (int)Math.Round(prom.DispatchSentDelta);
+
+    /// <summary>
     /// Score a set of per-correlationId traces against the live Prometheus counter deltas, producing
     /// the single per-scenario <see cref="AnalyzerReport"/>. PURE: no IO — the caller (fixture) writes
     /// the report.
@@ -149,18 +160,39 @@ public sealed class PassFailEngine
 
         // VALUE-CHAIN ASSERTION (NEW, 73, D-11, BINDING): each STARTED run's surfaced values must follow the
         // deterministic chain Values[label] == seed + hop-count (B=seed+1 … G=seed+6), and BOTH Step_G arrivals
-        // sit at the shared terminal seed+6 — the LIVE terminal-anchor proxy (the Step_G completed-terminal ES
-        // log carrying seed+6). The auditor does NOT read a Redis skp:out: blob; that durable-blob proof is owned
-        // by the hermetic harness (Plan 02). A run is checked ONLY if it surfaced any values (legacy callers that
-        // pass no value map are skipped, so existing behaviour is unchanged). valueChainOk is true when EVERY
-        // checked run's chain holds; it folds into the verdict.
+        // sit at the shared terminal seed+6.
+        //
+        // WR-01 — what this pins on the LIVE path: the seed is recovered from the chain itself (Step_B - 1, see
+        // ResolveSeed) because the ES-read-only auditor has no independent absolute seed oracle live. So the LIVE
+        // check binds the inter-hop +1 DELTAS (and the Step_G ×2 agreement at the shared terminal seed+6), NOT
+        // the ABSOLUTE base value — a uniform constant shift of the whole live chain would still pass. The
+        // ABSOLUTE-value terminal-anchor proof (Step_G at 106 / 206 against the fixed 100/200 seeds) is owned by
+        // the hermetic harness (FanInHermeticHarnessFacts, Plan 02), which reads the durable L2 blob; it is NOT
+        // re-proven here. The hermetic value-chain facts pass an EXPLICIT seed oracle, so their anchor is real.
+        // A run is checked ONLY if it surfaced any values; WR-02 below additionally fails a COMPLETE-but-zero-
+        // values cohort when a value oracle is supplied. valueChainOk folds into the verdict.
         var valueChainDetail = new List<string>();
         var valueChainOk = true;
+
+        // VALUE-ORACLE GATE (WR-02): the empty-value-map vacuous-pass hardening below only applies when the
+        // caller actually supplied a value oracle (a non-null seedsByExecution). The migrated legacy
+        // completeness-only callers (PassFailEngineFacts) pass NO value map AND NO seedsByExecution — for them
+        // the empty-map run is genuinely not value-chain-checked and the run continues as before (no behaviour
+        // change). When an oracle IS supplied (the live fixture, the value-chain facts), a COMPLETE run that
+        // surfaced ZERO Produced values is treated as UNVERIFIED (fail), NOT a vacuous pass.
+        var valueOracleSupplied = seedsByExecution is not null;
+        var completeRunsWithValues = 0;
+
         foreach (var run in runs)
         {
             if (run.Values.Count == 0)
             {
-                continue; // no surfaced values (legacy caller) → not value-chain-checked
+                continue; // no surfaced values → checked for vacuous-pass below when a value oracle is supplied
+            }
+
+            if (run.DistinctLabels.SetEquals(AllLabels))
+            {
+                completeRunsWithValues++;
             }
 
             var seed = ResolveSeed(run, seedsByExecution);
@@ -169,6 +201,19 @@ public sealed class PassFailEngine
                 valueChainOk = false;
             }
             valueChainDetail.Add(detail);
+        }
+
+        // WR-02 vacuous-green guard: with a value oracle supplied, if there is at least one COMPLETE run but
+        // NONE of them surfaced a Produced value, the binding value-chain assertion checked NOTHING for the
+        // terminal cohort — report it UNVERIFIED (fail) rather than a silent OK. The most likely live cause is
+        // the ES mapping for attributes.Produced being absent/odd-shaped so TryReadProduced returns false for
+        // every hit, collapsing every run's value map to empty.
+        if (valueOracleSupplied && complete.Count > 0 && completeRunsWithValues == 0)
+        {
+            valueChainOk = false;
+            valueChainDetail.Add(
+                $"{complete.Count} complete run(s) surfaced no Produced value — value chain unverified " +
+                "(value oracle supplied but no terminal cohort carried a surfaced value; likely attributes.Produced unmapped).");
         }
 
         var tripByExec = tripDurationMsByExecution ?? new Dictionary<string, double>(StringComparer.Ordinal);
@@ -297,6 +342,15 @@ public sealed class PassFailEngine
     /// Resolve the seed for a run's value chain (73, D-11): the explicit <paramref name="seedsByExecution"/>
     /// entry keyed <c>"correlationId|executionId"</c> if present, else recovered from the chain itself
     /// (<c>Values["Step_B"] - 1</c>), else <c>Values["Step_A"]</c> (the seed source), else 0.
+    /// <para>
+    /// WR-01 — anchor strength. On the LIVE path the seed is recovered from the chain (<c>Step_B - 1</c>),
+    /// because no independent live executionId→seed oracle exists (the framework-owned GUID executionId carries
+    /// no seed, and Mode-2 <c>Step_A</c> surfaces no <c>Produced</c> value). A chain-derived seed makes
+    /// <c>Step_B</c>'s own assertion a tautology and pins only the inter-hop <c>+1</c> DELTAS, NOT the ABSOLUTE
+    /// base — a uniform constant shift of the whole chain still passes. The absolute-value proof (101..106 /
+    /// 201..206) is owned by the hermetic harness (<c>FanInHermeticHarnessFacts</c>), which reads the durable L2
+    /// blob. The hermetic value-chain facts DO pass an explicit seed oracle, so their absolute anchor is real.
+    /// </para>
     /// </summary>
     private static int ResolveSeed(RunTrace run, IReadOnlyDictionary<string, int>? seedsByExecution)
     {

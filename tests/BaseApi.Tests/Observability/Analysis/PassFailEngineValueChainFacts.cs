@@ -78,7 +78,8 @@ public sealed class PassFailEngineValueChainFacts
         DispatchDedupedDelta = null,
     };
 
-    private static int TriggerCountOf(PromCounterSnapshot s) => (int)System.Math.Round(s.DispatchSentDelta);
+    /// <summary>triggerCount via the shared <see cref="PassFailEngine.TriggerCountFrom"/> (IN-01) — corroboration evidence only.</summary>
+    private static int TriggerCountOf(PromCounterSnapshot s) => PassFailEngine.TriggerCountFrom(s);
 
     // seeds locked by D-02: exec_a 100 (→ Step_G 106), exec_b 200 (→ Step_G 206).
     private const int SeedA = 100;
@@ -206,6 +207,50 @@ public sealed class PassFailEngineValueChainFacts
         Assert.Contains("Step_C", run.DuplicateLabels);
         Assert.DoesNotContain("Step_G", run.DuplicateLabels); // the convergent fan-in stays legitimate
         Assert.Equal(Verdict.Fail, report.Verdict);
+    }
+
+    [Fact]
+    public void Fail_CompleteRun_ZeroSurfacedValues_WithValueOracle_Yields_Fail()
+    {
+        // WR-02: a COMPLETE run (all 10 distinct labels, Step_G ×2 legitimate) that surfaced ZERO Produced
+        // values — e.g. the live ES mapping for attributes.Produced is absent/odd-shaped so every
+        // TryReadProduced returned false, collapsing the value map to empty. PREVIOUSLY this run was silently
+        // skipped and valueChainOk stayed true (a vacuous green). With a value ORACLE supplied
+        // (seedsByExecution non-null — exactly what the live fixture always passes), the binding gate must now
+        // treat the unchecked terminal cohort as UNVERIFIED → Fail.
+        var labels = NonTerminalLabels.Concat(new[] { "Step_G", "Step_G" }).ToArray();
+        var emptyValues = new Dictionary<string, int>(StringComparer.Ordinal); // ZERO surfaced Produced values
+        var run = RunTrace.FromLabels("corr-1", "exec-a", labels, emptyValues);
+        var snap = CleanSnapshot(startedRuns: 1);
+
+        // The value oracle is SUPPLIED (non-null) — this is what gates the new rule. The legacy
+        // completeness-only callers (PassFailEngineFacts) pass null here and stay unaffected.
+        var seedOracle = new Dictionary<string, int>(StringComparer.Ordinal) { ["corr-1|exec-a"] = SeedA };
+
+        var report = new PassFailEngine().Analyze(
+            new[] { run }, snap, TriggerCountOf(snap), "unit-value-chain",
+            seedsByExecution: seedOracle);
+
+        Assert.Equal(0, report.Missing);          // completeness alone is satisfied (all 10 labels present)
+        Assert.False(report.ValueChainOk);        // …but the value chain is UNVERIFIED (no surfaced values)
+        Assert.Equal(Verdict.Fail, report.Verdict);
+        Assert.Contains(report.ValueChainDetail, d => d.Contains("no Produced value") && d.Contains("unverified"));
+    }
+
+    [Fact]
+    public void Pass_CompleteRun_ZeroSurfacedValues_WithoutValueOracle_StaysGreen()
+    {
+        // Legacy/completeness-only path: NO value oracle supplied (seedsByExecution null) AND no surfaced
+        // values. The WR-02 hardening MUST NOT fire here — the run is genuinely not value-chain-checked, exactly
+        // as the migrated PassFailEngineFacts rely on. completeness + duplicate alone gate the verdict.
+        var labels = NonTerminalLabels.Concat(new[] { "Step_G", "Step_G" }).ToArray();
+        var run = RunTrace.FromLabels("corr-1", "exec-a", labels); // no values, no oracle
+        var snap = CleanSnapshot(startedRuns: 1);
+
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, TriggerCountOf(snap), "unit-value-chain");
+
+        Assert.True(report.ValueChainOk);          // not value-chain-checked (no oracle) → stays true
+        Assert.Equal(Verdict.Pass, report.Verdict);
     }
 
     [Fact]
