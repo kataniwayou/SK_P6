@@ -753,7 +753,7 @@ Plans:
 **Plans:** 5 plans (Wave 1: 01/02/03/05, Wave 2: 04)
 
 Plans:
-- [ ] 75-01-PLAN.md — Wave 1: verdict rework — drop MaxInFlightLoss bound + keeper-evidence recoverability classifier + preserve 3028f43 skip-set + lock per-(corr,exec) denominator (D75-1, D75-2, D75-3, D75-5, D75-8)
+- [x] 75-01-PLAN.md — Wave 1: verdict rework — drop MaxInFlightLoss bound + keeper-evidence recoverability classifier + preserve 3028f43 skip-set + lock per-(corr,exec) denominator (D75-1, D75-2, D75-3, D75-5, D75-8) ✅ COMPLETE 2026-07-15 (28/28 engine facts GREEN, 0-warning Debug+Release)
 - [ ] 75-02-PLAN.md — Wave 1: keeper→ES instrumentation — widen REINJECT drop log + add reinject-success log with (CorrelationId, ExecutionId, EntryId, MessageId, ReinjectOutcome) join keys (D75-4)
 - [ ] 75-03-PLAN.md — Wave 1: neutralize TTL confounder — raise the five L2 ExecutionDataTtl/OutputDataTtl knobs 300→900 in lock-step (D75-6) [live neutralization deferred-automated]
 - [ ] 75-04-PLAN.md — Wave 2 (depends 75-01, 75-02): analyzer live join — ES-read keeper outcomes → per-(corr,exec) map → feed classifier via keeperOutcomeByExecution (D75-4) [live join deferred-automated]

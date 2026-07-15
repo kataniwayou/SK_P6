@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: Not started
-status: completed
+current_plan: 1
+status: executing
 stopped_at: Completed 74-04-PLAN.md
-last_updated: "2026-07-15T11:03:42.891Z"
-last_activity: 2026-06-18
+last_updated: "2026-07-15T11:45:58.871Z"
+last_activity: 2026-07-15 -- Phase --phase execution started
 progress:
   total_phases: 4
   completed_phases: 0
@@ -21,7 +21,7 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase 74 — reshape-business-metrics-into-a-uniform-two-counter-model
+**Current focus:** Phase --phase — 75
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
@@ -29,12 +29,14 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 74
-Current Plan: Not started
+Phase: 75 (recovery-verdict-per-execution-drop-tunable-constants) — EXECUTING
+Current Plan: 2
 Total Plans: 3
-Plan: 4 of 4
-Status: Milestone complete
-Last activity: 2026-06-18
+Plan: 2 of recovery-verdict-per-execution-drop-tunable-constants
+Status: Executing Phase 75 — Plan 01 COMPLETE
+Last activity: 2026-07-15 -- Phase 75 Plan 01 COMPLETE (hermetic recoverability classifier; MaxInFlightLoss dropped)
+
+> Phase 75 Plan 01 — ✅ COMPLETE 2026-07-15 (Wave 1: the hermetic core — the resilience-sweep verdict is now a pure function of per-`(corr,exec)` recoverability, decoupled from every tunable constant). **2 atomic TDD commits** (`f36d9b5` test-RED: deleted `InFlight_LossExceedsBound_Yields_Fail` (the fact asserting the D75-2 bound) + added 4 facts — `InFlightLoss_ManyCleanDrops_DoNotFail_Yields_Pass` (D75-2: any N clean drops pass), `KeeperDrop_MarksIncomplete_Tolerated_Yields_Pass` (D75-3 tolerated), `RecoverableButLost_NoKeeperDrop_AfterRecovery_Yields_Fail` (D75-3 binding), `RedisWipe_StalledBeforeRecovery_NoKeeperDrop_Yields_Pass` (D75-5 timestamp path preserved) — all referencing the not-yet-existing `keeperOutcomeByExecution` param → compile-error RED; `42ef0ac` feat-GREEN: `PassFailEngine` — DELETED trailing `maxInFlightLoss=4` param + `inFlightOverBound` + its verdict term + BuildSummary param/line (D75-2, grep-clean); ADDED `IReadOnlyDictionary<string,string>? keeperOutcomeByExecution` classifier — incomplete run tolerated iff keeper clean-absent DROP (`oc=="drop"`, D75-3) OR redis-wipe stalled-before-recovery timestamp path (D75-5, kept verbatim), else recoverable-but-lost binding miss; `inFlightLossKeys.Add` still runs for EVERY tolerated key so the D75-8 value-chain skip-set (commit 3028f43) survives; `startedRuns = runs.Count` denominator locked (D75-1); `AnalyzerReport` gained required `UnrecoverableLossDetail` cause-labels). Requirements **D75-1/2/3/5/8**. **No deviations** — plan executed exactly as written; no refactor commit needed. Hermetic: `*PassFailEngineFacts` + `*PassFailEngineValueChainFacts` **28/28 GREEN** (incl. the D75-8 reproducing fact + both backward-compat timestamp facts); **0-warning Debug + Release**. Full hermetic filter shows 272 failures — **ALL** pre-existing broker-connection failures (`rabbitmq://…`, Docker-less sandbox; 0 analyzer facts among them), logged to `deferred-items.md`, out of scope (precedent: phases 68/73/74 deferred-automated live gates). The live D75-4 ES-join + D75-6 TTL half is deferred to later plans (needs Docker). Summary: `.planning/phases/75-recovery-verdict-per-execution-drop-tunable-constants/75-01-SUMMARY.md` (Self-Check PASSED). Plan 02 next.
 
 > Phase 72 Plan 03 — ✅ COMPLETE 2026-06-17 (Wave 2: the payoff — all four `TypedResultConsumer<T>` shells now run ONE uniform branch-free pre-pipeline flow + the Phase-71-deferred D-18 trip-end metric lands). **2 atomic feat commits** (`b501557` dropped BOTH `if (outcome == StepOutcome.Completed)` gates — the `out:` read and the delete now run for every outcome (D-09, riding Plan-01's always-write); consumed `SelectNext`'s `{Matches, UnresolvedIds}`; three-way read (read lambda returns null on clean-absent to split absent from fault, Pitfall 2): present → fan-out+delete / clean-absent → idempotent ack-skip (Processing rides it for free, D-05) / Redis fault → REINJECT (D-10); ExecutionId threaded unchanged D-13; `88dbd3f` `OrchestratorMetrics` ctor-injected (singleton→scoped, no Program.cs edit) + BOTH increments in the same change (no CS9113): stage-1 L1-miss + stage-3 `foreach` over `UnresolvedIds` (continue, never throws, D-02), `workflowId` label only; rewrote `OrchestratorPrePipelineFacts` in place D-12 — Failed/Cancelled present-blob fan-out+delete like Completed, clean-absent + Processing-rides-skip facts, dangling-next-step (resolvable still fans out + 1 increment), condition-skip + normal-fanout no-increment, `MeterCollector` tag-set assertions). SPEC-4/5/6. **2 deviations:** (1) Rule 3 (blocking) — migrated 3 other test ctor sites (`TypedResultConsumerFacts`/`ResultAckTests`/`StopConsumerLifecycleTests`) to `OrchestratorTestStubs.Metrics()` (the ctor-param add broke them); (2) Rule 1 (test) — `TypedResultConsumerFacts` Failed-gated sub-call now passes the SAME `entryId` whose `out:` blob is present (the Failed read is now uniform post-D-09). Hermetic: `OrchestratorPrePipelineFacts` **15/15** + affected orchestrator facts **40/40 GREEN**; **0-warning Debug + Release** (full solution). Full `dotnet test` shows 288 failures — ALL pre-existing Docker-bound E2E/Integration tests (sandbox lacks Redis/RabbitMQ/Postgres); none in the hermetic dispatch surface. Live-stack proof deferred-automated (SPEC AC #10). Summary: `.planning/phases/72-processor-always-write-to-l2-and-uniform-orchestrator-pre-pi/72-03-SUMMARY.md` (Self-Check PASSED). **Phase 72 ready for verification.**
 
@@ -1529,6 +1531,10 @@ Recent decisions affecting current work:
 - 74-03: keeper_messages_consumed counts once at the RecoveryConsumerBase.Consume choke point (all 6 recovery consumers, incl. both Delete); keeper_messages_sent via shared CountSent on the 4 senders after a confirmed Send (never on the Reinject drop path); keeper_l2_probe label-less once per BitHealthLoop tick; keeper_reinject_dropped removed
 - 74-04: Repointed PassFailEngine to processor_messages_sent total + dropped the outcome corroboration WARNING (D-12/D-13)
 - 74-04: Renamed metric facts in-place + added 3 removed-counter absence asserts; inverted MetricsRoundTrip workflowId guard (now REQUIRED) (D-14)
+- 75-01: PassFailEngine verdict is now a pure function of per-(corr,exec) recoverability — the absolute MaxInFlightLoss=4 bound (cron-rate coupling) is DELETED (D75-2); no absolute count/window survives in the verdict
+- 75-01: recoverability classifier — an incomplete run is TOLERATED iff keeper clean-absent DROP (keeperOutcomeByExecution[key]=="drop", D75-3) OR redis-wipe stalled-before-recovery timestamp path (D75-5, kept verbatim for TEST-05/07 which produce no keeper drop log); everything else recoverable-but-lost is a binding miss
+- 75-01: keeperOutcomeByExecution is an optional trailing default-null Analyze param (all callers compile unchanged); the live ES-join half (D75-4) + TTL raise (D75-6) are deferred to later plans (need Docker)
+- 75-01: D75-8 preserved — inFlightLossKeys still populated for EVERY tolerated key so the 3028f43 value-chain skip-set survives; D75-1 startedRuns=runs.Count denominator locked; AnalyzerReport gained required UnrecoverableLossDetail cause-labels
 
 ### Roadmap Milestone Log
 
@@ -1635,8 +1641,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-06-18T07:01:32.692Z
-Stopped at: Completed 74-04-PLAN.md
+Last session: 2026-07-15T11:44:33Z
+Stopped at: Completed 75-01-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
