@@ -254,20 +254,86 @@ public sealed class PassFailEngineFacts
     }
 
     [Fact]
-    public void InFlight_LossExceedsBound_Yields_Fail()
+    public void InFlightLoss_ManyCleanDrops_DoNotFail_Yields_Pass()
     {
+        // D75-2: the absolute MaxInFlightLoss bound is GONE. Six started-but-incomplete runs, ALL
+        // keeper-confirmed clean-absent DROPs (provably-unrecoverable) → tolerated regardless of count.
+        // Under the OLD engine six in-flight losses (> 4) forced a FAIL on the cron-rate-coupled bound;
+        // now N clean drops (any N) do NOT by themselves fail — the verdict is a pure function of
+        // per-(corr,exec) recoverability, never a firing-rate proxy.
         var runs = Enumerable.Range(1, 6)
             .Select(i => RunTrace.FromLabels($"corr-{i}", $"exec-{i}", Missing4Hops)).ToArray();
-        var recovery = DateTimeOffset.Parse("2026-06-18T10:00:30Z");
-        var last  = runs.ToDictionary(r => $"{r.CorrelationId}|{r.ExecutionId}", _ => DateTimeOffset.Parse("2026-06-18T10:00:10Z"));
-        var first = runs.ToDictionary(r => $"{r.CorrelationId}|{r.ExecutionId}", _ => DateTimeOffset.Parse("2026-06-18T10:00:05Z"));
+        var keeperDrops = runs.ToDictionary(
+            r => $"{r.CorrelationId}|{r.ExecutionId}", _ => "drop", StringComparer.Ordinal);
         var snap = ConservingSnapshot(results: 9);
 
-        var report = new PassFailEngine().Analyze(runs, snap, "TEST-05",
-            recoveryUtc: recovery, firstHopUtcByExecution: first, lastHopUtcByExecution: last);
+        var report = new PassFailEngine().Analyze(runs, snap, "TEST-06",
+            keeperOutcomeByExecution: keeperDrops);
 
-        Assert.True(report.InFlightLoss > 4);
+        Assert.Equal(0, report.Missing);
+        Assert.Equal(Verdict.Pass, report.Verdict);   // any count of clean drops passes — no absolute bound
+    }
+
+    [Fact]
+    public void KeeperDrop_MarksIncomplete_Tolerated_Yields_Pass()
+    {
+        // D75-3 (tolerated): one COMPLETE run + one incomplete run whose (corr,exec) is keeper-confirmed
+        // a clean-absent DROP (provably-unrecoverable). Tolerance is driven by keeper EVIDENCE, not the
+        // timestamp heuristic (no recoveryUtc/firstHop/lastHop supplied). → InFlightLoss==1, Missing==0, Pass.
+        var complete = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
+        var stalled  = RunTrace.FromLabels("corr-2", "exec-2", Missing4Hops);
+        var keeperOutcome = new Dictionary<string, string>(StringComparer.Ordinal) { ["corr-2|exec-2"] = "drop" };
+        var snap = ConservingSnapshot(results: 9);
+
+        var report = new PassFailEngine().Analyze(new[] { complete, stalled }, snap, "TEST-06",
+            keeperOutcomeByExecution: keeperOutcome);
+
+        Assert.Equal(1, report.InFlightLoss);
+        Assert.Equal(0, report.Missing);
+        Assert.Equal(Verdict.Pass, report.Verdict);
+    }
+
+    [Fact]
+    public void RecoverableButLost_NoKeeperDrop_AfterRecovery_Yields_Fail()
+    {
+        // D75-3 (binding): one incomplete run with NO keeper outcome entry and last-hop AFTER recovery
+        // (not stalled-before-recovery). It was recoverable (keeper could have reinjected) but did not
+        // complete → binding FAIL. Missing==1, Fail.
+        var stalled  = RunTrace.FromLabels("corr-9", "exec-9", Missing4Hops);
+        var recovery = DateTimeOffset.Parse("2026-06-18T10:00:30Z");
+        var lastHop  = new Dictionary<string, DateTimeOffset> { ["corr-9|exec-9"] = DateTimeOffset.Parse("2026-06-18T10:01:10Z") };
+        var firstHop = new Dictionary<string, DateTimeOffset> { ["corr-9|exec-9"] = DateTimeOffset.Parse("2026-06-18T10:01:05Z") };
+        var snap = ConservingSnapshot(results: 9);
+
+        var report = new PassFailEngine().Analyze(new[] { stalled }, snap, "TEST-04",
+            recoveryUtc: recovery, firstHopUtcByExecution: firstHop, lastHopUtcByExecution: lastHop,
+            keeperOutcomeByExecution: new Dictionary<string, string>(StringComparer.Ordinal));
+
+        Assert.Equal(1, report.Missing);
         Assert.Equal(Verdict.Fail, report.Verdict);
+    }
+
+    [Fact]
+    public void RedisWipe_StalledBeforeRecovery_NoKeeperDrop_Yields_Pass()
+    {
+        // D75-5 (redis-wipe timestamp path preserved): one incomplete run with NO keeper outcome entry but
+        // last-hop BEFORE recovery (stalled-before-recovery, in-flight-at-wipe). The timestamp heuristic still
+        // tolerates redis-crash TEST-05/07 which produce NO keeper drop log (a Redis exception routes to
+        // exhaustion, not a clean-absent drop). → InFlightLoss==1, Missing==0, Pass.
+        var complete = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
+        var stalled  = RunTrace.FromLabels("corr-2", "exec-2", Missing4Hops);
+        var recovery = DateTimeOffset.Parse("2026-06-18T10:00:30Z");
+        var lastHop  = new Dictionary<string, DateTimeOffset> { ["corr-2|exec-2"] = DateTimeOffset.Parse("2026-06-18T10:00:10Z") };
+        var firstHop = new Dictionary<string, DateTimeOffset> { ["corr-2|exec-2"] = DateTimeOffset.Parse("2026-06-18T10:00:05Z") };
+        var snap = ConservingSnapshot(results: 9);
+
+        var report = new PassFailEngine().Analyze(new[] { complete, stalled }, snap, "TEST-05",
+            recoveryUtc: recovery, firstHopUtcByExecution: firstHop, lastHopUtcByExecution: lastHop,
+            keeperOutcomeByExecution: new Dictionary<string, string>(StringComparer.Ordinal));
+
+        Assert.Equal(1, report.InFlightLoss);
+        Assert.Equal(0, report.Missing);
+        Assert.Equal(Verdict.Pass, report.Verdict);
     }
 
     [Fact]
