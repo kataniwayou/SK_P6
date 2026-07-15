@@ -362,7 +362,11 @@ public sealed class AnalyzerE2ETests
     /// reaches the verdict only through the keeper's own structured logs.
     /// </para>
     /// </summary>
-    private static IReadOnlyDictionary<string, string> BuildKeeperOutcomeMap(List<JsonElement> hits)
+    // WR-02: internal (not private) so the hermetic BuildKeeperOutcomeMapFacts can pin the "reinject"-wins
+    // tie-break for BOTH doc orderings by feeding synthetic hit JSON — this class is Category=RealStack
+    // (compile-gated in the Docker-less sandbox), so its order-independence invariant is proven hermetically
+    // in a separate non-RealStack fact class rather than only implicitly via the engine facts.
+    internal static IReadOnlyDictionary<string, string> BuildKeeperOutcomeMap(List<JsonElement> hits)
     {
         var outcomeByExecution = new Dictionary<string, string>(StringComparer.Ordinal);
 
