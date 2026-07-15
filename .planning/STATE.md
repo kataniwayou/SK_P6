@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: 3
+current_plan: 5
 status: executing
-stopped_at: Completed 75-03-PLAN.md
-last_updated: "2026-07-15T13:22:00.000Z"
-last_activity: 2026-07-15 -- Phase 75 Plan 03 COMPLETE (raised all L2 TTL knobs 300→900 in lock-step, D75-6; live-verify deferred-automated — Docker-less)
+stopped_at: Completed 75-05-PLAN.md
+last_updated: "2026-07-15T13:26:36.000Z"
+last_activity: 2026-07-15 -- Phase 75 Plan 05 COMPLETE (optional K_EXECUTIONS execution-based window seam, default-off, D75-7; live-verify deferred-automated — Docker-less)
 progress:
   total_phases: 4
   completed_phases: 0
@@ -30,11 +30,13 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
 Phase: 75 (recovery-verdict-per-execution-drop-tunable-constants) — EXECUTING
-Current Plan: 3
-Total Plans: 3
-Plan: 3 of recovery-verdict-per-execution-drop-tunable-constants
-Status: Executing Phase 75 — Plan 03 COMPLETE
-Last activity: 2026-07-15 -- Phase 75 Plan 03 COMPLETE (raised all L2 TTL knobs 300→900 in lock-step, D75-6; live-verify deferred-automated — Docker-less)
+Current Plan: 5
+Total Plans: 5
+Plan: 5 of recovery-verdict-per-execution-drop-tunable-constants
+Status: Executing Phase 75 — Plan 05 COMPLETE
+Last activity: 2026-07-15 -- Phase 75 Plan 05 COMPLETE (optional K_EXECUTIONS execution-based window seam, default-off, D75-7; live-verify deferred-automated — Docker-less)
+
+> Phase 75 Plan 05 — ✅ COMPLETE 2026-07-15 (Wave 1: OPTIONAL execution-based observation window — D75-7, explicitly default-OFF). **1 atomic feat commit** (`90fb59f`) adding a `K_EXECUTIONS` seam to `scripts/phase-67-harness.ps1`: (1) read `$kExecutions = if ($env:K_EXECUTIONS) { [int]$env:K_EXECUTIONS } else { 0 }` near the window setup (0/unset ⇒ wall-clock only, no behaviour change); (2) in the STEP F.5 window-hold loop, ONLY when `$kExecutions -gt 0`, `break` once `(Get-FireCount) - $fireBaseline -ge $kExecutions` distinct executions observed — the `$windowSeconds=300`/`$windowDeadline` wall-clock bound RETAINED UNCONDITIONALLY as the hard cap (T-75-09: a never-reached K can't hang past 300s); (3) the seam set (`$env:K_EXECUTIONS = ... else ''`) + cleared (`Remove-Item Env:...,Env:K_EXECUTIONS`) symmetrically with the existing SCENARIO_ID/WINDOW_*_UTC/RECOVERY_UTC D-16 seams. Requirement **D75-7** (automated half). **No deviations** — plan executed exactly as written. Verification: `pwsh` AST parse-check prints **`PARSE_OK`**; grep-confirms `K_EXECUTIONS` in the read + set + clear (all three) and `$windowSeconds=300`/`$windowDeadline` preserved as an unconditional upper bound; default-off path byte-for-byte unchanged when the seam is unset. **Live execution-based-window verify (checkpoint:human-verify, gate=blocking) DEFERRED-AUTOMATED** — Docker unavailable (precedent phases 68/73/74, 75-03); exact `$env:K_EXECUTIONS="8"` + `phase-68-sweep TEST-01` early-close steps recorded in `deferred-items.md`. D75-7 is OPTIONAL and MUST NOT block the verdict rework — "deferred / seam left default-off" is an acceptable resolution. Summary: `.planning/phases/75-recovery-verdict-per-execution-drop-tunable-constants/75-05-SUMMARY.md` (Self-Check PASSED). **Phase 75: plans 01/02/03/05 complete; plan 04 has a PLAN.md but no SUMMARY yet (not executed this session).**
 
 > Phase 75 Plan 03 — ✅ COMPLETE 2026-07-15 (Wave 1: neutralize the TTL confounder — D75-6). **1 atomic feat commit** (`e8e9732`) raising every L2 execution-data TTL knob 300→900 in lock-step: the three Options-class defaults (`ProcessorLivenessOptions.ExecutionDataTtlSeconds`, `Keeper/RecoveryOptions.ExecutionDataTtlSeconds`, `OrchestratorOutputOptions.OutputDataTtlSeconds`, all +XML doc), both appsettings values (`Processor.Sample`/`Processor.BadConfig` `ExecutionDataTtl`), AND — beyond the plan's enumerated five — the `compose.yaml` `Processor__ExecutionDataTtl` env override on BOTH processor services (the 6th/7th runtime knob: it binds OVER appsettings + the Options default at container runtime per Pitfall 3, so leaving it at 300 would defeat the neutralization on the live stack). The shared `L2ProjectionKeys.OutputDataTtl` jitter policy `random[ttl,2×ttl]` was verified (floor-only), NOT edited — the floor now yields `random[900,1800]`, comfortably outlasting the ~300s non-redis recovery window (dwell 45s + return-to-healthy + keeper reinject + drain 60s + poll-to-stable). **Assumption A2 confirmed**: no distinct 5th index TTL (grep returns only the five knobs + their three shared-jitter consumers — the slot-array index EXPIRE was already unified to `ExecutionDataTtl`). The DISTINCT liveness `TtlSeconds=30` was left untouched. Requirement **D75-6** (automated half). **3 auto-fixed deviations:** (1) Rule 3 (blocking/missing-critical) — raised the compose env override (above); (2) Rule 1 — `ProcessorOptionsBindingFacts.Empty_Config_Yields_Baked_Defaults` baked-default assertion 300→900 (the sole hermetic IO-free failure this change caused); (3) Rule 1 — `ComposeYamlFacts` compose-override regex assertion 300→900. Verification: **Debug + Release solution build 0-warning**; the two coupled hermetic classes GREEN; nine IO-free logic subsets (`PassFailEngine*`, `OutputTail`, dispatch/pre-pipeline/inject facts) GREEN; grep-clean (zero production knob at 300). Full hermetic filter shows 272 pre-existing infra failures (Postgres `127.0.0.1:5433` refused + RabbitMQ + Redis, Docker-less sandbox) — environmental, NOT caused by this change, logged to `deferred-items.md`. **Live TTL-neutralization verify (checkpoint:human-verify, gate=blocking) DEFERRED-AUTOMATED** — Docker unavailable (precedent phases 68/73/74); exact `phase-65-up` rebuild + `phase-68-sweep TEST-02/03/04/06` steps recorded in `deferred-items.md` for a future Docker-up run. Summary: `.planning/phases/75-recovery-verdict-per-execution-drop-tunable-constants/75-03-SUMMARY.md` (Self-Check PASSED). **Phase 75 = 3/3 plans complete — ready for verification.**
 
