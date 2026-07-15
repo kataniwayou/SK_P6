@@ -259,6 +259,22 @@ try {
     $windowDeadline = (Get-Date).AddSeconds($windowSeconds)
 
     # -----------------------------------------------------------------------
+    # OPTIONAL (D75-7) — EXECUTION-BASED OBSERVATION WINDOW (default-OFF).
+    # The ROADMAP marks this "Optionally": the core per-execution verdict rework
+    # (D75-1..5,8) does NOT depend on it. When $env:K_EXECUTIONS is unset or 0 the
+    # harness runs EXACTLY as before — the fixed 300s wall-clock window above is the
+    # sole bound. When K > 0 the observe loop ALSO stops early once K distinct
+    # executions (fires) have been observed, but the $windowDeadline wall-clock cap
+    # is ALWAYS retained as an unconditional upper bound (T-75-09: a mis-set K that
+    # is never reached can never hang the loop past the existing 300s window).
+    #   default 0/unset ⇒ fixed 300s wall-clock unchanged
+    #   K>0            ⇒ stop at K observed executions, still hard-capped by $windowDeadline
+    $kExecutions = if ($env:K_EXECUTIONS) { [int]$env:K_EXECUTIONS } else { 0 }
+    if ($kExecutions -gt 0) {
+        Write-Phase "  OPTIONAL execution-based window ENABLED: K_EXECUTIONS=$kExecutions (hard-capped by the ${windowSeconds}s wall-clock)." 'Gray'
+    }
+
+    # -----------------------------------------------------------------------
     # STEP F.2 — OBSERVE LOOP until N observed fires (D-07; N from $scenario.injectAfterNFires),
     # bounded by the window deadline. For TEST-01 (N=0, faultType='none') the inject is skipped
     # entirely — fall straight through to the window hold. For a crash run, poll until
@@ -336,8 +352,22 @@ try {
     # -----------------------------------------------------------------------
     # STEP F.5 — HOLD OUT THE REST OF THE 5-MIN WINDOW, then record windowEnd. For TEST-01 this
     # is the whole post-activation wait; for TEST-02 it is the remainder after recovery.
+    #
+    # OPTIONAL (D75-7): when $kExecutions -gt 0, ALSO stop early once K distinct executions have
+    # been observed (from the SAME Get-FireCount Prometheus signal the observe loop already reads:
+    # current - $fireBaseline = distinct executions fired this window). The wall-clock bound
+    # ($windowSeconds since $windowStart) is retained UNCONDITIONALLY as the hard cap, so the loop
+    # can never run past the existing 300s window regardless of K (T-75-09). Default-off
+    # (K=0/unset) leaves this loop byte-for-byte the fixed wall-clock hold.
     # -----------------------------------------------------------------------
     while (([DateTimeOffset]::UtcNow - $windowStart).TotalSeconds -lt $windowSeconds) {
+        if ($kExecutions -gt 0) {
+            $observedExecutions = (Get-FireCount) - $fireBaseline
+            if ($observedExecutions -ge $kExecutions) {
+                Write-Phase "  OPTIONAL execution-based window: observed $observedExecutions >= K=$kExecutions distinct executions — closing window early (wall-clock cap not reached)." 'Gray'
+                break
+            }
+        }
         Start-Sleep -Seconds 5
     }
     $windowCloseUtc = [DateTimeOffset]::UtcNow
@@ -396,6 +426,11 @@ try {
     # RECOVERY_UTC (B-criterion): the all-tiers-healthy instant for a fault run, or '' for the no-fault
     # baseline (TEST-01). An empty value parses as no-recovery in the analyzer (all incompletes are binding).
     $env:RECOVERY_UTC     = if ($recoveryUtc) { $recoveryUtc.ToString('o') } else { '' }
+    # OPTIONAL (D75-7) K_EXECUTIONS seam, set + cleared symmetrically with the other D-16 seams.
+    # Empty when the execution-based window is off (K=0/unset) — the analyzer ignores an empty
+    # value exactly like RECOVERY_UTC on the no-fault baseline (no behaviour change unless adopted
+    # downstream). Carries only a single integer count; no secrets/PII (T-75-10).
+    $env:K_EXECUTIONS     = if ($kExecutions -gt 0) { $kExecutions.ToString() } else { '' }
     # IN-03: clear the D-16 env seam in a `finally` so a terminating error inside the analyze block
     # ($ErrorActionPreference='Stop') cannot leak SCENARIO_ID / WINDOW_*_UTC into the parent shell
     # (matters when the body is dot-sourced / run interactively; harmless for the one-shot `pwsh -File`).
@@ -411,7 +446,7 @@ try {
         dotnet test tests/BaseApi.Tests/BaseApi.Tests.csproj -c Release -- --filter-method "*Analyze_Window_Yields_Pass*" 2>&1 | Out-String | Write-Host
         $analyzerExit = $LASTEXITCODE
     } finally {
-        Remove-Item Env:SCENARIO_ID, Env:WINDOW_START_UTC, Env:WINDOW_END_UTC, Env:RECOVERY_UTC -ErrorAction SilentlyContinue
+        Remove-Item Env:SCENARIO_ID, Env:WINDOW_START_UTC, Env:WINDOW_END_UTC, Env:RECOVERY_UTC, Env:K_EXECUTIONS -ErrorAction SilentlyContinue
     }
 
     # Locate + echo the analyzer report path (D-04 requires printing it).
