@@ -40,7 +40,15 @@ public sealed class ReinjectConsumer(
             // Phase 74 (REQ-3): the legacy reinject-drop counter is REMOVED; the by-design-drop
             // structured warning survives (never log the Payload). No keeper_messages_sent here — a drop
             // never sends, so CountSent must NEVER fire on this early-return path (D-02 / T-74-06).
-            logger.LogWarning("REINJECT drop: L2 data gone EntryId={EntryId}", m.EntryId);   // structured hole (never log Payload)
+            // Phase 75 (D75-4): widen the drop log to carry all four join keys + a "drop" outcome
+            // discriminator as explicit message-template {Placeholder} args (Pitfall 2 — RecoveryConsumerBase
+            // opens NO ambient scope, so string interpolation would surface NO ES attributes.*; only
+            // placeholder args become attributes.CorrelationId/ExecutionId/EntryId/MessageId/ReinjectOutcome
+            // via the MEL→OTLP bridge, letting the analyzer (Plan 04) join a clean-absent drop to a lost
+            // (correlationId, executionId)). Still NEVER log m.Payload.
+            logger.LogWarning(
+                "REINJECT drop: L2 data gone {CorrelationId} {ExecutionId} {EntryId} {MessageId} {ReinjectOutcome}",
+                m.CorrelationId, m.ExecutionId, m.EntryId, m.MessageId, "drop");
             return;                                                                          // D-06 silent ack
         }
 
@@ -63,5 +71,12 @@ public sealed class ReinjectConsumer(
         // REQ-3 / D-09: count keeper_messages_sent AFTER the confirmed send (Guard re-throws on exhaustion, so
         // a failed/exhausted send never reaches here — T-74-06). NEVER on the absent-data drop branch above.
         CountSent(m.WorkflowId, m.ProcessorId);
+        // Phase 75 (D75-4): symmetric structured success log AFTER the confirmed CountSent (never on the drop
+        // early-return above) — same four join keys + a "reinject" outcome discriminator as explicit
+        // {Placeholder} args (Pitfall 2: placeholder-form only, no interpolation), so the analyzer can join a
+        // recovered (recoverable) execution to its (correlationId, executionId) via ES attributes.*.
+        logger.LogInformation(
+            "REINJECT sent {CorrelationId} {ExecutionId} {EntryId} {MessageId} {ReinjectOutcome}",
+            m.CorrelationId, m.ExecutionId, m.EntryId, m.MessageId, "reinject");
     }
 }
