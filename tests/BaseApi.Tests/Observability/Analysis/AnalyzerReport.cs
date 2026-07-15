@@ -115,12 +115,20 @@ public sealed record AnalyzerReport
     /// </summary>
     public required IReadOnlyList<string> MissingDetail { get; init; }
 
-    /// <summary>B-criterion: started-but-incomplete runs whose last hop precedes RECOVERY_UTC — tolerated
-    /// in-flight-at-wipe losses (counted, do NOT fail unless &gt; MaxInFlightLoss). Distinct from Missing.</summary>
+    /// <summary>B-criterion (75, D75-3/D75-5): started-but-incomplete runs classified as TOLERATED (non-binding)
+    /// — either a keeper-confirmed clean-absent DROP (provably-unrecoverable) or a redis-wipe in-flight-at-wipe
+    /// loss whose last hop precedes RECOVERY_UTC. Counted, never binding — there is NO absolute bound (the
+    /// D75-2 MaxInFlightLoss coupling was removed). Distinct from Missing (recoverable-but-lost).</summary>
     public required int InFlightLoss { get; init; }
 
-    /// <summary>Per-run evidence for each tolerated in-flight loss (corr|exec + last-hop vs recovery).</summary>
+    /// <summary>Per-run evidence for each tolerated loss: the keeper clean-absent DROP line (D75-3) or the
+    /// redis-wipe last-hop-vs-recovery line (D75-5). Superset of <see cref="UnrecoverableLossDetail"/>.</summary>
     public required IReadOnlyList<string> InFlightLossDetail { get; init; }
+
+    /// <summary>Per-run evidence for the keeper-classified provably-unrecoverable losses only (75, D75-3):
+    /// the <c>"drop"</c>-tolerated (corr|exec) keys where the keeper logged a clean-absent DROP. A cause-labeled
+    /// subset of <see cref="InFlightLossDetail"/> (the redis-wipe timestamp-path losses are NOT included here).</summary>
+    public required IReadOnlyList<string> UnrecoverableLossDetail { get; init; }
 
     /// <summary>The traces that carried any duplicate (correlationId, StepLabel) — the fail-closed evidence (OBS-02).</summary>
     public required IReadOnlyList<RunTrace> Duplicates { get; init; }

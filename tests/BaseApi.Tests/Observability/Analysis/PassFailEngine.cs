@@ -98,6 +98,16 @@ public sealed class PassFailEngine
     /// check each label's surfaced value equals <c>seed + hop-count</c>. When a run has no entry here, its seed is
     /// recovered from the chain itself (<c>Values["Step_B"] - 1</c>). Default null ⇒ recover-from-chain for all.
     /// </param>
+    /// <param name="keeperOutcomeByExecution">
+    /// RECOVERABILITY evidence (75, D75-3/D75-4): per-<c>(corr, exec)</c> keeper REINJECT outcome keyed
+    /// <c>"correlationId|executionId"</c> → outcome string (<c>"drop"</c> for a keeper-confirmed clean-absent DROP
+    /// = provably-unrecoverable; <c>"reinject"</c> for a recovered reinject). A started-but-incomplete run whose
+    /// key maps to <c>"drop"</c> is TOLERATED (non-binding, cause-labeled) — the keeper proved the L2 data was
+    /// physically gone, so it was unrecoverable by design. Everything NOT keeper-drop-tolerated and NOT on the
+    /// redis-wipe timestamp path (D75-5) is a recoverable-but-lost BINDING miss. The engine reads NO ES; the live
+    /// fixture (Plan 03/04) passes the real map, the hermetic facts pass synthetic. Default null ⇒ empty map
+    /// (keeps existing callers compiling — the redis-wipe timestamp path alone then governs tolerance, unchanged).
+    /// </param>
     public AnalyzerReport Analyze(IReadOnlyList<RunTrace> runs, PromCounterSnapshot prom,
                                   string scenarioId,
                                   IReadOnlyDictionary<string, double>? tripDurationMsByExecution = null,
@@ -108,12 +118,13 @@ public sealed class PassFailEngine
                                   DateTimeOffset? recoveryUtc = null,
                                   IReadOnlyDictionary<string, DateTimeOffset>? firstHopUtcByExecution = null,
                                   IReadOnlyDictionary<string, DateTimeOffset>? lastHopUtcByExecution = null,
-                                  int maxInFlightLoss = 4)
+                                  IReadOnlyDictionary<string, string>? keeperOutcomeByExecution = null)
     {
         // ── ES-BINDING ARBITER (67-03) ────────────────────────────────────────────────────────────
 
         // STARTED (denominator): distinct (correlationId, executionId) instances with ≥1 Step_* log = one
-        // RunTrace each (each spawned execution is its own run).
+        // RunTrace each (each spawned execution is its own run). D75-1 LOCKED: the per-(corr,exec) started
+        // denominator is runs.Count — the verdict is founded on it, never on any absolute count or window.
         var startedRuns = runs.Count;
 
         // COMPLETE (OBS-01): the 9 per-execution hops (both sinks + the convergent terminal Step_G) all
@@ -121,27 +132,36 @@ public sealed class PassFailEngine
         // collapses it to one (73, D-10).
         var complete = runs.Where(IsComplete).ToList();
 
-        // ── B-CRITERION: classify started-but-incomplete runs (in-flight-at-wipe vs post-recovery) ──
-        // MISSING (OBS-02) is now the BINDING subset of started-but-incomplete runs: those that are NOT a
-        // tolerated in-flight-at-wipe loss. A run is a tolerated in-flight loss iff its last hop precedes
-        // RECOVERY_UTC (stalled before the tier came back) AND it did not first appear after recovery — those
-        // are counted in InFlightLoss (do NOT fail unless > MaxInFlightLoss). With recoveryUtc == null (no
-        // fault) BOTH predicates are false, so every incomplete run falls to the binding-miss branch exactly
-        // as before. A fully-dead run (never started in ES) is invisible to either count.
+        // ── B-CRITERION: classify started-but-incomplete runs by per-(corr,exec) RECOVERABILITY (75, D75-3) ──
+        // MISSING (OBS-02) is the BINDING subset of started-but-incomplete runs: those that were RECOVERABLE-
+        // but-lost. A started-but-incomplete run is TOLERATED (non-binding, cause-labeled) iff EITHER:
+        //   (a) D75-3: the keeper logged a clean-absent DROP for its (corr,exec) — keeperOutcome[key] == "drop"
+        //       — the L2 data was physically gone, so it was provably-unrecoverable by design; OR
+        //   (b) D75-5: the redis-wipe timestamp path — its last hop precedes RECOVERY_UTC (stalled before the
+        //       tier came back) AND it did not first appear after recovery (in-flight-at-wipe on TEST-05/07,
+        //       which produce NO keeper drop log because a Redis exception routes to exhaustion, not a clean
+        //       drop). Everything else recoverable-but-lost → binding miss. With recoveryUtc == null AND no
+        //       keeper map, BOTH predicates are false so every incomplete run is a binding miss (unchanged).
+        // D75-2: there is NO absolute in-flight-loss bound — the verdict never references a firing-rate proxy.
+        // A fully-dead run (never started in ES) is invisible to either count.
         var firstHop = firstHopUtcByExecution ?? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var lastHop  = lastHopUtcByExecution  ?? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        var keeperOutcome = keeperOutcomeByExecution ?? new Dictionary<string, string>(StringComparer.Ordinal);
 
         var incomplete = runs.Where(r => !IsComplete(r)).ToList();
         var inFlightLoss = 0;
         var bindingMissing = 0;
         var inFlightLossDetail = new List<string>();
+        var unrecoverableLossDetail = new List<string>();
         var missingDetail = new List<string>();
-        // Keys of runs classified as TOLERATED in-flight losses. A run stalled mid-flight before recovery has,
-        // by definition, a PARTIAL trace (some hops never landed in ES) — its value chain is expected to be
-        // incomplete/unanchored, so the binding value-chain check below MUST skip it. Otherwise a terminal-only
-        // survivor (e.g. Step_G @ seed+6 with no Step_B/Step_A) recovers seed 0 and falsely fails
-        // (Step_G expected 6 got 206) — the TEST-03 orchestrator-crash false FAIL. The loss is already accounted
-        // (bounded by MaxInFlightLoss); it must not ALSO trip a second binding gate.
+        // Keys of runs classified as TOLERATED (non-binding) losses — keeper-confirmed clean-absent DROP (D75-3)
+        // OR redis-wipe in-flight-at-wipe (D75-5). A tolerated run has, by definition, a PARTIAL trace (some hops
+        // never landed in ES) — its value chain is expected to be incomplete/unanchored, so the binding value-
+        // chain check below MUST skip it (D75-8, commit 3028f43). Otherwise a terminal-only survivor (e.g. Step_G
+        // @ seed+6 with no Step_B/Step_A) recovers seed 0 and falsely fails (Step_G expected 6 got 206) — the
+        // TEST-03 orchestrator-crash false FAIL. The loss is already accounted (non-binding); it must not ALSO
+        // trip a second binding gate. inFlightLossKeys is populated for EVERY tolerated key so the value-chain
+        // loop at the skip-set consumer below keeps skipping them.
         var inFlightLossKeys = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var r in incomplete)
@@ -152,26 +172,36 @@ public sealed class PassFailEngine
             var stalledBeforeRecovery = recoveryUtc is { } rec2
                 && lastHop.TryGetValue(key, out var lh) && lh < rec2;
 
-            if (stalledBeforeRecovery && !startedAfterRecovery)
+            var keeperCleanDrop = keeperOutcome.TryGetValue(key, out var oc)
+                && oc.Equals("drop", StringComparison.Ordinal);
+            var redisWipeInFlight = stalledBeforeRecovery && !startedAfterRecovery;
+            var tolerated = keeperCleanDrop || redisWipeInFlight;
+
+            if (tolerated)
             {
                 inFlightLoss++;
-                inFlightLossKeys.Add(key);
-                inFlightLossDetail.Add(
-                    $"[{key}] in-flight loss: last hop {lastHop[key]:o} < recovery {recoveryUtc:o} (tolerated).");
+                inFlightLossKeys.Add(key);   // D75-8: skip-set for the value-chain loop (commit 3028f43)
+                if (keeperCleanDrop)
+                {
+                    var line = $"[{key}] keeper clean-absent DROP (provably-unrecoverable, tolerated).";
+                    inFlightLossDetail.Add(line);
+                    unrecoverableLossDetail.Add(line);
+                }
+                else
+                {
+                    inFlightLossDetail.Add(
+                        $"[{key}] in-flight loss: last hop {lastHop[key]:o} < recovery {recoveryUtc:o} (tolerated).");
+                }
             }
             else
             {
                 bindingMissing++;
                 missingDetail.Add(
-                    $"[{key}] started-but-incomplete and NOT an in-flight-at-wipe loss → binding miss.");
+                    $"[{key}] started-but-incomplete, recoverable-but-lost (no keeper clean-drop, not in-flight-at-wipe) → binding miss.");
             }
         }
 
         var missing = bindingMissing;
-        var inFlightOverBound = inFlightLoss > maxInFlightLoss;
-        if (inFlightOverBound)
-            missingDetail.Add(
-                $"in-flight loss {inFlightLoss} exceeds MaxInFlightLoss {maxInFlightLoss} — worse than a single wipe window.");
 
         // DUPLICATE (OBS-02, fail-closed, BINDING): any ILLEGITIMATE duplicate (correlationId, StepLabel) is a
         // FAIL. Reads the convergent-aware HasIllegitimateDuplicate (73, D-10), NOT the raw HasAnyDuplicateLabel,
@@ -290,7 +320,7 @@ public sealed class PassFailEngine
         // and the metric gate (MG-1/2/3, metricGateOk) is now ALSO binding — a failing gate flips a green
         // ES verdict to Fail and sets Reconciliation=Unreconciled (the legacy round(sent/9) corroboration
         // that was non-fatal is retired).
-        var pass = missing == 0 && !inFlightOverBound && !dupFail && valueChainOk && metricGateOk;
+        var pass = missing == 0 && !dupFail && valueChainOk && metricGateOk;
         var verdict = pass ? Verdict.Pass : Verdict.Fail;
 
         // Build the report (no IO).
@@ -304,6 +334,7 @@ public sealed class PassFailEngine
             MissingDetail = missingDetail,
             InFlightLoss = inFlightLoss,
             InFlightLossDetail = inFlightLossDetail,
+            UnrecoverableLossDetail = unrecoverableLossDetail,
             Duplicates = duplicates,
             Reconciliation = recon,
             CorroborationDetail = corroborationDetail,
@@ -315,7 +346,7 @@ public sealed class PassFailEngine
             TripDurationMsByCorrelation = tripByCorr,
             HumanSummary = BuildSummary(
                 scenarioId, verdict, startedRuns, complete.Count, missing, dupFail, valueChainOk,
-                metricGateOk, inFlightOverBound, recon, corroborationDetail),
+                metricGateOk, recon, corroborationDetail),
             MetricGate = metricGate,
         };
     }
@@ -401,12 +432,11 @@ public sealed class PassFailEngine
 
     private static string BuildSummary(string scenarioId, Verdict verdict, int startedRuns,
         int completeRuns, int missing, bool dupFail, bool valueChainOk, bool metricGateOk,
-        bool inFlightOverBound, ReconciliationOutcome recon,
+        ReconciliationOutcome recon,
         IReadOnlyList<string> corroborationDetail)
     {
         var reasons = new List<string>();
         if (missing > 0) reasons.Add($"{missing} started-but-incomplete");
-        if (inFlightOverBound) reasons.Add("in-flight loss over bound");
         if (dupFail) reasons.Add("illegitimate duplicate (fail-closed)");
         if (!valueChainOk) reasons.Add("value-chain mismatch (seed + hop-count / Step_G terminal anchor)");
         if (!metricGateOk) reasons.Add("metric gate (MG-1/2/3)");
