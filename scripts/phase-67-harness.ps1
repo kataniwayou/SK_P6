@@ -535,6 +535,16 @@ try {
     # + images (NEVER `-v`). A down failure logs loud but the harness STILL surfaces the analyzer
     # verdict — the FINAL exit mirrors the analyzer (D-04), never the teardown result.
     # -----------------------------------------------------------------------
+    # DIAGNOSTIC (opt-in via $env:CAPTURE_LOGS) — dump container logs BEFORE teardown removes them, so a
+    # post-mortem can trace WHY specific executions were lost (keeper reinject/drop decisions per execution).
+    # Gated so it never affects normal runs; writes logs-<svc>-<scenario>.txt in the repo root.
+    if ($env:CAPTURE_LOGS) {
+        Write-Phase "CAPTURE_LOGS: dumping keeper/processor/orchestrator logs before teardown" 'Yellow'
+        docker compose logs keeper --no-color --timestamps          > "logs-keeper-$ScenarioId.txt" 2>&1
+        docker compose logs processor-sample --no-color --timestamps > "logs-processor-$ScenarioId.txt" 2>&1
+        docker compose logs orchestrator --no-color --timestamps     > "logs-orchestrator-$ScenarioId.txt" 2>&1
+    }
+
     Write-Phase "STEP Z: teardown (docker compose down — keep volumes + images)"
     docker compose down | Out-Null
     if ($LASTEXITCODE -ne 0) { Write-Phase "teardown failed (would be exit 70) — surfacing analyzer verdict regardless." 'Yellow' }

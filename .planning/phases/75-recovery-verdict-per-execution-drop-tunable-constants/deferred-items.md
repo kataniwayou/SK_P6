@@ -41,6 +41,20 @@ measurement caveat (TEST-08, stop-only): work the processor never touches emits 
 total pre-observability loss reads as PASS — a green verdict certifies recovery of *observably-started*
 work, not "nothing was lost."
 
+**Outage-outlasts-window + telemetry false-FAIL (2026-07-15, TEST-10, commit 1221858):** processor
+killed on real in-flight backlog, kept down 300s (> the 300s window), then restarted. Verdict=Fail,
+StartedRuns=22 CompleteRuns=20 Missing=2. **CORRECTION — the 2 "misses" were NOT data loss.**
+Log-capture post-mortem (`CAPTURE_LOGS` hook): the processor emitted all 9 hop-logs for all 22
+executions (Step_E1/E2 ×22 in the container log), but the OTLP export dropped the Step_E1/E2 records
+for 2 executions on the way to ES (ES received E1/E2 for only 20). Both "missing" executions actually
+COMPLETED CORRECTLY — they reached the terminal Step_G with the right value (206) and pass the
+value-chain check; only their intermediate E-layer *trace* was lost. So real data loss under a 5-minute
+total outage = **ZERO** (all 22 recovered); the FAIL was a **telemetry-completeness loss under load**,
+because the analyzer requires the full 9-label trace to call a run complete. This is the mirror image of
+the TEST-08 blind spot: trace loss can make completed work look incomplete (false FAIL) just as it can
+make lost work invisible (false PASS). **The verdict's trustworthiness ceiling is the OTLP/ES trace
+pipeline, not the recovery machinery** — the data path is stronger than any single verdict implied.
+
 **TEST-01 first-pass note:** on the initial full sweep TEST-01 (scenario #1) failed against a
 cold-started Elasticsearch — pipeline conservation was perfect (`orch_consumed=proc_sent=188,
 gap=0`) but the analyzer's ES query returned `StartedRuns=0` before trace docs indexed. A
