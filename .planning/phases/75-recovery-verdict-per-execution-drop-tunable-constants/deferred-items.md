@@ -102,3 +102,57 @@ acceptable resolution — the seam exists, default-off, ready if wanted.
 
 **Resume-signal to record when run:** "approved", "deferred-automated — Docker
 unavailable", or "not adopted this milestone (seam left default-off)".
+
+## DEFERRED: 75-04 live keeper ES-join verify (D75-4, checkpoint:human-verify)
+
+**Deferred during:** 75-04 Task 2 (`checkpoint:human-verify`, gate="blocking") — 2026-07-15
+
+**Why deferred:** The keeper→analyzer ES-join is only OBSERVABLE on a running Docker
+RealStack (elasticsearch carrying real keeper REINJECT drop/success logs +
+orchestrator/processor/keeper producing recoverable-vs-clean-drop executions). Docker
+is NOT available in this sandbox — established deferred-automated precedent (phases
+68/73/74; 75-03/75-05 live gates above). The AUTOMATED half is FULLY done and committed
+(`2aa63e5`): the ES field-path const, the keeper-outcome `_search` body, the defensive
+per-(corr,exec) outcome-map builder with the "reinject"-wins tie-break, the `TraceCohort`
+field, and the `keeperOutcomeByExecution: cohort.KeeperOutcomeByExecution` wiring into
+`PassFailEngine.Analyze`. Debug+Release 0-warning; all 34 `*PassFailEngineFacts` +
+`*PassFailEngineValueChainFacts` + `*ReinjectConsumerFacts` GREEN (Plan 01 already proves
+the classifier semantics with synthetic keeper maps; Plan 02 proves the keeper emits the
+join fields via a capturing logger). The compile gate + those hermetic facts are the
+automated proof for the join wiring; the LIVE surfacing of the keeper attributes in ES
+is the only piece needing Docker.
+
+**Exact RealStack steps a future Docker-up run MUST perform to close this gate:**
+1. **Open-Question-1 probe FIRST (level-filter guard):** inject a keeper clean-absent DROP
+   (a non-redis scenario where `L2[entryId]` is gone at reinject time), then query ES for
+   the keeper doc and confirm `attributes.ReinjectOutcome` (="drop") + `attributes.CorrelationId`
+   / `attributes.ExecutionId` actually LAND. The drop log is a `LogWarning` — verify the
+   keeper's console log level does NOT filter Warning out before OTLP export (cross-check
+   `LogLevelFilterTests` / the keeper's effective `Logging:LogLevel`). If the attributes do
+   not surface, the join silently reads an empty map (every incomplete run then binding-FAILs)
+   — the probe catches that before a full sweep.
+   Example query:
+   `GET http://localhost:9200/logs-generic.otel-default/_search` with
+   `{ "query": { "exists": { "field": "attributes.ReinjectOutcome" } } }`
+   → expect ≥1 hit carrying `attributes.ReinjectOutcome` + `CorrelationId` + `ExecutionId`.
+2. Rebuild the containers so the Plan-02 keeper log widening is baked in (SourceHash reseed
+   order per MEMORY: graph-delete → seed → start after a rebuild), then bring the stack up:
+   `pwsh -File scripts/phase-65-up.ps1` (or the standard compose-up).
+3. Run a full sweep: `pwsh -File scripts/phase-68-sweep.ps1`.
+4. **Expected:**
+   - A scenario with a **recoverable-but-lost** execution (keeper COULD have reinjected —
+     L2 blob present, no clean-drop log; or a reinject-then-still-missing) → **binding FAIL**
+     (the `"reinject"`-wins tie-break ensures a recovered execution is never tolerated as a
+     clean drop).
+   - A scenario where the keeper **clean-dropped** a gone execution (`attributes.ReinjectOutcome="drop"`)
+     → **tolerated** (reported + cause-labeled in `AnalyzerReport.UnrecoverableLossDetail`),
+     NOT a pass/fail lever.
+   - The verdict contains NO absolute in-flight count / window-seconds / cron-rate term
+     (D75-2 already grep-clean in the engine).
+5. Confirm the join is ES-ONLY (no Redis probe added to the fixture) — already grep-verified
+   in the automated half (`IDatabase`/`redis`/`StringLength` appear only in disclaiming
+   doc-comments, never as a call).
+
+**Resume-signal to record when run:** "approved" (keeper attributes surfaced; recoverable-
+but-lost → FAIL and clean-drop → tolerated as expected), "deferred-automated — Docker
+unavailable", or describe any keeper attribute that failed to surface / any misclassification.
