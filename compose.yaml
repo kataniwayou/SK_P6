@@ -288,6 +288,9 @@ services:
       ConnectionStrings__Redis: "redis:6379,abortConnect=false,connectTimeout=5000"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       Processor__ExecutionDataTtl: "900"
+      # TEST-ONLY fault hook (env-gated, DEFAULT 0 = OFF). Interpolated from the harness shell only for the
+      # TEST-09 negative path (stop-on-inflight); unset everywhere else ⇒ 0 ⇒ SampleProcessor adds no delay.
+      PROCESSOR_STEP_DELAY_MS: "${PROCESSOR_STEP_DELAY_MS:-0}"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/health/ready"]
       interval: 10s
@@ -322,6 +325,9 @@ services:
       ConnectionStrings__Redis: "redis:6379,abortConnect=false,connectTimeout=5000"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
       Processor__ExecutionDataTtl: "900"
+      # TEST-ONLY fault hook (env-gated, DEFAULT 0 = OFF). Interpolated from the harness shell only for the
+      # TEST-09 negative path (stop-on-inflight); unset everywhere else ⇒ 0 ⇒ SampleProcessor adds no delay.
+      PROCESSOR_STEP_DELAY_MS: "${PROCESSOR_STEP_DELAY_MS:-0}"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/health/ready"]
       interval: 10s

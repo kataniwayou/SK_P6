@@ -92,6 +92,9 @@ try {
         'TEST-05' = @{ targetContainers = @('redis');               faultType = 'stop-start'; injectAfterNFires = 4; dwellSeconds = 45; notes = 'redis crash — L2 slot-array + liveness + BIT probe' }
         'TEST-06' = @{ targetContainers = @('rabbitmq');            faultType = 'stop-start'; injectAfterNFires = 4; dwellSeconds = 45; notes = 'rabbitmq crash — nack-requeue redelivery on reconnect' }
         'TEST-07' = @{ targetContainers = @('redis','rabbitmq');    faultType = 'stop-start'; injectAfterNFires = 4; dwellSeconds = 45; notes = 'redis + rabbitmq combined crash' }
+        # NEGATIVE-PATH scenarios (NOT in the default phase-68 sweep — run explicitly by id):
+        'TEST-08' = @{ targetContainers = @('processor-sample'); faultType = 'stop-only';       injectAfterNFires = 4; dwellSeconds = 0; notes = 'NEGATIVE (blind-spot demo): processor crash, NO recovery — dispatched-but-never-processed work is INVISIBLE (no Step_A) → PASS, proving the verdict cannot see fully-dead loss' }
+        'TEST-09' = @{ targetContainers = @('processor-sample'); faultType = 'stop-on-inflight'; injectAfterNFires = 3; dwellSeconds = 0; notes = 'NEGATIVE (RMQ-timed FAIL): with the 3s per-hop delay hook on, kill the processor once its dispatch queue backlog >= 3 (executions visibly mid-flight, no recovery) — strands recoverable-but-lost runs → binding miss → FAIL' }
     }
 
     # Validate the requested id against the table BEFORE any docker/psql op (T-67-02).
@@ -103,6 +106,15 @@ try {
     }
     $scenario = $Scenarios[$ScenarioId]
     Write-Phase "scenario '$ScenarioId' — $($scenario.notes) (faultType=$($scenario.faultType), N=$($scenario.injectAfterNFires), dwell=$($scenario.dwellSeconds)s)"
+
+    # TEST-ONLY: for the RMQ-timed negative path (TEST-09), export PROCESSOR_STEP_DELAY_MS BEFORE STEP A so
+    # `docker compose up` interpolates it (${PROCESSOR_STEP_DELAY_MS:-0}) into the processor-sample container.
+    # A 3s per-hop delay holds executions VISIBLY in-flight so the queue-depth trigger can catch one and the
+    # kill can strand it (the fast default pipeline exposes no catchable in-flight window). Cleared in finally.
+    if ($scenario.faultType -eq 'stop-on-inflight') {
+        $env:PROCESSOR_STEP_DELAY_MS = '3000'
+        Write-Phase "  TEST-ONLY hook: PROCESSOR_STEP_DELAY_MS=3000 exported (baked into processor-sample at compose-up)." 'Yellow'
+    }
 
     # -----------------------------------------------------------------------
     # STEP A0 — IMAGE REBUILD (code 10) — SourceHash currency guarantee.
@@ -251,6 +263,22 @@ try {
         if (-not $r.data.result) { return [double]0 }
         return [double]($r.data.result | ForEach-Object { [double]$_.value[1] } | Measure-Object -Sum).Sum
     }
+    # RMQ-timed negative-path helper (TEST-09): read the REAL-TIME depth of the processor's dispatch queue
+    # (named by the ProcessorId GUID — the reinject targets queue:{ProcessorId:D}) via the RabbitMQ management
+    # API (host 15673, guest/guest, vhost '/'). messages = ready + unacknowledged. depth >= 1 ⇒ hop dispatches
+    # are queued/being-processed RIGHT NOW ⇒ executions are actively mid-round-trip. Unlike ES (batched log
+    # export hides partials — started==terminal always), the broker queue exposes in-flight state instantly, so
+    # a kill here strands a genuinely in-flight execution: those already carrying ≥1 visible hop are reinjected
+    # by the keeper (data present) and, never completing on the dead processor, become recoverable-but-lost FAILs.
+    function Get-ProcQueueDepth([string]$queueName) {
+        $b64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes('guest:guest'))
+        try {
+            $r = Invoke-RestMethod -Uri "http://localhost:15673/api/queues/%2F/$queueName" `
+                -Headers @{ Authorization = "Basic $b64" } -TimeoutSec 5
+            return [int]$r.messages
+        } catch { return 0 }
+    }
+
     $fireBaseline = Get-FireCount
     Write-Phase "  baseline fire count = $fireBaseline" 'Gray'
 
@@ -281,69 +309,114 @@ try {
     # current - baseline >= N (proves the cron is ACTUALLY firing — V6). If the window elapses
     # without reaching N, abort loud (exit 60).
     # -----------------------------------------------------------------------
-    if ($scenario.faultType -eq 'stop-start') {
-        Write-Phase "STEP F.2: observe-loop — waiting for N=$($scenario.injectAfterNFires) fires before inject"
-        $reachedN = $false
-        while ((Get-Date) -lt $windowDeadline) {
-            $observed = (Get-FireCount) - $fireBaseline
-            if ($observed -ge $scenario.injectAfterNFires) { $reachedN = $true; break }
-            Start-Sleep -Seconds 5
+    if ($scenario.faultType -ne 'none') {
+        # -------------------------------------------------------------------
+        # STEP F.2 — TRIGGER. 'stop-start'/'stop-only': wait for N observed fires (proves the cron is
+        # firing — V6). 'stop-on-inflight' (ES-timed negative path): poll ES FAST until a started-but-not-
+        # yet-terminal execution EXISTS in-window (Step_A exec-cardinality > Step_G exec-cardinality), then
+        # kill immediately. This defeats the invisibility blind spot: a fire-timed kill of this fast, low-
+        # concurrency pipeline lands either before Step_A (invisible/fully-dead → PASS) or after Step_G
+        # (already complete → PASS); reacting to real ES state lands the kill on a VISIBLE in-flight run.
+        # -------------------------------------------------------------------
+        if ($scenario.faultType -eq 'stop-on-inflight') {
+            # Resolve the processor's dispatch queue name = its ProcessorId GUID (steps.processor_id, FK
+            # fk_step_processor_id). After STEP B reset + STEP C seed, the only steps are the v8-fanout-proof's,
+            # so one distinct processor_id — the queue the two processor-sample replicas consume.
+            $procId = (docker compose exec -T postgres psql -U postgres -d stepsdb -t -A -c "SELECT processor_id FROM steps LIMIT 1;" 2>$null | Where-Object { $_ -match '\S' } | Select-Object -First 1)
+            $procId = "$procId".Trim()
+            if (-not $procId) { Write-Phase "could not resolve processor queue id (steps.processor_id empty). Aborting." 'Red'; exit 60 }
+            Write-Phase "STEP F.2: RMQ-timed trigger — polling processor queue '$procId' depth (real-time in-flight) before inject"
+            $triggered = $false
+            while ((Get-Date) -lt $windowDeadline) {
+                $depth = Get-ProcQueueDepth $procId
+                if ($depth -ge $scenario.injectAfterNFires) {
+                    Write-Phase "  processor queue '$procId' depth=$depth (>= $($scenario.injectAfterNFires)) — in-flight dispatch(es) present; injecting fault NOW." 'Gray'
+                    $triggered = $true; break
+                }
+                Start-Sleep -Milliseconds 300
+            }
+            if (-not $triggered) {
+                Write-Phase "processor queue never showed in-flight depth before window close. Aborting." 'Red'; exit 60
+            }
         }
-        if (-not $reachedN) {
-            Write-Phase "baseline never reached N=$($scenario.injectAfterNFires) fires before window close. Aborting." 'Red'; exit 60
+        else {
+            Write-Phase "STEP F.2: observe-loop — waiting for N=$($scenario.injectAfterNFires) fires before inject"
+            $reachedN = $false
+            while ((Get-Date) -lt $windowDeadline) {
+                $observed = (Get-FireCount) - $fireBaseline
+                if ($observed -ge $scenario.injectAfterNFires) { $reachedN = $true; break }
+                Start-Sleep -Seconds 5
+            }
+            if (-not $reachedN) {
+                Write-Phase "baseline never reached N=$($scenario.injectAfterNFires) fires before window close. Aborting." 'Red'; exit 60
+            }
+            Write-Phase "  reached N=$($scenario.injectAfterNFires) observed fires — injecting fault." 'Gray'
         }
-        Write-Phase "  reached N=$($scenario.injectAfterNFires) observed fires — injecting fault." 'Gray'
 
         # -------------------------------------------------------------------
         # STEP F.3 — CRASH SEQUENCER (FRAME 8 / D-05/06/08; code 60). Whole-tier stop via the
-        # compose SERVICE name (Pitfall 2 — never a generated/literal container name), dwell
-        # from the table (45s ≥ one 30s cron interval so ≥1 full fire happens while the tier is
-        # dead), then start. NOT `docker kill` (restart:unless-stopped would auto-resurrect).
+        # compose SERVICE name (Pitfall 2 — never a generated/literal container name). NOT `docker kill`
+        # (restart:unless-stopped would auto-resurrect).
         # -------------------------------------------------------------------
         foreach ($svc in $scenario.targetContainers) {
             Write-Phase "STEP F.3: crashing whole tier '$svc' (docker compose stop)"
             docker compose stop $svc | Out-Null
             if ($LASTEXITCODE -ne 0) { Write-Phase "docker compose stop $svc failed." 'Red'; exit 60 }
         }
-        Write-Phase "  dwell $($scenario.dwellSeconds)s (tier down)..."
-        Start-Sleep -Seconds $scenario.dwellSeconds
-        foreach ($svc in $scenario.targetContainers) {
-            Write-Phase "STEP F.3: restarting tier '$svc' (docker compose start)"
-            docker compose start $svc | Out-Null
-            if ($LASTEXITCODE -ne 0) { Write-Phase "docker compose start $svc failed." 'Red'; exit 60 }
-        }
 
-        # -------------------------------------------------------------------
-        # STEP F.4 — POST-START HEALTH-WAIT (FRAME 9 / Pitfall 3; code 60). For each crashed
-        # service, require ALL instances Health=healthy before proceeding — so the NEXT run's
-        # phase-65-reset (Plan 03 between-runs) does not abort on 0 replicas. NDJSON-per-replica
-        # parse copied verbatim from phase-65-up.ps1:37-73 (processor-sample always has a
-        # healthcheck — the otel no-healthcheck branch is N/A here). Bounded 90s deadline.
-        # -------------------------------------------------------------------
-        foreach ($svc in $scenario.targetContainers) {
-            Write-Phase "STEP F.4: waiting for crashed tier '$svc' to return healthy (bounded 90s)"
-            $svcDeadline = (Get-Date).AddSeconds(90)
-            $svcHealthy = $false
-            do {
-                $instances = @(docker compose ps $svc --format json 2>$null |
-                    Where-Object { $_ -match '\S' } |
-                    ForEach-Object { $_ | ConvertFrom-Json })
-                if ($instances.Count -gt 0) {
-                    $unhealthy = @($instances | Where-Object { $_.Health -ne 'healthy' })
-                    if ($unhealthy.Count -eq 0) { $svcHealthy = $true }
-                }
-                if (-not $svcHealthy) {
-                    if ((Get-Date) -ge $svcDeadline) {
-                        Write-Phase "crashed tier '$svc' did not return healthy before deadline. Aborting." 'Red'; exit 60
-                    }
-                    Start-Sleep -Seconds 2
-                }
-            } while (-not $svcHealthy)
-            Write-Phase "  tier '$svc' healthy again ($($instances.Count) instance(s))." 'Gray'
+        if ($scenario.faultType -in @('stop-only','stop-on-inflight')) {
+            # -------------------------------------------------------------------
+            # NEGATIVE PATH (no recovery). Leave the tier DOWN: no dwell, no restart, no health-wait. Pin
+            # RECOVERY_UTC at WINDOW START so the analyzer treats the whole window as post-recovery — every
+            # started-but-incomplete execution is then a BINDING miss (startedAfterRecovery ⇒ the redis-wipe
+            # in-flight tolerance never applies; nothing was wiped). A VISIBLE incomplete execution (Step_A,
+            # no terminal Step_G) whose L2 data is still present (900s TTL) is recoverable-but-lost ⇒ FAIL
+            # (also vetoed by the keeper "reinject" log per WR-01). Tier stays down until STEP Z teardown.
+            # -------------------------------------------------------------------
+            $recoveryUtc = $windowStart
+            Write-Phase "  NEGATIVE PATH ($($scenario.faultType)): '$($scenario.targetContainers -join ',')' left DOWN (no restart); RECOVERY_UTC pinned at window start $($recoveryUtc.ToString('o'))." 'Yellow'
         }
-        # All crashed tiers confirmed healthy — record the recovery instant (B-criterion seam).
-        $recoveryUtc = [DateTimeOffset]::UtcNow
-        Write-Phase "  RECOVERY_UTC = $($recoveryUtc.ToString('o')) (all crashed tiers healthy)." 'Gray'
+        else {
+            Write-Phase "  dwell $($scenario.dwellSeconds)s (tier down)..."
+            Start-Sleep -Seconds $scenario.dwellSeconds
+            foreach ($svc in $scenario.targetContainers) {
+                Write-Phase "STEP F.3: restarting tier '$svc' (docker compose start)"
+                docker compose start $svc | Out-Null
+                if ($LASTEXITCODE -ne 0) { Write-Phase "docker compose start $svc failed." 'Red'; exit 60 }
+            }
+
+            # -------------------------------------------------------------------
+            # STEP F.4 — POST-START HEALTH-WAIT (FRAME 9 / Pitfall 3; code 60). For each crashed
+            # service, require ALL instances Health=healthy before proceeding — so the NEXT run's
+            # phase-65-reset (Plan 03 between-runs) does not abort on 0 replicas. NDJSON-per-replica
+            # parse copied verbatim from phase-65-up.ps1:37-73 (processor-sample always has a
+            # healthcheck — the otel no-healthcheck branch is N/A here). Bounded 90s deadline.
+            # -------------------------------------------------------------------
+            foreach ($svc in $scenario.targetContainers) {
+                Write-Phase "STEP F.4: waiting for crashed tier '$svc' to return healthy (bounded 90s)"
+                $svcDeadline = (Get-Date).AddSeconds(90)
+                $svcHealthy = $false
+                do {
+                    $instances = @(docker compose ps $svc --format json 2>$null |
+                        Where-Object { $_ -match '\S' } |
+                        ForEach-Object { $_ | ConvertFrom-Json })
+                    if ($instances.Count -gt 0) {
+                        $unhealthy = @($instances | Where-Object { $_.Health -ne 'healthy' })
+                        if ($unhealthy.Count -eq 0) { $svcHealthy = $true }
+                    }
+                    if (-not $svcHealthy) {
+                        if ((Get-Date) -ge $svcDeadline) {
+                            Write-Phase "crashed tier '$svc' did not return healthy before deadline. Aborting." 'Red'; exit 60
+                        }
+                        Start-Sleep -Seconds 2
+                    }
+                } while (-not $svcHealthy)
+                Write-Phase "  tier '$svc' healthy again ($($instances.Count) instance(s))." 'Gray'
+            }
+            # All crashed tiers confirmed healthy — record the recovery instant (B-criterion seam).
+            $recoveryUtc = [DateTimeOffset]::UtcNow
+            Write-Phase "  RECOVERY_UTC = $($recoveryUtc.ToString('o')) (all crashed tiers healthy)." 'Gray'
+        }
     }
     else {
         Write-Phase "STEP F.2: no-fault baseline — no injection (faultType='$($scenario.faultType)')"
@@ -446,7 +519,7 @@ try {
         dotnet test tests/BaseApi.Tests/BaseApi.Tests.csproj -c Release -- --filter-method "*Analyze_Window_Yields_Pass*" 2>&1 | Out-String | Write-Host
         $analyzerExit = $LASTEXITCODE
     } finally {
-        Remove-Item Env:SCENARIO_ID, Env:WINDOW_START_UTC, Env:WINDOW_END_UTC, Env:RECOVERY_UTC, Env:K_EXECUTIONS -ErrorAction SilentlyContinue
+        Remove-Item Env:SCENARIO_ID, Env:WINDOW_START_UTC, Env:WINDOW_END_UTC, Env:RECOVERY_UTC, Env:K_EXECUTIONS, Env:PROCESSOR_STEP_DELAY_MS -ErrorAction SilentlyContinue
     }
 
     # Locate + echo the analyzer report path (D-04 requires printing it).

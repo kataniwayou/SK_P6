@@ -40,6 +40,18 @@ public sealed class SampleProcessor(ILogger<SampleProcessor> logger) : BaseProce
     protected override async Task<DataResult?> ProcessAsync(
         string validatedData, SampleConfig? config, Guid executionId, CancellationToken ct)
     {
+        // TEST-ONLY fault hook (env-gated, DEFAULT OFF). When PROCESSOR_STEP_DELAY_MS > 0, hold each hop
+        // mid-consume BEFORE any log/spawn/result so this fast pipeline exposes a catchable in-flight window:
+        // the message stays unacknowledged for the delay (RabbitMQ queue depth > 0), and a kill during it
+        // freezes the execution mid-hop → started-but-incomplete → recoverable-but-lost FAIL. Unset/0 ⇒ NO
+        // delay, behaviour byte-for-byte unchanged. NEVER set in production (only the resilience harness
+        // exports it for the TEST-09 negative path).
+        if (int.TryParse(Environment.GetEnvironmentVariable("PROCESSOR_STEP_DELAY_MS"), out var stepDelayMs)
+            && stepDelayMs > 0)
+        {
+            await Task.Delay(stepDelayMs, ct);
+        }
+
         var baseNumber = config?.Number ?? 0;            // D-03 null-config default — warning-clean guard (Pitfall 2)
         var label      = config?.Label;                  // D-10 verbatim — already "Step_*", do NOT prepend
 
