@@ -5,12 +5,47 @@ using MassTransit;
 using Messaging.Contracts;
 using Messaging.Contracts.Projections;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using StackExchange.Redis;
 using Xunit;
 
 namespace BaseApi.Tests.Keeper;
+
+/// <summary>
+/// Phase 75 (D75-4): a minimal capturing <see cref="ILogger{TCategoryName}"/> that materializes each
+/// log entry's structured message-template state (the <c>{Placeholder}</c> args, exposed by MEL as an
+/// <see cref="IReadOnlyList{T}"/> of <see cref="KeyValuePair{TKey,TValue}"/>) into a captured list, so a
+/// hermetic fact can assert the keeper drop/reinject logs carry the (CorrelationId, ExecutionId, EntryId,
+/// MessageId, ReinjectOutcome) join keys that will surface as ES <c>attributes.*</c> live (Pitfall 2). The
+/// keeper's <c>RecoveryConsumerBase.Consume</c> opens NO BeginScope, so only explicit placeholder args are
+/// captured here — mirroring how they will (not) arrive via ambient scope in production.
+/// </summary>
+internal sealed class CapturingLogger<T> : ILogger<T>
+{
+    internal sealed record Entry(LogLevel Level, IReadOnlyList<KeyValuePair<string, object?>> State);
+
+    private readonly List<Entry> _entries = new();
+    public IReadOnlyList<Entry> Entries => _entries;
+
+    public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+    public bool IsEnabled(LogLevel logLevel) => true;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        var pairs = state is IReadOnlyList<KeyValuePair<string, object?>> kvps
+            ? kvps.ToList()
+            : new List<KeyValuePair<string, object?>>();
+        _entries.Add(new Entry(logLevel, pairs));
+    }
+
+    private sealed class NullScope : IDisposable
+    {
+        internal static readonly NullScope Instance = new();
+        public void Dispose() { }
+    }
+}
 
 /// <summary>
 /// Phase 70 / req 6 (D-12): the Keeper REINJECT state reads L2[entryId]; present → re-injects a
@@ -71,10 +106,11 @@ public sealed class ReinjectConsumerFacts
         });
         listener.Start();
 
+        var log = new CapturingLogger<ReinjectConsumer>();
         var consumer = new ReinjectConsumer(
             RecoveryTestKit.Mux(db), send,
             RecoveryTestKit.Retry(),
-            metrics, NullLogger<ReinjectConsumer>.Instance);
+            metrics, log);
 
         await consumer.Consume(Ctx(m, ct));
 
@@ -94,6 +130,12 @@ public sealed class ReinjectConsumerFacts
 
         // Phase 74: the confirmed Send incremented the uniform keeper_messages_sent exactly once.
         Assert.Equal(1, Interlocked.Read(ref sent));
+
+        // Phase 75 (D75-4): a structured LogInformation record carries all four join keys + the
+        // "reinject" outcome discriminator as message-template placeholders (so they surface as ES
+        // attributes.*), AND it sits AFTER CountSent (sent==1 above still holds).
+        var info = Assert.Single(log.Entries, e => e.Level == LogLevel.Information);
+        AssertJoinFields(info, m, outcome: "reinject");
     }
 
     [Fact]
@@ -142,10 +184,11 @@ public sealed class ReinjectConsumerFacts
         });
         listener.Start();
 
+        var log = new CapturingLogger<ReinjectConsumer>();
         var consumer = new ReinjectConsumer(
             RecoveryTestKit.Mux(db), send,
             RecoveryTestKit.Retry(),
-            metrics, NullLogger<ReinjectConsumer>.Instance);
+            metrics, log);
 
         await consumer.Consume(Ctx(m, ct));   // D-06: no throw
 
@@ -153,5 +196,22 @@ public sealed class ReinjectConsumerFacts
         Assert.Equal(0, Interlocked.Read(ref sent)); // T-74-06: keeper_messages_sent never fires on the drop path
         // D-14: the removed keeper_reinject_dropped counter publishes NO series.
         Assert.DoesNotContain("keeper_reinject_dropped", publishedKeeperInstruments);
+
+        // Phase 75 (D75-4): the by-design DROP warning now carries all four join keys + the "drop"
+        // outcome discriminator as message-template placeholders, so the analyzer can join a keeper
+        // clean-absent drop to a lost (correlationId, executionId) via ES attributes.*.
+        var warn = Assert.Single(log.Entries, e => e.Level == LogLevel.Warning);
+        AssertJoinFields(warn, m, outcome: "drop");
+    }
+
+    /// <summary>Phase 75 (D75-4): assert a captured log entry's structured state carries the four join
+    /// keys with the message's values plus the ReinjectOutcome discriminator (placeholder-form only).</summary>
+    private static void AssertJoinFields(CapturingLogger<ReinjectConsumer>.Entry entry, KeeperReinject m, string outcome)
+    {
+        Assert.Contains(new KeyValuePair<string, object?>("CorrelationId", m.CorrelationId), entry.State);
+        Assert.Contains(new KeyValuePair<string, object?>("ExecutionId", m.ExecutionId), entry.State);
+        Assert.Contains(new KeyValuePair<string, object?>("EntryId", m.EntryId), entry.State);
+        Assert.Contains(new KeyValuePair<string, object?>("MessageId", m.MessageId), entry.State);
+        Assert.Contains(new KeyValuePair<string, object?>("ReinjectOutcome", outcome), entry.State);
     }
 }
