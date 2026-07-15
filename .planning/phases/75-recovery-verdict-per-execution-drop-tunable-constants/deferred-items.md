@@ -31,6 +31,16 @@ persistent processor row `f54670ea…` (preserved across resets + `down`). Re-ru
 - **D75-7 (K_EXECUTIONS) — NOT ADOPTED this milestone:** OPTIONAL/default-off seam left off;
   the default 300s wall-clock ran unchanged on all 7 scenarios. Acceptable resolution per below.
 
+**Negative-path FAIL confirmed live (2026-07-15, commit 6e52f13):** the 7/7 PASS sweep proves the
+verdict greens on real recovery, but not that it correctly FAILs on a real loss. Added an env-gated
+processor latency hook (`PROCESSOR_STEP_DELAY_MS`, default-off) + harness TEST-09 (stop-on-inflight:
+RMQ queue-depth-timed kill, no recovery). Result: **Verdict=Fail, StartedRuns=3 CompleteRuns=1
+Missing=2**, both misses classified "recoverable-but-lost → binding miss" — the live analogue of the
+hermetic fact `RecoverableButLost_NoKeeperDrop_AfterRecovery_Yields_Fail`. Also surfaced a genuine
+measurement caveat (TEST-08, stop-only): work the processor never touches emits no Step_* trace, so a
+total pre-observability loss reads as PASS — a green verdict certifies recovery of *observably-started*
+work, not "nothing was lost."
+
 **TEST-01 first-pass note:** on the initial full sweep TEST-01 (scenario #1) failed against a
 cold-started Elasticsearch — pipeline conservation was perfect (`orch_consumed=proc_sent=188,
 gap=0`) but the analyzer's ES query returned `StartedRuns=0` before trace docs indexed. A
