@@ -57,6 +57,6 @@ public sealed class ProcessorOptionsBindingFacts
         Assert.Equal(30, opts.TtlSeconds);
         Assert.Equal(8, opts.RequestTimeoutSeconds);
         Assert.Equal(30, opts.BackoffCapSeconds);
-        Assert.Equal(300, opts.ExecutionDataTtlSeconds);
+        Assert.Equal(900, opts.ExecutionDataTtlSeconds); // D75-6: baked default raised 300→900 so the jittered floor outlasts the ~300s recovery window
     }
 }

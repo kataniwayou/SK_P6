@@ -44,9 +44,12 @@ public sealed class ProcessorLivenessOptions
     [ConfigurationKeyName("BackoffCap")]
     public int BackoffCapSeconds { get; set; } = 30;
 
-    /// <summary>Execution-data L2-key TTL in seconds (CONFIG-02 / D-17; default 300). DISTINCT from
+    /// <summary>Execution-data L2-key TTL in seconds (CONFIG-02 / D-17; default 900). DISTINCT from
     /// the liveness <see cref="TtlSeconds"/> — applied on every <c>L2[data(newEntryId)]</c> output
-    /// write so step-to-step chained data outlives a fast dispatch but is bounded (FUT-PROC-02).</summary>
+    /// write so step-to-step chained data outlives a fast dispatch but is bounded (FUT-PROC-02).
+    /// Raised 300→900 (Phase 75 / D75-6) so the jittered <c>random[900, 1800]</c> floor outlasts the
+    /// ~300s non-redis recovery window (dwell 45s + return-to-healthy + keeper reinject + drain 60s +
+    /// poll-to-stable), preventing a benign TTL expiry from being mistaken for a recovery failure.</summary>
     [ConfigurationKeyName("ExecutionDataTtl")]
-    public int ExecutionDataTtlSeconds { get; set; } = 300;
+    public int ExecutionDataTtlSeconds { get; set; } = 900;
 }

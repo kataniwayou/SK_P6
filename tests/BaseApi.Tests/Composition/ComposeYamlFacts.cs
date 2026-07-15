@@ -159,11 +159,15 @@ public sealed class ComposeYamlFacts
     public void ComposeYaml_ProcessorSample_Sets_ExecutionDataTtl_To_ProductionDefault()
     {
         var content = ComposeYamlContent();
-        // ExecutionDataTtl matches the appsettings production default (300s) so the L2[entryId] data key
-        // and the L2[messageId] index (now the SAME const, quick task 260615-dbf) survive a fault dwell.
-        // The former "5" was a v6.0.0 close-gate net-zero hack, obsolete once v8.0.0 retired that gate —
-        // it caused the Phase 68 TEST-06 desync artifact (data expired at 5s vs the 45s outage).
-        Assert.Matches(new Regex(@"(?ms)processor-sample:[\s\S]*?Processor__ExecutionDataTtl:\s*""300"""), content);
+        // ExecutionDataTtl matches the appsettings production default (900s, Phase 75 / D75-6) so the
+        // L2[entryId] data key and the L2[messageId] index (now the SAME const, quick task 260615-dbf)
+        // survive a fault dwell. The former "5" was a v6.0.0 close-gate net-zero hack, obsolete once
+        // v8.0.0 retired that gate — it caused the Phase 68 TEST-06 desync artifact (data expired at 5s
+        // vs the 45s outage). Raised 300→900 (this compose env override binds OVER appsettings + the
+        // Options default at container runtime, so it moves in lock-step with the five in-code knobs) —
+        // the jittered random[900,1800] floor outlasts the ~300s non-redis recovery window so TTL-expiry
+        // can never manufacture in-flight loss for TEST-02/03/04/06.
+        Assert.Matches(new Regex(@"(?ms)processor-sample:[\s\S]*?Processor__ExecutionDataTtl:\s*""900"""), content);
     }
 
     // ---- Phase 34 (KEEP-03) — keeper service block guards (block-scoped) ----
