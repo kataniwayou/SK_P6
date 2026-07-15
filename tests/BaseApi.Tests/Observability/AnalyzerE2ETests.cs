@@ -172,7 +172,16 @@ public sealed class AnalyzerE2ETests
         // ── 4. ES READ (OBS-01 + 73 D-11/D-12) — group Step_* hits into per-run RunTraces by
         //    attributes.CorrelationId, capturing per-label attributes.Produced values + the @timestamp
         //    trip-duration spans (all from the same hits, no new ES query).
-        var cohort = BuildRunTraces(stepHits);
+        // D75-4 live join: read the keeper REINJECT drop/success docs (attributes.ReinjectOutcome) over the
+        // SAME window and build the per-(corr,exec) keeper-outcome map. The keeper docs ride the same OTLP
+        // pipeline as the Step_* docs, so the DrainMs + poll-to-stable above already tolerated the ~60 s
+        // export skew — no new drain is needed. ES-read-only preserved: the join comes from keeper LOGS in
+        // ES, never a live Redis probe.
+        var keeperHits = await es.SearchAllHits(
+            BuildKeeperOutcomeSearchBody(windowStartUtc, snapshotUtc), ct: ct);
+        var keeperOutcomeByExecution = BuildKeeperOutcomeMap(keeperHits);
+
+        var cohort = BuildRunTraces(stepHits, keeperOutcomeByExecution);
         var traces = cohort.Traces;
 
         // ── 5. PROM SNAPSHOTS + WINDOWED DELTAS (OBS-03) ─────────────────────────────────────────────
@@ -227,7 +236,8 @@ public sealed class AnalyzerE2ETests
             mg1Binding: Mg1Binding.GetValueOrDefault(scenarioId, true),
             recoveryUtc: recoveryUtc,
             firstHopUtcByExecution: cohort.FirstHopUtcByExecution,
-            lastHopUtcByExecution: cohort.LastHopUtcByExecution);
+            lastHopUtcByExecution: cohort.LastHopUtcByExecution,
+            keeperOutcomeByExecution: cohort.KeeperOutcomeByExecution);
 
         // ── 8. WRITE-THEN-ASSERT (D-02 / OBS-04 / T-66-11) ───────────────────────────────────────────
         //    Serialize + write the JSON report FIRST so the artifact exists even on a red run, and the
@@ -303,6 +313,84 @@ public sealed class AnalyzerE2ETests
         return last;
     }
 
+    // ── Keeper-outcome ES read → per-(corr,exec) map (D75-4 live join) ───────────────────────────────
+
+    /// <summary>
+    /// Build the window-bounded keeper-REINJECT-outcome <c>_search</c> body (D75-4): a STATIC raw-string
+    /// template (T-66-08 / T-75-07) mirroring <see cref="BuildStepSearchBody"/> — only the Wave-0-verified
+    /// field paths from <see cref="EsIndexNames"/> consts (NEVER a <c>.keyword</c> sub-field) and the
+    /// validated window timestamps are interpolated, so there is no injection surface. Filters on the
+    /// EXISTENCE of the Plan-02 discriminator <see cref="EsIndexNames.ReinjectOutcomeFieldPath"/>
+    /// (<c>attributes.ReinjectOutcome</c> ∈ {<c>"drop"</c>,<c>"reinject"</c>}) PLUS the same
+    /// <c>[windowStart, snapshot]</c> range as the Step_* query, size-bounded to 2000 and sorted ascending
+    /// on the window timestamp field. The keeper docs ride the SAME OTLP pipeline as the Step_* docs, so the
+    /// existing <see cref="DrainMs"/> + poll-to-stable already tolerates the ~60 s export skew.
+    /// </summary>
+    private static string BuildKeeperOutcomeSearchBody(DateTimeOffset windowStart, DateTimeOffset snapshot) => $$"""
+      {
+        "size": 2000,
+        "query": {
+          "bool": {
+            "filter": [
+              { "exists": { "field": "{{EsIndexNames.ReinjectOutcomeFieldPath}}" } },
+              { "range": { "{{EsIndexNames.WindowTimestampFieldPath}}": {
+                  "gte": "{{windowStart:o}}", "lte": "{{snapshot:o}}" } } }
+            ]
+          }
+        },
+        "sort": [ { "{{EsIndexNames.WindowTimestampFieldPath}}": "asc" } ]
+      }
+      """;
+
+    /// <summary>
+    /// Build the per-<c>(correlationId, executionId)</c> → keeper-outcome map from raw keeper ES hits
+    /// (D75-4), mirroring the <see cref="BuildRunTraces"/> defensive-read idiom (T-66-09 / T-75-07): each
+    /// attribute is read via <c>attrs.TryGetProperty(... ValueKind == String)</c> and an odd-shaped hit is
+    /// skipped with <c>continue</c> — never thrown on. The output dict is keyed <c>$"{corr}|{exec}"</c>
+    /// (StringComparer.Ordinal — the same key shape as <see cref="TraceCohort.FirstHopUtcByExecution"/> and
+    /// the engine's <c>keeperOutcomeByExecution</c> param) → the <c>attributes.ReinjectOutcome</c> string.
+    /// <para>
+    /// <b>Tie-break: <c>"reinject"</c> wins.</b> If BOTH a <c>"drop"</c> and a <c>"reinject"</c> doc exist for
+    /// the same key (the keeper dropped, then a later reinject succeeded — or vice versa), the map keeps
+    /// <c>"reinject"</c>: a confirmed reinject means the data WAS recoverable, so the classifier must NOT
+    /// tolerate that execution as a provably-unrecoverable clean drop. This is the join half of Plan 01's
+    /// classifier contract (a recovered execution is a binding requirement, never a tolerated loss).
+    /// </para>
+    /// <para>
+    /// <b>ES-read-only (fixture invariant, :44-47).</b> The map is derived SOLELY from keeper logs in ES —
+    /// there is NO live Redis probe (<c>IDatabase</c>/<c>StringLength</c>) here; keeper recovery evidence
+    /// reaches the verdict only through the keeper's own structured logs.
+    /// </para>
+    /// </summary>
+    private static IReadOnlyDictionary<string, string> BuildKeeperOutcomeMap(List<JsonElement> hits)
+    {
+        var outcomeByExecution = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        foreach (var hit in hits)
+        {
+            if (!hit.TryGetProperty("_source", out var source)) continue;
+            if (!source.TryGetProperty("attributes", out var attrs)) continue;
+
+            if (!attrs.TryGetProperty("CorrelationId", out var corrEl)
+                || corrEl.ValueKind != JsonValueKind.String) continue;
+            if (!attrs.TryGetProperty("ExecutionId", out var execEl)
+                || execEl.ValueKind != JsonValueKind.String) continue;
+            if (!attrs.TryGetProperty("ReinjectOutcome", out var outcomeEl)
+                || outcomeEl.ValueKind != JsonValueKind.String) continue;
+
+            var key = $"{corrEl.GetString()!}|{execEl.GetString()!}";
+            var outcome = outcomeEl.GetString()!;
+
+            // Tie-break — "reinject" wins over "drop": a recovered execution must never be mistaken for a
+            // clean drop (D75-4). Once a key is "reinject" it is never downgraded; a "drop" only lands if the
+            // key is absent or already "drop".
+            if (outcomeByExecution.TryGetValue(key, out var existing) && existing == "reinject") continue;
+            outcomeByExecution[key] = outcome;
+        }
+
+        return outcomeByExecution;
+    }
+
     /// <summary>
     /// The per-window trace cohort + the value-chain/trip-duration evidence the engine needs (73, D-11/D-12):
     /// the per-instance <see cref="RunTrace"/>s (each carrying its per-label <c>attributes.Produced</c>
@@ -323,6 +411,13 @@ public sealed class AnalyzerE2ETests
         // miss. Derived from the SAME hits as the trip-duration span (no new ES query).
         public required IReadOnlyDictionary<string, DateTimeOffset> FirstHopUtcByExecution { get; init; } // keyed "corr|exec"
         public required IReadOnlyDictionary<string, DateTimeOffset> LastHopUtcByExecution { get; init; }  // keyed "corr|exec"
+
+        // D75-4 live join: per-(corr,exec) keeper REINJECT outcome ("drop"|"reinject"), keyed "corr|exec" —
+        // built from the keeper's structured drop/success logs in ES (attributes.ReinjectOutcome), NEVER a
+        // live Redis probe. Fed into PassFailEngine.Analyze(keeperOutcomeByExecution:) so a keeper clean-
+        // absent DROP is tolerated (provably-unrecoverable) and a recoverable-but-lost execution is a
+        // binding FAIL. "reinject" wins any tie (see BuildKeeperOutcomeMap).
+        public required IReadOnlyDictionary<string, string> KeeperOutcomeByExecution { get; init; } // keyed "corr|exec"
     }
 
     /// <summary>
@@ -336,7 +431,8 @@ public sealed class AnalyzerE2ETests
     /// min→max span over the SAME hits (73, D-12 — no new ES query). Hits missing any of the three
     /// attributes are skipped defensively (T-66-09 / T-73-07 — odd-shaped JSON is dropped, never thrown).
     /// </summary>
-    private static TraceCohort BuildRunTraces(List<JsonElement> hits)
+    private static TraceCohort BuildRunTraces(
+        List<JsonElement> hits, IReadOnlyDictionary<string, string> keeperOutcomeByExecution)
     {
         // Keyed by the (correlationId, executionId) value-tuple — one RunTrace per execution instance.
         var byInstance = new Dictionary<(string Corr, string Exec), List<string>>();
@@ -453,6 +549,7 @@ public sealed class AnalyzerE2ETests
             SeedsByExecution = seedsByExec,
             FirstHopUtcByExecution = firstHopByExec,
             LastHopUtcByExecution = lastHopByExec,
+            KeeperOutcomeByExecution = keeperOutcomeByExecution,
         };
     }
 

@@ -107,6 +107,28 @@ public static class EsIndexNames
     public const string ExecutionIdFieldPath = "attributes.ExecutionId";
 
     /// <summary>
+    /// The OTLP field path for the keeper REINJECT outcome discriminator attribute (Phase 75 / D75-4),
+    /// expressed as a dot-separated path suitable for ES <c>exists</c>/<c>term</c> queries. Plan 02 widened
+    /// the keeper <see cref="Keeper.Recovery.ReinjectConsumer"/> drop log and added a symmetric reinject-success
+    /// log, both carrying <c>{ReinjectOutcome}</c> as a message-template placeholder (value <c>"drop"</c> on a
+    /// clean-absent DROP, <c>"reinject"</c> on a confirmed send). The keeper consumer runs under
+    /// <c>RecoveryConsumerBase.Consume</c> with NO ambient <c>BeginScope</c>, so the placeholder rides the
+    /// MEL→OTLP bridge (<c>ParseStateValues=true</c>) and surfaces here as <c>attributes.ReinjectOutcome</c>.
+    /// The analyzer (Plan 04) partitions keeper docs on this field to build the per-<c>(corr,exec)</c>
+    /// keeper-outcome map fed into <c>PassFailEngine.Analyze(keeperOutcomeByExecution:)</c>.
+    ///
+    /// <para>
+    /// <b>DIRECT path — NO <c>.keyword</c> sub-field.</b> Same rationale pinned on
+    /// <see cref="CorrelationIdFieldPath"/>/<see cref="ExecutionIdFieldPath"/>: the OTel-managed
+    /// <c>logs-generic.otel-default</c> data stream's x-pack ECS index template maps every string attribute
+    /// DIRECTLY to <c>keyword</c> (no <c>fields.keyword</c> sub-field), so <c>attributes.ReinjectOutcome.keyword</c>
+    /// returns ZERO hits — the trap that broke 4 log-readback facts at Phase 11 UAT (commit 9370e89, reverted).
+    /// Always query <c>attributes.ReinjectOutcome</c> directly.
+    /// </para>
+    /// </summary>
+    public const string ReinjectOutcomeFieldPath = "attributes.ReinjectOutcome";
+
+    /// <summary>
     /// The OTLP field path for the per-step computed <c>Sum</c> attribute, expressed as a dot-separated path.
     /// Phase 66 / OBS-01 — read alongside <see cref="StepLabelFieldPath"/> when reconstructing per-run traces.
     ///
