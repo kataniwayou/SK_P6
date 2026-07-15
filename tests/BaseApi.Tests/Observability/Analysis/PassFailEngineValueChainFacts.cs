@@ -258,6 +258,41 @@ public sealed class PassFailEngineValueChainFacts
     }
 
     [Fact]
+    public void ToleratedInFlightLoss_PartialTerminalOnly_NotValueChainFailed_Yields_Pass()
+    {
+        // TEST-03 regression (orchestrator crash): a run stalled mid-flight DURING the outage — only the
+        // terminal Step_G survived in ES (the earlier hops were lost), so its last hop precedes RECOVERY_UTC
+        // and it is classified as a TOLERATED in-flight loss (counted in InFlightLoss, NOT Missing). Its
+        // partial trace carries only Step_G at the real terminal value (206) with no Step_B/Step_A to anchor
+        // the seed, so the binding value-chain check — IF it ran on this run — would recover seed 0 and
+        // FALSELY fail (Step_G expected 6 got 206). A run already classified as a tolerated in-flight loss
+        // MUST NOT also trip the binding value chain; only its (bounded) loss count gates the verdict.
+        var recovery = DateTimeOffset.Parse("2026-07-15T06:21:33Z");
+
+        // One complete, correct run (so the window isn't vacuous) plus the stalled partial (Step_G ×2 @ 206).
+        var good = RunFor("corr-good", "exec-good", SeedB); // seed 200, full chain, Step_G 206
+        var partial = RunTrace.FromLabels("corr-loss", "exec-loss", new[] { "Step_G", "Step_G" },
+            new Dictionary<string, int>(StringComparer.Ordinal) { ["Step_G"] = 206 });
+        var snap = CleanSnapshot();
+
+        var lastHop = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal)
+        {
+            ["corr-good|exec-good"] = recovery.AddSeconds(30),  // finished AFTER recovery (not a loss)
+            ["corr-loss|exec-loss"] = recovery.AddSeconds(-60), // stalled BEFORE recovery → tolerated in-flight loss
+        };
+
+        var report = new PassFailEngine().Analyze(
+            new[] { good, partial }, snap, "unit-inflight-valuechain",
+            recoveryUtc: recovery,
+            lastHopUtcByExecution: lastHop);
+
+        Assert.Equal(1, report.InFlightLoss); // the partial is a tolerated in-flight loss
+        Assert.Equal(0, report.Missing);      // …NOT a binding miss
+        Assert.True(report.ValueChainOk);     // …and NOT value-chain-checked (its partial chain is expected)
+        Assert.Equal(Verdict.Pass, report.Verdict);
+    }
+
+    [Fact]
     public void Green_Report_Carries_TripDurationMaps_And_ValueChainDetail_Present()
     {
         // The report threads the (synthetic) trip-duration maps through Analyze and surfaces value-chain

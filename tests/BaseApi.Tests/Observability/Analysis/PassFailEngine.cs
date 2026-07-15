@@ -136,6 +136,13 @@ public sealed class PassFailEngine
         var bindingMissing = 0;
         var inFlightLossDetail = new List<string>();
         var missingDetail = new List<string>();
+        // Keys of runs classified as TOLERATED in-flight losses. A run stalled mid-flight before recovery has,
+        // by definition, a PARTIAL trace (some hops never landed in ES) — its value chain is expected to be
+        // incomplete/unanchored, so the binding value-chain check below MUST skip it. Otherwise a terminal-only
+        // survivor (e.g. Step_G @ seed+6 with no Step_B/Step_A) recovers seed 0 and falsely fails
+        // (Step_G expected 6 got 206) — the TEST-03 orchestrator-crash false FAIL. The loss is already accounted
+        // (bounded by MaxInFlightLoss); it must not ALSO trip a second binding gate.
+        var inFlightLossKeys = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var r in incomplete)
         {
@@ -148,6 +155,7 @@ public sealed class PassFailEngine
             if (stalledBeforeRecovery && !startedAfterRecovery)
             {
                 inFlightLoss++;
+                inFlightLossKeys.Add(key);
                 inFlightLossDetail.Add(
                     $"[{key}] in-flight loss: last hop {lastHop[key]:o} < recovery {recoveryUtc:o} (tolerated).");
             }
@@ -200,6 +208,16 @@ public sealed class PassFailEngine
 
         foreach (var run in runs)
         {
+            // A tolerated in-flight loss has a partial-by-design trace (stalled before recovery); its chain is
+            // expected to be incomplete, so it is NOT value-chain-checked (its bounded loss already gates the
+            // verdict). Skipping it prevents the TEST-03 false FAIL where a terminal-only survivor recovers the
+            // wrong seed. Complete runs are never in this set (in-flight losses are incomplete), so the WR-02
+            // terminal-cohort accounting below is unaffected.
+            if (inFlightLossKeys.Contains($"{run.CorrelationId}|{run.ExecutionId}"))
+            {
+                continue;
+            }
+
             if (run.Values.Count == 0)
             {
                 continue; // no surfaced values → checked for vacuous-pass below when a value oracle is supplied
