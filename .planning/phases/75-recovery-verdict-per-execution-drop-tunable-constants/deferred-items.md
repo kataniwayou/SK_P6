@@ -1,5 +1,50 @@
 # Phase 75 — Deferred Items
 
+## ✅ RESOLVED — live Docker-up sweep (2026-07-15)
+
+The three deferred live gates below were exercised on a real Docker RealStack via
+`scripts/phase-68-sweep.ps1` (all 7 scenarios). **Result: 7/7 PASS.**
+
+**Bootstrap note (rebuild→SourceHash reseed order):** the phase-75 source changes gave the
+rebuilt images a new SourceHash (`ae91e700…`) with no `processors` row, so the first sweep
+aborted every scenario at `phase-65-reset` STEP 2 heal-wait (exit 20). Fixed with a one-time
+graph-delete → `FanOutSeeder` → verified 2 liveness keys + POST /start 204, creating the
+persistent processor row `f54670ea…` (preserved across resets + `down`). Re-run then proceeded.
+
+**Per-scenario analyzer verdicts (fresh Release reports):**
+
+| Scenario | Fault | Verdict | Started/Complete | Missing | InFlightLoss |
+|----------|-------|---------|------------------|---------|--------------|
+| TEST-01 | none (baseline) | Pass | 18/18 | 0 | 0 |
+| TEST-02 | processor crash | Pass | 19/19 | 0 | 0 |
+| TEST-03 | orchestrator crash | Pass | 16/16 | 0 | 0 |
+| TEST-04 | keeper crash (both replicas) | Pass | 19/19 | 0 | 0 |
+| TEST-05 | redis crash | Pass | 26/26 | 0 | 0 |
+| TEST-06 | rabbitmq crash | Pass | 16/16 | 0 | 0 |
+| TEST-07 | redis+rabbitmq | Pass | 14/14 | 0 | 0 |
+
+- **D75-6 (TTL neutralization) — CLOSED / approved:** `InFlightLoss=0` on every non-redis
+  scenario (TEST-02/03/04/06) at the new 900s TTL; the Phase-68 TTL-expiry artifact is gone.
+- **D75-4 (keeper ES-join) — CLOSED / approved:** TEST-04 keeper whole-tier crash fully
+  recovered 19/19 (Missing=0); the analyzer built its per-(corr,exec) keeper-outcome map from
+  ES REINJECT logs and produced a pure per-execution verdict (no absolute-count/TTL term).
+- **D75-7 (K_EXECUTIONS) — NOT ADOPTED this milestone:** OPTIONAL/default-off seam left off;
+  the default 300s wall-clock ran unchanged on all 7 scenarios. Acceptable resolution per below.
+
+**TEST-01 first-pass note:** on the initial full sweep TEST-01 (scenario #1) failed against a
+cold-started Elasticsearch — pipeline conservation was perfect (`orch_consumed=proc_sent=188,
+gap=0`) but the analyzer's ES query returned `StartedRuns=0` before trace docs indexed. A
+warm-ES single re-run (`-ScenarioIds TEST-01`) passed 18/18. Not a recovery regression (no-fault
+baseline cannot regress recovery). **Minor tooling bug observed:** the sweep roll-up's
+`Get-ChildItem -Recurse -Filter "$id.json" | Select -First 1` read a month-old stale Debug report
+(StartedRuns=0) instead of the fresh Release one — cosmetic; the harness exit code (analyzer
+verdict) is authoritative.
+
+---
+
+## Original deferred entries (superseded by the RESOLVED section above)
+
+
 ## Out-of-scope pre-existing failures (Docker-less sandbox)
 
 **Discovered during:** 75-01 Task 2 full-hermetic-suite verification (2026-07-15)

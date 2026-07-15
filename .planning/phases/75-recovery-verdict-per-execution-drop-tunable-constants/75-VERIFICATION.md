@@ -2,18 +2,19 @@
 phase: 75-recovery-verdict-per-execution-drop-tunable-constants
 verified: 2026-07-15T00:00:00Z
 status: passed
-score: 8/8 must-haves verified
+score: 8/8 must-haves verified (D75-4 + D75-6 live gates closed 2026-07-15 RealStack sweep 7/7 PASS)
 overrides_applied: 0
+live_verified:
+  - truth: "D75-4 live keeper ES-join: analyzer builds per-(corr,exec) keeper-outcome map from ES REINJECT logs and drives a pure per-execution verdict"
+    verified_in: "Docker RealStack sweep 2026-07-15 — TEST-04 (keeper both-replica crash) Pass 19/19, Missing=0, InFlightLoss=0"
+    evidence: "deferred-items.md §'✅ RESOLVED — live Docker-up sweep'; fresh analyzer report tests/BaseApi.Tests/bin/Release/net8.0/analyzer-reports/TEST-04.json"
+  - truth: "D75-6 live TTL neutralization: 900s TTL outlasts recovery — no TTL-manufactured loss on non-redis scenarios"
+    verified_in: "Docker RealStack sweep 2026-07-15 — TEST-02/03/04/06 all InFlightLoss=0, Missing=0 at 900s TTL"
+    evidence: "deferred-items.md §'✅ RESOLVED'; fresh analyzer reports TEST-02/03/04/06.json"
 deferred:
-  - truth: "D75-4 live join: keeper attributes surface in ES; recoverable-but-lost → FAIL, clean-drop → tolerated on a running sweep"
-    addressed_in: "future Docker-up re-run (deferred-automated per deferred-items.md)"
-    evidence: "deferred-items.md §'DEFERRED: 75-04 live keeper ES-join verify' — exact RealStack steps documented; automated half (BuildKeeperOutcomeMap wiring, BuildKeeperOutcomeSearchBody, TraceCohort.KeeperOutcomeByExecution, Analyze wiring) 100% complete and hermetically green"
-  - truth: "D75-6 live TTL neutralization: raised 300→900 outlasts recovery on running containers"
-    addressed_in: "future Docker-up re-run (deferred-automated per deferred-items.md)"
-    evidence: "deferred-items.md §'DEFERRED: 75-03 live TTL-neutralization verify' — exact RealStack steps documented; all five knobs confirmed at 900 in code and compose.yaml"
   - truth: "D75-7 live execution-based window (K_EXECUTIONS set): observe loop closes early at K executions on a running stack"
-    addressed_in: "future Docker-up re-run OR not adopted this milestone (OPTIONAL per ROADMAP)"
-    evidence: "deferred-items.md §'DEFERRED: 75-05 live execution-based-window verify' — OPTIONAL, default-OFF; seam committed and parse-verified"
+    addressed_in: "NOT ADOPTED this milestone (OPTIONAL per ROADMAP; default-off seam ran unchanged on all 7 sweep scenarios)"
+    evidence: "deferred-items.md §'✅ RESOLVED' — D75-7 left OPTIONAL/default-off; seam committed and parse-verified"
 human_verification:
   - test: "Live keeper→ES join surfacing (D75-4)"
     expected: "GET .../logs-generic.otel-default/_search with exists:attributes.ReinjectOutcome returns hits carrying CorrelationId + ExecutionId; recoverable-but-lost scenarios → verdict FAIL; clean-drop scenarios → tolerated"

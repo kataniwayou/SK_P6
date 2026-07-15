@@ -63,15 +63,21 @@ validated: 2026-07-15
 
 ---
 
-## Manual-Only Verifications
+## Live-Stack Verifications (RealStack sweep — 2026-07-15)
 
-| Behavior | Requirement | Why Manual | Test Instructions |
-|----------|-------------|------------|-------------------|
-| Live keeper→ES join surfacing new `entryId`/`messageId`/`ReinjectOutcome` attributes; recoverable-but-lost → FAIL, clean-drop → tolerated | D75-4 | Requires running Docker RealStack + OTLP export from Keeper; not hermetic | Bring stack up (`scripts/phase-65-up.ps1`), probe ES `exists:attributes.ReinjectOutcome`, run `scripts/phase-68-sweep.ps1` for a keeper-recovery scenario. See `deferred-items.md §'DEFERRED: 75-04 live keeper ES-join verify'` |
-| TTL neutralization (900s) outlasts ~300s recovery for non-redis scenarios (no TTL-manufactured loss) | D75-6 | Requires live L2 + timed recovery dwell at the new 900s TTL | Rebuild (`scripts/phase-65-up.ps1`), confirm `Processor__ExecutionDataTtl=900`, run `scripts/phase-68-sweep.ps1 -ScenarioIds TEST-02,TEST-03,TEST-04,TEST-06`. See `deferred-items.md §'DEFERRED: 75-03 live TTL-neutralization verify'` |
-| `K_EXECUTIONS` early-break closes the observe loop at K executions; default-off runs full 300s (OPTIONAL) | D75-7 | Requires live running stack; OPTIONAL — default-off is an acceptable resolution | `$env:K_EXECUTIONS="8"; scripts/phase-68-sweep.ps1 -ScenarioIds TEST-01` (expect early-close log), then without K (expect 300s). See `deferred-items.md §'DEFERRED: 75-05 live execution-based-window verify'` |
+The three previously Manual-Only live gates were exercised on a real Docker RealStack via
+`scripts/phase-68-sweep.ps1` (all 7 scenarios). **Result: 7/7 PASS** (TEST-01 baseline required a
+warm-ES single re-run — first pass hit ES cold-start indexing lag, not a regression).
 
-*Redis-crash scenarios (TEST-05/07) are the genuine in-flight-at-wipe durability boundary — TTL moot.*
+| Behavior | Requirement | Status | Evidence |
+|----------|-------------|--------|----------|
+| Live keeper→ES join drives the recovery verdict; keeper crash fully recovers | D75-4 | ✅ live-verified | TEST-04 (keeper both-replica crash) Pass 19/19, Missing=0; analyzer built the per-(corr,exec) keeper-outcome map from ES REINJECT logs; verdict is a pure per-execution function |
+| TTL neutralization (900s) — no TTL-manufactured loss on non-redis scenarios | D75-6 | ✅ live-verified | TEST-02/03/04/06 all `InFlightLoss=0` at the new 900s TTL; the Phase-68 TTL-expiry artifact is gone |
+| `K_EXECUTIONS` early-break (OPTIONAL, default-off) | D75-7 | ⏸ not adopted | default 300s wall-clock ran unchanged on all 7 scenarios; OPTIONAL seam left off — acceptable resolution |
+
+Full per-scenario table and bootstrap notes in `deferred-items.md §'✅ RESOLVED — live Docker-up sweep'`.
+
+*Redis-crash scenarios (TEST-05/07) are the genuine in-flight-at-wipe durability boundary — TTL moot; both Pass (26/26, 14/14).*
 
 ---
 
@@ -95,10 +101,13 @@ validated: 2026-07-15
 | Requirements audited | 8 (D75-1..8) |
 | COVERED (hermetic automated, green) | 8 |
 | MISSING (no test) | 0 |
-| Live-only → Manual-Only | 3 (D75-4 ES-join, D75-6 TTL, D75-7 K_EXECUTIONS) |
+| Live-only gates | 3 (D75-4 ES-join, D75-6 TTL, D75-7 K_EXECUTIONS) |
+| Live-verified this session | 2 (D75-4, D75-6 — RealStack 7/7 PASS) |
+| Not adopted (OPTIONAL) | 1 (D75-7, default-off) |
 | Gaps found | 0 |
 | Resolved | 0 (none needed) |
 | Escalated | 0 |
-| Tests run this audit | 58 passed / 0 failed |
+| Hermetic tests run this audit | 58 passed / 0 failed |
+| Live sweep run this audit | 7/7 scenarios PASS (Docker RealStack) |
 
-*State A audit: existing VALIDATION.md was an unfilled template. Reconstructed the Per-Task Verification Map from the five plan summaries, cross-referenced each D75-N requirement to its hermetic fact class, and confirmed all 58 mapped facts run green. No auditor spawn required — zero MISSING gaps.*
+*State A audit: existing VALIDATION.md was an unfilled template. Reconstructed the Per-Task Verification Map from the five plan summaries, cross-referenced each D75-N requirement to its hermetic fact class, and confirmed all 58 mapped facts run green (zero MISSING gaps, no auditor spawn). Follow-up (same day): ran the full RealStack sweep — 7/7 PASS — closing the D75-4 (keeper ES-join) and D75-6 (TTL neutralization) live gates; D75-7 left OPTIONAL/default-off. See `deferred-items.md §'✅ RESOLVED'`.*
