@@ -95,6 +95,7 @@ try {
         # NEGATIVE-PATH scenarios (NOT in the default phase-68 sweep — run explicitly by id):
         'TEST-08' = @{ targetContainers = @('processor-sample'); faultType = 'stop-only';       injectAfterNFires = 4; dwellSeconds = 0; notes = 'NEGATIVE (blind-spot demo): processor crash, NO recovery — dispatched-but-never-processed work is INVISIBLE (no Step_A) → PASS, proving the verdict cannot see fully-dead loss' }
         'TEST-09' = @{ targetContainers = @('processor-sample'); faultType = 'stop-on-inflight'; injectAfterNFires = 3; dwellSeconds = 0; notes = 'NEGATIVE (RMQ-timed FAIL): with the 3s per-hop delay hook on, kill the processor once its dispatch queue backlog >= 3 (executions visibly mid-flight, no recovery) — strands recoverable-but-lost runs → binding miss → FAIL' }
+        'TEST-10' = @{ targetContainers = @('processor-sample'); faultType = 'stopstart-on-inflight'; injectAfterNFires = 3; dwellSeconds = 300; notes = 'OUTAGE-OUTLASTS-WINDOW: 3s delay hook on; kill on in-flight backlog then keep the processor down 300s (> the 300s observation window) and RESTART — does recovery complete within window+drain (PASS) or exceed the budget (FAIL)?' }
     }
 
     # Validate the requested id against the table BEFORE any docker/psql op (T-67-02).
@@ -111,7 +112,7 @@ try {
     # `docker compose up` interpolates it (${PROCESSOR_STEP_DELAY_MS:-0}) into the processor-sample container.
     # A 3s per-hop delay holds executions VISIBLY in-flight so the queue-depth trigger can catch one and the
     # kill can strand it (the fast default pipeline exposes no catchable in-flight window). Cleared in finally.
-    if ($scenario.faultType -eq 'stop-on-inflight') {
+    if ($scenario.faultType -in @('stop-on-inflight','stopstart-on-inflight')) {
         $env:PROCESSOR_STEP_DELAY_MS = '3000'
         Write-Phase "  TEST-ONLY hook: PROCESSOR_STEP_DELAY_MS=3000 exported (baked into processor-sample at compose-up)." 'Yellow'
     }
@@ -318,7 +319,7 @@ try {
         # concurrency pipeline lands either before Step_A (invisible/fully-dead → PASS) or after Step_G
         # (already complete → PASS); reacting to real ES state lands the kill on a VISIBLE in-flight run.
         # -------------------------------------------------------------------
-        if ($scenario.faultType -eq 'stop-on-inflight') {
+        if ($scenario.faultType -in @('stop-on-inflight','stopstart-on-inflight')) {
             # Resolve the processor's dispatch queue name = its ProcessorId GUID (steps.processor_id, FK
             # fk_step_processor_id). After STEP B reset + STEP C seed, the only steps are the v8-fanout-proof's,
             # so one distinct processor_id — the queue the two processor-sample replicas consume.
