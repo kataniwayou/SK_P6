@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: 1
-status: milestone_complete
+current_plan: Not started
+status: completed
 stopped_at: Completed 74-04-PLAN.md
-last_updated: "2026-06-18T07:01:40.570Z"
+last_updated: "2026-07-15T11:03:42.891Z"
 last_activity: 2026-06-18
 progress:
   total_phases: 4
-  completed_phases: 1
+  completed_phases: 0
   total_plans: 0
   completed_plans: 0
-  percent: 25
+  percent: 0
 ---
 
 # Project State
@@ -62,6 +62,7 @@ Last activity: 2026-06-18
 
 ### Roadmap Evolution
 
+- 2026-07-15 — **Phase 75 added** (end of roadmap): `recovery-verdict-per-execution-drop-tunable-constants` — rework the live resilience sweep so the PASS/FAIL verdict is a pure function of **per-started-execution** recovery, decoupled from every tunable constant (cron rate, window seconds, absolute in-flight bound). Drop the absolute `MaxInFlightLoss=4` bound in `PassFailEngine` (the cron-rate coupling); replace with a **recoverability classifier** (recoverable-but-not-recovered → binding FAIL; provably-unrecoverable = data physically gone/L2-wiped-with-no-outbox → reported + cause-labeled, not a pass/fail lever), derived from **keeper→ES instrumentation per `entryId`** (REINJECT vs `ReinjectConsumer` silent-DROP on `STRLEN L2==0`). **Spec ruling (user-approved):** in-flight-at-wipe loss is accepted; everything recoverable-but-lost fails. Neutralize the TTL confounder by raising the **test-env** L2 TTLs (`ExecutionDataTtl`/`OutputDataTtl`/unified slot-array index) past each module's full recovery (~300s+) so TTL-expiry can't manufacture loss on the non-redis crashes (redis crashes = the genuine wipe boundary, TTL moot). Optionally execution-based window. Preserves the committed value-chain in-flight-loss fix (`3028f43`). Origin: full design discussion 2026-07-15 after the live sweep surfaced the coupling. Depends on Phase 74. **Numbering note (SAME RECURRING BUG, 4th time):** `gsd-sdk query phase.add` AGAIN auto-numbered it `63` off the stale `STATE.milestone: v7.0.0` pointer (→ phases 59-62 → "next 63", colliding with shipped v8.0.0 phases 63-68). The tool's bogus `### Phase 63` ROADMAP insertion + empty `63-*` dir were reverted (`git checkout ROADMAP.md` + `rm -rf`), then the phase was added **manually** as **75** (max existing integer 74 + 1) with `Depends on: Phase 74`. **Root cause STILL unfixed** — correct `STATE.milestone` (or run `/gsd-health`) before the next phase add or this recurs a 5th time.
 - 2026-06-18 — **Phase 74 added** (end of roadmap): `reshape-business-metrics-into-a-uniform-two-counter-model` — collapse every service's business counters into a uniform pair `{service}_messages_consumed`/`{service}_messages_sent` (snake_case, no `_total` in code; labels `workflowId`+`processorId` camelCase); rewrite `OrchestratorMetrics`/`ProcessorMetrics`/`KeeperMetrics` to the pair + removals (`ResultDeduped`/`DispatchDeduped`/`ReinjectDropped`, drop processor `outcome` label), inject `KeeperMetrics` into the 4 sending keeper consumers + `BitHealthLoop`, and rework `PassFailEngine`+`PromCounterSnapshot`+~11 metric test files. Source of truth: drafted spec at `Import/72-SPEC.md`+`Import/72-CONTEXT.md` (slugged "72" but renumbered to 74 — phases 72/73 already exist). Depends on Phase 73. **Numbering note (SAME RECURRING BUG):** `gsd-sdk query phase.add` AGAIN auto-numbered it `63` off the stale `STATE.milestone: v7.0.0` pointer (→ phases 59-62 → "next 63", colliding with shipped v8.0.0 phases 63-68). This time the tool's bogus `### Phase 63` ROADMAP insertion + empty `63-*` dir were reverted (`git checkout ROADMAP.md` + `rm -rf`), then the phase was added **manually** as **74** (max existing integer 73 + 1) with `Depends on: Phase 73`. **Root cause STILL unfixed** — `STATE.milestone` must be corrected (or `/gsd-health` run) before the next phase add or this recurs a 4th time.
 - 2026-06-17 — **Phase 73 added** (end of roadmap): `verify-and-instrument-end-to-end-l2-data-delivery-across-a-f` — prove + instrument end-to-end L2 data delivery across the fan-out DAG `A→B→C→{D1→E1→F1, D2→E2→F2}→G` (G = stateless per-branch terminal, NOT a join) per `correlationId`/`executionId` up to termination, via (a) a **hermetic zero-Docker metric-conservation proof** (`orchestrator_dispatch_sent==processor_dispatch_consumed`, `processor_result_sent==orchestrator_result_consumed`, `step_unresolved==spawn_dropped==*_deduped==0` over the real pipeline classes + dict-backed `IDatabase` L2 + `CapturingSendProvider` loop + `MeterCollector`, plus per-branch L2 hash-chain content) and (b) a **live-stack per-`executionId` ES auditor** (entry-step Mode-2 `SpawnToPost` mints one `executionId` per branch; each step logs `sha256(in)/sha256(out)` — hashes only, T-70-10 — and the auditor asserts hash continuity + path completeness + `completed-terminal` at G + zero silent-loss signals, anchored to the persisted terminal `skp:out:` blob), plus **execution-trip duration** (per-exec/per-corr ES `@timestamp` delta; optional `orchestrator_trip_duration_ms` histogram needing a threaded `TripStartedUtc`). Depends on Phase 72 (always-write + uniform branch-free pre-pipeline). **Numbering note:** `gsd-sdk query phase.add` AGAIN auto-numbered it `63` (same stale `STATE.milestone: v7.0.0` → phases 59-62 → "next 63" root cause noted on the Phase-71 entry below; collides with shipped v8.0.0 phases 63-68); manually corrected to **73** (max existing integer 72 + 1), dir renamed, and `Depends on` fixed from the tool's default `Phase 62` → `Phase 72`. **The stale milestone pointer is STILL the root cause and remains unfixed — run `/gsd-health` (or correct `STATE.milestone`) before the next phase add, or this recurs every time.**
 - 2026-06-17 — **Phase 71 added** (end of roadmap): `orchestrator-two-consumer-design-pre-process-post-process` — mirror the Phase-70 processor two-consumer pattern on the orchestrator side; closes the Phase-70-deferred `entryId`↔`messageId` threading (A1: processor result stamps `EntryId = output messageId`). Depends on Phase 70. **Numbering note:** `gsd-sdk query phase.add` auto-numbered it `63` (it keyed off the stale `STATE.milestone: v7.0.0` pointer → phases 59-62 → "next 63"), which collides with the archived v8.0.0 phases 63-68; manually corrected to **71** (max existing integer 70 + 1) and renamed the directory. The stale milestone pointer remains the root cause — to fix before the next milestone cycle.
@@ -1643,4 +1644,4 @@ Resume file: None
 
 **Previous Phase:** 11 (migrate-prometheus-and-elastic-containers-from-compose-stack) — 10/10 plans — verified 2026-05-28 (3 consecutive GREEN dotnet test runs at 142/142 facts each; byte-identical psql `\l` SHA-256 `0d98b0de…0aac127`; OBSERV-12 superseded; INFRA-06 amendment locked in)
 
-**Planned Phase:** 74 (reshape-business-metrics-into-a-uniform-two-counter-model) — 4 plans — 2026-06-18T05:50:14.355Z
+**Planned Phase:** 75 (recovery-verdict-per-execution-drop-tunable-constants) — 5 plans — 2026-07-15T11:03:42.879Z
