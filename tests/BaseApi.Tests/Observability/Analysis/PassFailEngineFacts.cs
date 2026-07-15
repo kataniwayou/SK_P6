@@ -337,6 +337,34 @@ public sealed class PassFailEngineFacts
     }
 
     [Fact]
+    public void KeeperReinject_VetoesRedisWipeTolerance_StalledBeforeRecovery_Yields_Fail()
+    {
+        // WR-01 (D75-5 veto): an incomplete run whose keeper outcome is "reinject" — HARD evidence the L2 data
+        // WAS recoverable and the keeper confirmed a re-send — MUST be a BINDING FAIL even when its timestamps
+        // satisfy the redis-wipe tolerance path (last hop < recovery, no first-hop-after-recovery). Without the
+        // veto this run would be falsely tolerated via redisWipeInFlight; with it, the reinject evidence wins and
+        // the recoverable-but-still-incomplete execution is a binding miss (Missing==1, Fail).
+        var stalled  = RunTrace.FromLabels("corr-2", "exec-2", Missing4Hops);
+        var recovery = DateTimeOffset.Parse("2026-06-18T10:00:30Z");
+        // Timestamps satisfy stalled-before-recovery (last hop < recovery) and NOT started-after-recovery —
+        // exactly the RedisWipe_StalledBeforeRecovery tolerance window, so the ONLY differentiator is the
+        // "reinject" keeper outcome vetoing it.
+        var lastHop  = new Dictionary<string, DateTimeOffset> { ["corr-2|exec-2"] = DateTimeOffset.Parse("2026-06-18T10:00:10Z") };
+        var firstHop = new Dictionary<string, DateTimeOffset> { ["corr-2|exec-2"] = DateTimeOffset.Parse("2026-06-18T10:00:05Z") };
+        var keeperOutcome = new Dictionary<string, string>(StringComparer.Ordinal) { ["corr-2|exec-2"] = "reinject" };
+        var snap = ConservingSnapshot(results: 9);
+
+        var report = new PassFailEngine().Analyze(new[] { stalled }, snap, "TEST-05",
+            recoveryUtc: recovery, firstHopUtcByExecution: firstHop, lastHopUtcByExecution: lastHop,
+            keeperOutcomeByExecution: keeperOutcome);
+
+        Assert.Equal(0, report.InFlightLoss);   // NOT tolerated — the reinject veto overrode the timestamp path
+        Assert.Equal(1, report.Missing);        // recoverable-but-lost → binding miss
+        Assert.Equal(Verdict.Fail, report.Verdict);
+        Assert.NotEmpty(report.MissingDetail);
+    }
+
+    [Fact]
     public void RemovedDedupCounters_HaveNoSnapshotField_AbsenceProvenByCompile()
     {
         // D-14 absence proof (compile-time): the three removed counters

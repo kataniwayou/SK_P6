@@ -142,6 +142,12 @@ public sealed class PassFailEngine
         //       which produce NO keeper drop log because a Redis exception routes to exhaustion, not a clean
         //       drop). Everything else recoverable-but-lost → binding miss. With recoveryUtc == null AND no
         //       keeper map, BOTH predicates are false so every incomplete run is a binding miss (unchanged).
+        // WR-01 VETO (D75-5 upheld): a keeper "reinject" outcome for the key is HARD evidence the L2 data WAS
+        //       recoverable and the keeper confirmed a re-send. That must ALWAYS override the redis-wipe timestamp
+        //       heuristic — a reinjected-but-still-incomplete execution is recoverable-but-lost → BINDING FAIL,
+        //       never tolerated by the (b) timestamp path. The veto only suppresses (b); it never affects the
+        //       keeper-clean-DROP path (a) (drop and reinject are mutually exclusive outcomes for one key, and
+        //       "reinject" wins any join tie — see AnalyzerE2ETests.BuildKeeperOutcomeMap).
         // D75-2: there is NO absolute in-flight-loss bound — the verdict never references a firing-rate proxy.
         // A fully-dead run (never started in ES) is invisible to either count.
         var firstHop = firstHopUtcByExecution ?? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
@@ -174,7 +180,11 @@ public sealed class PassFailEngine
 
             var keeperCleanDrop = keeperOutcome.TryGetValue(key, out var oc)
                 && oc.Equals("drop", StringComparison.Ordinal);
-            var redisWipeInFlight = stalledBeforeRecovery && !startedAfterRecovery;
+            // WR-01: a confirmed keeper "reinject" (data WAS recoverable) VETOES the redis-wipe timestamp
+            // tolerance — a reinjected-but-still-incomplete execution is recoverable-but-lost → binding miss.
+            var keeperReinject = keeperOutcome.TryGetValue(key, out var oc2)
+                && oc2.Equals("reinject", StringComparison.Ordinal);
+            var redisWipeInFlight = stalledBeforeRecovery && !startedAfterRecovery && !keeperReinject;
             var tolerated = keeperCleanDrop || redisWipeInFlight;
 
             if (tolerated)
