@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
-status: verifying
+status: milestone_complete
 stopped_at: Completed 77-06-PLAN.md
 last_updated: "2026-07-16T18:12:45.893Z"
 last_activity: 2026-07-16
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 0
   completed_plans: 0
-  percent: 0
+  percent: 25
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 77 (consistent-framework-logging-model-scope-carried-execution-i) — EXECUTING
-Current Plan: 1
+Phase: 77
+Current Plan: Not started
 Total Plans: 5
 Plan: 6 of 6
-Status: Phase complete — ready for verification
+Status: Milestone complete
 Last activity: 2026-07-16
 
 > Phase 75 Plan 04 — ✅ COMPLETE 2026-07-15 (Wave 2: the D75-4 LIVE join — the analyzer ES-queries the keeper reinject drop/success logs and feeds the per-`(corr,exec)` outcome into the classifier). **1 atomic feat commit** (`2aa63e5`): (1) `EsIndexNames.ReinjectOutcomeFieldPath = "attributes.ReinjectOutcome"` — DIRECT-path const (no `.keyword` trap), the Plan-02 keeper drop/reinject discriminator; (2) `BuildKeeperOutcomeSearchBody(windowStart, snapshot)` — a static raw-string `_search` (`size 2000`, sort asc) filtering `exists attributes.ReinjectOutcome` + the SAME `[windowStart, snapshot]` range as `BuildStepSearchBody` (only validated window timestamps interpolated — no injection surface, T-75-07); (3) `BuildKeeperOutcomeMap(hits)` — the defensive per-`(corr,exec)` map (`TryGetProperty` + `ValueKind==String`, skip odd-shaped `continue`, never throw — T-66-09) keyed `"corr|exec"` → `"drop"`/`"reinject"`, with **`"reinject"` winning any tie** (a recovered execution is never mistaken for a clean drop); (4) `TraceCohort` gained `KeeperOutcomeByExecution`, populated by reading keeper hits via `es.SearchAllHits(BuildKeeperOutcomeSearchBody(...))` over the same window (no new drain — keeper docs ride the same OTLP pipeline, `DrainMs=60_000` + poll-to-stable already covers the ~60s skew) and threaded through `BuildRunTraces` (kept IO-free); (5) `keeperOutcomeByExecution: cohort.KeeperOutcomeByExecution` wired into the `PassFailEngine().Analyze(...)` call — closing the D75-4 loop end-to-end on the RealStack path. Requirement **D75-4** (live-join half). **ES-read-only preserved** — the join comes SOLELY from keeper LOGS in ES; no `IDatabase`/`redis`/`StringLength` CALL (grep-verified — those tokens appear only in disclaiming doc-comments). **No deviations** — plan executed exactly as written. Verification: **Debug + Release 0-warning**; `*PassFailEngineFacts` + `*PassFailEngineValueChainFacts` + `*ReinjectConsumerFacts` **34/34 GREEN** (Plan 01 already proves the classifier semantics with synthetic keeper maps; Plan 02 proves the keeper emits the join fields). Full hermetic filter shows 272 pre-existing broker/Postgres/Redis/ES-connection failures (Docker-less sandbox, identical baseline to plans 01/02/03; 0 analyzer/keeper facts among them). **`AnalyzerE2ETests` is `Category=RealStack` (hermetic-excluded), so the fixture change is a build+compile gate here; the LIVE keeper ES-join surfacing (checkpoint:human-verify, gate=blocking) is DEFERRED-AUTOMATED** — Docker unavailable (precedent phases 68/73/74, 75-03/75-05); exact close steps (Open-Question-1 level-filter probe → `phase-65-up` rebuild → `phase-68-sweep` → recoverable-but-lost FAIL vs clean-drop tolerated) recorded in `deferred-items.md` under "DEFERRED: 75-04 live keeper ES-join verify". Summary: `.planning/phases/75-recovery-verdict-per-execution-drop-tunable-constants/75-04-SUMMARY.md` (Self-Check PASSED). **Phase 75 = 5/5 plans COMPLETE — ready for verification.**
@@ -756,7 +756,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 
 **Velocity:**
 
-- Total plans completed: 249
+- Total plans completed: 255
 - Average duration: —
 - Total execution time: —
 
@@ -834,6 +834,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | 73 | 4 | - | - |
 | 74 | 4 | - | - |
 | 75 | 5 | - | - |
+| 77 | 6 | - | - |
 
 **Recent Trend:**
 
