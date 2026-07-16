@@ -246,7 +246,10 @@ public sealed class AnalyzerE2ETests
             recoveryUtc: recoveryUtc,
             firstHopUtcByExecution: cohort.FirstHopUtcByExecution,
             lastHopUtcByExecution: cohort.LastHopUtcByExecution,
-            keeperOutcomeByExecution: cohort.KeeperOutcomeByExecution);
+            keeperOutcomeByExecution: cohort.KeeperOutcomeByExecution,
+            // Phase 76 ANL-02: the ES-derived FW-02 expected set gates stepId-keyed completeness (a dispatched-
+            // but-never-executed step is a binding miss — TEST-08 closed). Derived from ES records only (T-76-07).
+            expectedStepIdsByExecution: cohort.ExpectedStepIdsByExecution);
 
         // ── 8. WRITE-THEN-ASSERT (D-02 / OBS-04 / T-66-11) ───────────────────────────────────────────
         //    Serialize + write the JSON report FIRST so the artifact exists even on a red run, and the

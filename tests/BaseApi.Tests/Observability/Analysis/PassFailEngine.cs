@@ -45,35 +45,22 @@ namespace BaseApi.Tests.Observability.Analysis;
 /// </summary>
 public sealed class PassFailEngine
 {
-    /// <summary>
-    /// The 9 per-execution HOP labels (B→C→{D1→E1→F1, D2→E2→F2}→G), with the single shared convergent
-    /// terminal Step_G reachable from BOTH sinks (73, D-10). A COMPLETE per-(corr,exec) run's DISTINCT hop
-    /// set equals this exactly — Step_G logs TWICE per run (the per-arrival fan-in) but DISTINCT collapses it
-    /// to one.
-    /// <para>
-    /// Step_A is DELIBERATELY excluded: it is the SHARED Mode-2 entry/seed, logged ONCE per correlationId
-    /// with executionId=Guid.Empty (no per-execution log, no Produced value), so it is filtered out of the
-    /// per-execution Step_* cohort and NEVER appears in a per-(corr,exec) trace — verified LIVE (phase-73
-    /// harness: every Step_A hit surfaces with empty ExecutionId, while Step_B..Step_G carry minted
-    /// executionIds + Produced values). Step_A's correctness is proven via the value chain's seed (see
-    /// <see cref="ResolveSeed"/> / <see cref="PerHopOffset"/>, which already treat Step_A as the optional
-    /// offset-0 seed source). This REFINES D-10's "10-label DAG" to the per-execution completeness of its 9
-    /// observable hops; <see cref="IsComplete"/> tolerates Step_A's presence (synthetic facts pass it) or
-    /// absence (the live cohort) so the live and hermetic paths share one rule.
-    /// </para>
-    /// </summary>
-    private static readonly HashSet<string> HopLabels = new(StringComparer.Ordinal)
-    { "Step_B", "Step_C", "Step_D1", "Step_E1", "Step_F1", "Step_D2", "Step_E2", "Step_F2", "Step_G" };
+    // ── ANL-01 / D-15: the old StepLabel-keyed structural hop-set constant is DELETED (clean break). Structural
+    // completeness is now stepId-keyed (RunTrace.DistinctStepIds) against the ES-derived expected set (FW-02
+    // dispatch NextStepIds) — see the `ExpectedFor`/`RunComplete` locals in Analyze. The ONLY canonical hop
+    // set that survives is the value oracle's own `ExpectedHopOffset` (label→depth, KEPT per D-16), which the
+    // completeness fallback derives its legacy value-oracle-run shape from — never a second structural constant.
+
+    /// <summary>The empty stepId proven-set reused when a run has no orchestrator-redundancy evidence (ANL-03).</summary>
+    private static readonly IReadOnlySet<string> EmptyStepSet = new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>
-    /// A run is COMPLETE when its distinct labels — IGNORING the optional shared <c>Step_A</c> entry — are
-    /// exactly the 9 per-execution <see cref="HopLabels"/>. Stripping Step_A before the equality preserves the
-    /// strict "no missing hop, no unexpected label" check while tolerating Step_A being present (synthetic
-    /// facts include it) or absent (the live per-execution cohort never carries it).
+    /// D-09: true iff the run is the Mode-2 ENTRY MARKER (ExecutionId == the all-zeros sentinel) — counted as
+    /// entry-ran but EXCLUDED from every <c>(corr, exec)</c> expected/complete set (it belongs to neither
+    /// execution). Generalizes the old "structural hop-set excludes Step_A" special case to an executionId rule.
     /// </summary>
-    private static bool IsComplete(RunTrace r)
-        => r.DistinctLabels.Where(l => !l.Equals("Step_A", StringComparison.Ordinal))
-            .ToHashSet(StringComparer.Ordinal).SetEquals(HopLabels);
+    private static bool IsEntryMarker(RunTrace r)
+        => Guid.TryParse(r.ExecutionId, out var g) && g == Guid.Empty;
 
     /// <summary>
     /// Score a set of per-correlationId traces against the live Prometheus counter deltas, producing
@@ -108,6 +95,24 @@ public sealed class PassFailEngine
     /// fixture (Plan 03/04) passes the real map, the hermetic facts pass synthetic. Default null ⇒ empty map
     /// (keeps existing callers compiling — the redis-wipe timestamp path alone then governs tolerance, unchanged).
     /// </param>
+    /// <param name="expectedStepIdsByExecution">
+    /// STRUCTURAL expected set (Phase 76, ANL-02): per-<c>(corr, exec)</c> set of stepIds the orchestrator FW-02
+    /// fan-out records dispatched, keyed <c>"correlationId|executionId"</c>. A run is COMPLETE when its
+    /// <see cref="RunTrace.DistinctStepIds"/> covers its expected set; a dispatched stepId with no matching
+    /// processor record is a binding miss (dispatched-but-never-executed — TEST-08 closes). Derived from ES
+    /// records ONLY (no Postgres/graph — T-76-07). Default null ⇒ the per-run fallback: the value oracle's
+    /// canonical hop set for a legacy label-carrying run, else the union of observed stepIds across the cohort
+    /// (keeps existing non-ANL-02 callers compiling + green).
+    /// </param>
+    /// <param name="orchestratorConsumedStepIdsByExecution">
+    /// FRAMEWORK-REDUNDANCY evidence (Phase 76, ANL-03): per-<c>(corr, exec)</c> set of stepIds the orchestrator
+    /// independently witnessed as having-run (its output EntryId M_N was consumed by a fan-out/terminal record),
+    /// keyed <c>"correlationId|executionId"</c>. A run missing an expected stepId's processor record but whose
+    /// EVERY missing stepId is in this set is reconciled as a NON-binding telemetry gap — WITH NO seed oracle
+    /// (the ANL-03 acceptance). A stepId absent from BOTH the processor records AND this set stays a binding
+    /// miss. Default null ⇒ no redundancy evidence (a dropped record is a binding miss unless another tolerance
+    /// path applies).
+    /// </param>
     public AnalyzerReport Analyze(IReadOnlyList<RunTrace> runs, PromCounterSnapshot prom,
                                   string scenarioId,
                                   IReadOnlyDictionary<string, double>? tripDurationMsByExecution = null,
@@ -118,19 +123,61 @@ public sealed class PassFailEngine
                                   DateTimeOffset? recoveryUtc = null,
                                   IReadOnlyDictionary<string, DateTimeOffset>? firstHopUtcByExecution = null,
                                   IReadOnlyDictionary<string, DateTimeOffset>? lastHopUtcByExecution = null,
-                                  IReadOnlyDictionary<string, string>? keeperOutcomeByExecution = null)
+                                  IReadOnlyDictionary<string, string>? keeperOutcomeByExecution = null,
+                                  IReadOnlyDictionary<string, IReadOnlySet<string>>? expectedStepIdsByExecution = null,
+                                  IReadOnlyDictionary<string, IReadOnlySet<string>>? orchestratorConsumedStepIdsByExecution = null)
     {
-        // ── ES-BINDING ARBITER (67-03) ────────────────────────────────────────────────────────────
+        // ── ES-BINDING ARBITER (67-03) + STEPID-KEYED STRUCTURAL COMPLETENESS (Phase 76, ANL-01/02) ──────
 
-        // STARTED (denominator): distinct (correlationId, executionId) instances with ≥1 Step_* log = one
-        // RunTrace each (each spawned execution is its own run). D75-1 LOCKED: the per-(corr,exec) started
-        // denominator is runs.Count — the verdict is founded on it, never on any absolute count or window.
-        var startedRuns = runs.Count;
+        // D-09: an entry MARKER (ExecutionId == Guid.Empty) is counted as entry-ran but is NOT a member of any
+        // (corr, exec) run — it belongs to neither execution's expected/complete set. Exclude it from scoring.
+        var scored = runs.Where(r => !IsEntryMarker(r)).ToList();
 
-        // COMPLETE (OBS-01): the 9 per-execution hops (both sinks + the convergent terminal Step_G) all
-        // present, the shared Step_A entry ignored (IsComplete). Step_G logs ×2 per run but DISTINCT
-        // collapses it to one (73, D-10).
-        var complete = runs.Where(IsComplete).ToList();
+        // STARTED (denominator): distinct (correlationId, executionId) instances with ≥1 framework hop record =
+        // one RunTrace each (each spawned execution is its own run). D75-1 LOCKED: the verdict is founded on this
+        // per-(corr,exec) started denominator, never on any absolute count or window.
+        var startedRuns = scored.Count;
+
+        // ── EXPECTED-SET RESOLUTION (ANL-02) ──────────────────────────────────────────────────────────────
+        // Structural completeness is stepId-keyed against the per-(corr,exec) EXPECTED set. Priority:
+        //   1. explicit ES-derived FW-02 dispatch set (expectedStepIdsByExecution) — the ANL-02 binding path;
+        //   2. else the value oracle's canonical hop set (ExpectedHopOffset, D-16) for a legacy label-carrying
+        //      run — so the value-oracle facts keep computing completeness without a structural constant;
+        //   3. else the union of observed stepIds across the whole cohort (framework-only fallback).
+        var expectedByExec = expectedStepIdsByExecution
+            ?? new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal);
+        var orchestratorConsumed = orchestratorConsumedStepIdsByExecution
+            ?? new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal);
+
+        var observedUnion = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var r in scored) observedUnion.UnionWith(r.DistinctStepIds);
+
+        // The value oracle's canonical hop set: ExpectedHopOffset keys with a non-zero offset (offset 0 is the
+        // Step_A seed/entry, excluded — the D-09 entry-marker analog on the label axis). Derived from the KEPT
+        // ExpectedHopOffset (D-16), NOT a standalone structural hop-set constant (deleted per D-15).
+        var valueOracleHopSet = ExpectedHopOffset.Where(kv => kv.Value != 0)
+            .Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal);
+
+        IReadOnlySet<string> ExpectedFor(RunTrace r)
+        {
+            var k = $"{r.CorrelationId}|{r.ExecutionId}";
+            if (expectedByExec.TryGetValue(k, out var explicitSet)) return explicitSet;
+            if (r.DistinctLabels.Count > 0) return valueOracleHopSet;   // legacy value-oracle completeness
+            return observedUnion;                                       // framework-only fallback
+        }
+
+        // MISSING stepIds for a run: expected stepIds absent from the observed DistinctStepIds (ANL-02).
+        List<string> MissingStepIds(RunTrace r)
+        {
+            var expected = ExpectedFor(r);
+            return expected.Where(s => !r.DistinctStepIds.Contains(s)).ToList();
+        }
+
+        bool RunComplete(RunTrace r) => MissingStepIds(r).Count == 0;
+
+        // COMPLETE (ANL-01): a scored run whose observed stepId set covers its expected set. Duplicate arrivals
+        // (the convergent terminal fans in ×2) collapse in DistinctStepIds, exactly as the old label rule did.
+        var complete = scored.Where(RunComplete).ToList();
 
         // ── B-CRITERION: classify started-but-incomplete runs by per-(corr,exec) RECOVERABILITY (75, D75-3) ──
         // MISSING (OBS-02) is the BINDING subset of started-but-incomplete runs: those that were RECOVERABLE-
@@ -154,13 +201,14 @@ public sealed class PassFailEngine
         var lastHop  = lastHopUtcByExecution  ?? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var keeperOutcome = keeperOutcomeByExecution ?? new Dictionary<string, string>(StringComparer.Ordinal);
 
-        // TELEMETRY-GAP RECONCILIATION gate (trace-export hardening): only reclassify trace-incomplete runs as
-        // provably-complete when a trusted seed oracle is supplied (the live fixture / value-chain facts) —
-        // mirrors the WR-02 oracle gate. Legacy completeness-only callers (no oracle) keep the strict
-        // all-9-labels behaviour byte-for-byte.
-        var valueOracleSupplied = seedsByExecution is not null;
+        // VALUE-ORACLE APPLICABILITY (SMP-01 degrade rule): the value chain is APPLICABLE only when a NON-EMPTY
+        // seed oracle is supplied. With no StepLabel/Produced/seed present (a processor with zero author logs),
+        // the oracle is genuinely ABSENT ⇒ the value-chain check degrades to NOT-APPLICABLE, never FAIL. (An
+        // EMPTY-but-non-null map — the live fixture always passes a dict — no longer counts as "supplied", so a
+        // sample that logged no Produced values cannot manufacture a WR-02 vacuous-green FAIL.)
+        var valueOracleSupplied = seedsByExecution is { Count: > 0 };
 
-        var incomplete = runs.Where(r => !IsComplete(r)).ToList();
+        var incomplete = scored.Where(r => !RunComplete(r)).ToList();
         var inFlightLoss = 0;
         var bindingMissing = 0;
         var telemetryGap = 0;
@@ -181,13 +229,15 @@ public sealed class PassFailEngine
         foreach (var r in incomplete)
         {
             var key = $"{r.CorrelationId}|{r.ExecutionId}";
+            var missingSteps = MissingStepIds(r);
+            var missingList = string.Join(",", missingSteps.OrderBy(s => s, StringComparer.Ordinal));
 
-            // ── TELEMETRY-GAP RECONCILIATION (checked FIRST — strongest evidence) ──
+            // ── 1. VALUE-ORACLE TELEMETRY-GAP RECONCILIATION (checked FIRST — strongest evidence) ──
             // A trace-incomplete run whose SURFACED values still form a valid deterministic chain culminating
             // in the terminal Step_G == seed+6 has PROVABLY completed: the terminal value (and every present
-            // downstream value) is unreachable unless every missing-LABEL hop actually ran, so the absent
-            // labels are dropped OTLP trace records, NOT lost work. Treat as a NON-binding telemetry gap, not a
-            // miss. Gated on a supplied value oracle so the seed is trusted (not a defaulted 0) and so legacy
+            // downstream value) is unreachable unless every missing hop actually ran, so the absent framework
+            // records are dropped OTLP records, NOT lost work. Treat as a NON-binding telemetry gap, not a miss.
+            // Gated on a supplied value oracle so the seed is trusted (not a defaulted 0) and so legacy
             // completeness-only callers are unaffected. A terminal-only survivor with a WRONG seed fails the
             // Step_G==seed+6 check and drops through to the normal loss classification below.
             var reconSeed = ResolveSeed(r, seedsByExecution);
@@ -197,14 +247,29 @@ public sealed class PassFailEngine
                 && CheckValueChain(r, reconSeed, out _))
             {
                 telemetryGap++;
-                var present = r.DistinctLabels
-                    .Where(l => !l.Equals("Step_A", StringComparison.Ordinal))
-                    .ToHashSet(StringComparer.Ordinal);
-                var missingLabels = HopLabels.Where(l => !present.Contains(l)).OrderBy(l => l, StringComparer.Ordinal);
                 telemetryGapDetail.Add(
-                    $"[{key}] trace-incomplete (missing {string.Join(",", missingLabels)}) but terminal " +
+                    $"[{key}] trace-incomplete (missing {missingList}) but terminal " +
                     $"Step_G=={reconSeed + ExpectedHopOffset["Step_G"]} with intact value chain — dropped " +
                     "hop-LOG(s) under load, not lost work (telemetry gap, non-binding).");
+                continue;
+            }
+
+            // ── 2. FRAMEWORK-REDUNDANCY RECONCILIATION (ANL-03, NO seed oracle required) ──
+            // A missing expected stepId whose output EntryId (M_N) was consumed by an orchestrator FW-02
+            // fan-out/terminal record PROVABLY ran — the orchestrator independently witnessed its output. When
+            // EVERY missing stepId is so proven, the run's absent processor records are dropped telemetry, not
+            // lost work: a NON-binding telemetry gap. This path needs NO value oracle (the ANL-03 acceptance) —
+            // it is pure framework redundancy. A stepId missing from BOTH the processor records AND this proven
+            // set drops through to the binding-miss classification below.
+            var proven = orchestratorConsumed.TryGetValue(key, out var pset)
+                ? pset : (IReadOnlySet<string>)EmptyStepSet;
+            if (missingSteps.Count > 0 && missingSteps.All(proven.Contains))
+            {
+                telemetryGap++;
+                telemetryGapDetail.Add(
+                    $"[{key}] trace-incomplete (missing {missingList}) but every missing hop's output EntryId " +
+                    "was consumed by an orchestrator fan-out/terminal record — framework-redundancy proven " +
+                    "(dropped processor LOG, not lost work; telemetry gap, non-binding).");
                 continue;
             }
 
@@ -253,7 +318,7 @@ public sealed class PassFailEngine
         // so the legitimate Step_G ×2 fan-in does NOT trip the rule WHILE every other duplicate AND a Step_G
         // count ≠ 2 (1 = missing arrival, 3+ = same-entryId redelivery) still fail closed. No live dedupe counter
         // can corroborate a redelivery (dormant) → un-corroboratable → fail-closed.
-        var duplicates = runs.Where(r => r.HasIllegitimateDuplicate).ToList();
+        var duplicates = scored.Where(r => r.HasIllegitimateDuplicate).ToList();
         var dupFail = duplicates.Count > 0;
 
         // VALUE-CHAIN ASSERTION (NEW, 73, D-11, BINDING): each STARTED run's surfaced values must follow the
@@ -281,7 +346,7 @@ public sealed class PassFailEngine
         // valueOracleSupplied is defined above (before the classification loop) and reused here.
         var completeRunsWithValues = 0;
 
-        foreach (var run in runs)
+        foreach (var run in scored)
         {
             // A tolerated in-flight loss has a partial-by-design trace (stalled before recovery); its chain is
             // expected to be incomplete, so it is NOT value-chain-checked (its bounded loss already gates the
@@ -298,7 +363,7 @@ public sealed class PassFailEngine
                 continue; // no surfaced values → checked for vacuous-pass below when a value oracle is supplied
             }
 
-            if (IsComplete(run))
+            if (RunComplete(run))
             {
                 completeRunsWithValues++;
             }
@@ -316,6 +381,10 @@ public sealed class PassFailEngine
         // terminal cohort — report it UNVERIFIED (fail) rather than a silent OK. The most likely live cause is
         // the ES mapping for attributes.Produced being absent/odd-shaped so TryReadProduced returns false for
         // every hit, collapsing every run's value map to empty.
+        // SMP-01 degrade: `valueOracleSupplied` is now non-empty-seed-gated (see its definition), so a
+        // framework-records-only cohort (no Produced ⇒ empty seed map ⇒ oracle NOT supplied) skips this guard
+        // entirely — value chain N/A, never FAIL. A genuinely-supplied oracle whose COMPLETE cohort surfaced no
+        // value is still the WR-02 unverified-FAIL (broken attributes.Produced mapping).
         if (valueOracleSupplied && complete.Count > 0 && completeRunsWithValues == 0)
         {
             valueChainOk = false;

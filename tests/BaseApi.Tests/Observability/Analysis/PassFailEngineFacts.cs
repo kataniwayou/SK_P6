@@ -364,6 +364,107 @@ public sealed class PassFailEngineFacts
         Assert.NotEmpty(report.MissingDetail);
     }
 
+    // ── Phase 76 (ANL-01/02/03, SMP-01): the STEPID-KEYED structural path — synthetic stepId sets, ZERO
+    //    Step_* labels. These prove the re-keyed completeness / ES-derived expected set / framework-redundancy
+    //    reconciliation directly, independent of the value-oracle label facts above. ────────────────────────
+
+    // The 9 per-execution HOP stepIds (the convergent terminal `hop-g` fans in ×2 as RAW stepIds → DISTINCT 9).
+    // Deliberately NOT `Step_*` — the structural path is label-free (D-15).
+    private static readonly string[] FullHopStepIds =
+        { "hop-b", "hop-c", "hop-d1", "hop-e1", "hop-f1", "hop-d2", "hop-e2", "hop-f2", "hop-g", "hop-g" };
+    private const string ConvergentStepId = "hop-g";
+
+    /// <summary>The DISTINCT 9-hop stepId expected set (the convergent terminal collapsed to one).</summary>
+    private static IReadOnlySet<string> DistinctHopStepIds() =>
+        new HashSet<string>(FullHopStepIds, StringComparer.Ordinal);
+
+    /// <summary>Build a per-(corr,exec) ES-derived expected-set map keyed "corr|exec".</summary>
+    private static IReadOnlyDictionary<string, IReadOnlySet<string>> Expect(
+        params (string key, IReadOnlySet<string> steps)[] entries) =>
+        entries.ToDictionary(e => e.key, e => e.steps, StringComparer.Ordinal);
+
+    [Fact]
+    public void PassFailEngine_StepIdCompleteness_AllRunsCover_Yields_Pass()
+    {
+        // ANL-01: completeness is stepId-keyed (DistinctStepIds) against the ES-derived expected set — NO
+        // Step_* label present anywhere. Two runs, each covering the 9-hop expected set (hop-g ×2 legitimate
+        // fan-in) → complete → Pass.
+        var runs = new[]
+        {
+            RunTrace.FromStepIds("corr-1", "exec-1", FullHopStepIds, convergentStepId: ConvergentStepId),
+            RunTrace.FromStepIds("corr-2", "exec-2", FullHopStepIds, convergentStepId: ConvergentStepId),
+        };
+        var expected = Expect(
+            ("corr-1|exec-1", DistinctHopStepIds()),
+            ("corr-2|exec-2", DistinctHopStepIds()));
+
+        var report = new PassFailEngine().Analyze(runs, CleanSnapshot(), "unit-stepid",
+            expectedStepIdsByExecution: expected);
+
+        Assert.Equal(2, report.StartedRuns);
+        Assert.Equal(2, report.CompleteRuns);
+        Assert.Equal(0, report.Missing);
+        Assert.Equal(Verdict.Pass, report.Verdict);
+    }
+
+    [Fact]
+    public void PassFailEngine_ExpectedSet_Test08_DispatchedButNeverExecuted_Yields_Fail()
+    {
+        // ANL-02 (closes TEST-08): a stepId present in the ES-derived expected set (the orchestrator FW-02
+        // dispatched it) but ABSENT from the observed processor records is a binding miss — dispatched-but-
+        // never-executed. Observed drops hop-f2; expected still carries all 9 → Missing 1 → Fail.
+        var observed = FullHopStepIds.Where(s => s != "hop-f2").ToArray();
+        var run = RunTrace.FromStepIds("corr-1", "exec-1", observed, convergentStepId: ConvergentStepId);
+        var expected = Expect(("corr-1|exec-1", DistinctHopStepIds()));
+
+        var report = new PassFailEngine().Analyze(new[] { run }, CleanSnapshot(), "unit-test08",
+            expectedStepIdsByExecution: expected);
+
+        Assert.Equal(1, report.StartedRuns);
+        Assert.Equal(0, report.CompleteRuns);
+        Assert.Equal(1, report.Missing);                 // dispatched-but-never-executed → binding miss
+        Assert.Equal(Verdict.Fail, report.Verdict);
+        Assert.NotEmpty(report.MissingDetail);
+    }
+
+    [Fact]
+    public void PassFailEngine_EntryMarker_EmptyExecutionId_Excluded_From_Scoring_D09()
+    {
+        // D-09: a framework record with ExecutionId == Guid.Empty is an ENTRY MARKER — counted as entry-ran,
+        // EXCLUDED from every (corr,exec) expected/complete set. Here it would be "incomplete" (only hop-b) but
+        // must NOT be scored as a started run or a miss; the one real complete run alone drives the verdict.
+        var marker = RunTrace.FromStepIds("corr-1", Guid.Empty.ToString(), new[] { "hop-b" },
+            convergentStepId: ConvergentStepId);
+        var real = RunTrace.FromStepIds("corr-1", "exec-1", FullHopStepIds, convergentStepId: ConvergentStepId);
+        var expected = Expect(("corr-1|exec-1", DistinctHopStepIds()));
+
+        var report = new PassFailEngine().Analyze(new[] { marker, real }, CleanSnapshot(), "unit-d09",
+            expectedStepIdsByExecution: expected);
+
+        Assert.Equal(1, report.StartedRuns);             // the marker is NOT a started run
+        Assert.Equal(1, report.CompleteRuns);
+        Assert.Equal(0, report.Missing);                 // the marker is NOT a miss
+        Assert.Equal(Verdict.Pass, report.Verdict);
+    }
+
+    [Fact]
+    public void PassFailEngine_OracleAbsent_FrameworkRecordsOnly_ValueChainNotApplicable_Yields_Pass()
+    {
+        // SMP-01: with framework StepId records ONLY (no StepLabel/Received/Produced, no seed oracle), the
+        // stepId completeness/expected-set still computes correctly, and the value chain degrades to
+        // NOT-APPLICABLE (ValueChainOk stays true) — never FAIL. A complete cohort with zero author values
+        // yields Pass.
+        var run = RunTrace.FromStepIds("corr-1", "exec-1", FullHopStepIds, convergentStepId: ConvergentStepId);
+        var expected = Expect(("corr-1|exec-1", DistinctHopStepIds()));
+
+        var report = new PassFailEngine().Analyze(new[] { run }, CleanSnapshot(), "unit-oracle-absent",
+            expectedStepIdsByExecution: expected);   // seedsByExecution NULL ⇒ value chain N/A
+
+        Assert.Equal(1, report.CompleteRuns);
+        Assert.True(report.ValueChainOk);                // N/A treated as OK, NOT a vacuous-green FAIL
+        Assert.Equal(Verdict.Pass, report.Verdict);
+    }
+
     [Fact]
     public void RemovedDedupCounters_HaveNoSnapshotField_AbsenceProvenByCompile()
     {
