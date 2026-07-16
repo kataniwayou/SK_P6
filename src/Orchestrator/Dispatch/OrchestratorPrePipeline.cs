@@ -73,8 +73,7 @@ public sealed class OrchestratorPrePipeline(
         if (!store.TryGet(m.WorkflowId, out var wf) || !wf.Steps.TryGetValue(m.StepId, out var completed))
         {
             logger.LogInformation(
-                "Trip ended (completed-unresolved): no L1 entry for ({WorkflowId}, {StepId}) — acking (business)",
-                m.WorkflowId, m.StepId);
+                "Trip ended (completed-unresolved): no L1 entry — acking (business)");
             metrics.StepUnresolved.Add(1, new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")));
             return;
         }
@@ -93,19 +92,19 @@ public sealed class OrchestratorPrePipeline(
             try
             {
                 logger.LogInformation(
-                    "Trip ended (completed-terminal): no matching successor for ({WorkflowId}, {StepId}) outcome={Outcome} — acking (business)",
-                    m.WorkflowId, m.StepId, outcome);
+                    "Trip ended (completed-terminal): no matching successor outcome={Outcome} — acking (business)",
+                    outcome);
             }
             catch { /* observability must never fail the hop */ }
 
-            // FW-02 / D-12 / D-13 (Option C, ids only, no outbound MessageId): the terminal-reached causal-edge
-            // record — the orchestrator resolved NO next steps for this (corr,exec). Step_G fans in twice, so
-            // this fires ×2 per (corr,exec), distinguished by the inbound m.EntryId (= M_N).
+            // FW-02 / D1 (Phase 77): the terminal-reached causal-edge marker — the orchestrator resolved NO next
+            // steps for this (corr,exec). The five Tier-1 ids (CorrelationId/ExecutionId/WorkflowId/EntryId/StepId)
+            // now arrive via the ambient MEL execution scope (attributes.*), NOT the template — this is the bare
+            // marker. Step_G fans in twice, so it still fires ×2 per (corr,exec), distinguished by the scope's
+            // EntryId (= M_N). The Phase-78 analyzer adapts its fan-in/terminal parsing to the attribute-only shape.
             try
             {
-                logger.LogInformation(
-                    "terminal reached {CorrelationId} {ExecutionId} {WorkflowId} {EntryId} {StepId}",
-                    m.CorrelationId, m.ExecutionId, m.WorkflowId, m.EntryId, m.StepId);
+                logger.LogInformation("terminal reached");
             }
             catch { /* observability must never fail the hop */ }
             return;
@@ -132,8 +131,7 @@ public sealed class OrchestratorPrePipeline(
         if (read.Value is null)   // only a truly-absent key is the idempotent skip (a present "" relocates)
         {
             logger.LogInformation(
-                "Trip ended (clean-absent out: blob): no out: blob for ({WorkflowId}, {StepId}) — acking idempotent skip",
-                m.WorkflowId, m.StepId);
+                "Trip ended (clean-absent out: blob): no out: blob — acking idempotent skip");
             return;   // clean-absent -> idempotent skip: NO fan-out, NO keeper, NO delete (D-10)
         }
         var relocated = read.Value!;
@@ -184,8 +182,8 @@ public sealed class OrchestratorPrePipeline(
         foreach (var unresolvedId in selection.UnresolvedIds)
         {
             logger.LogInformation(
-                "Dangling next-step id {NextStepId} for ({WorkflowId}, {StepId}) — skipping (business)",
-                unresolvedId, m.WorkflowId, m.StepId);
+                "Dangling next-step id {NextStepId} — skipping (business)",
+                unresolvedId);
             metrics.StepUnresolved.Add(1, new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")));
             // IN-02: graceful business skip — never throw (D-02 / T-72-08). No explicit `continue` needed:
             // this is the last statement of the loop body, so the iteration falls through naturally.
