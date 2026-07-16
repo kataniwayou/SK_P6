@@ -781,7 +781,7 @@ Plans:
 **Plans:** 5 plans
 
 Plans:
-- [ ] 76-01-PLAN.md — Processor per-hop framework log (FW-01/03/04) + OutputTail resolved-outcome (D-18)
+- [x] 76-01-PLAN.md — Processor per-hop framework log (FW-01/03/04) + OutputTail resolved-outcome (D-18) [wave 1] ✅ 2026-07-16 (7ad4086, 08c968f, 49caf17, b93d5e1) — OutputTail.RunAsync → (bool proceed, StepOutcome resolved); ProcessorPipeline.LogHopExecuted guarded placeholder-only Information record at the 5 emit branches (Failed/Cancelled/Completed, D-18 resolved outcome, D-09 explicit empty-ExecutionId entry marker), zero on clean-absent/reinject/Processing; FW-03 grep-clean + sentinel-through-blob; FW-04 ThrowingLogger outcome-parity + explicit logs OTLP ExportProcessorType.Batch; PerHop 11/11 + NoPayload 2/2 + NonBlocking 2/2 + OutputTail 6/6 GREEN, 0-warning Debug+Release
 - [ ] 76-02-PLAN.md — Orchestrator fan-out + terminal-reached records (FW-02, D-11 Option C/D-12/D-13)
 - [ ] 76-03-PLAN.md — Analyzer structural re-key to stepId + ES expected-set + framework-redundancy reconciliation (ANL-01/02/03, SMP-01)
 - [ ] 76-04-PLAN.md — Three-class verdict + metric-gate inversion + exit-2 harness/sweep plumbing (ANL-04/05)
