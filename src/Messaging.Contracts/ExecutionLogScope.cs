@@ -21,15 +21,26 @@ public static class ExecutionLogScope
     /// filter does NOT fire on <c>Fault&lt;T&gt;</c> (D-07). Byte-identical skip rules: each Guid is
     /// skipped when <c>Guid.Empty</c>, the Guid EntryId when it is the source-step sentinel
     /// (<see cref="SourceStep.IsSource"/>, D-07 — never inline <c>== Guid.Empty</c>); no CorrelationId key.
+    /// <para>Both overloads share ONE skip-rule implementation: the <see cref="IExecutionCorrelated"/>
+    /// form DELEGATES to the loose-id positional form. The Keeper recovery consumers hold the five ids
+    /// but are NOT <see cref="IExecutionCorrelated"/>, so they call the positional overload directly
+    /// (D2/LOG-02) to build the identical scope.</para>
     /// </summary>
     public static Dictionary<string, object> BuildState(IExecutionCorrelated ec)
+        => BuildState(ec.WorkflowId, ec.StepId, ec.ProcessorId, ec.ExecutionId, ec.EntryId);
+
+    /// <summary>Loose-id overload for callers that hold the five ids but are not IExecutionCorrelated
+    /// (the Keeper recovery consumers — D2/LOG-02). Byte-identical skip rules: each Guid skipped when
+    /// Guid.Empty; the EntryId skipped via SourceStep.IsSource (never inline == Guid.Empty, D-07).</summary>
+    public static Dictionary<string, object> BuildState(
+        Guid workflowId, Guid stepId, Guid processorId, Guid executionId, Guid entryId)
     {
         var state = new Dictionary<string, object>();
-        if (ec.WorkflowId  != Guid.Empty) state[WorkflowId]  = ec.WorkflowId.ToString();
-        if (ec.StepId      != Guid.Empty) state[StepId]      = ec.StepId.ToString();
-        if (ec.ProcessorId != Guid.Empty) state[ProcessorId] = ec.ProcessorId.ToString();
-        if (ec.ExecutionId != Guid.Empty) state[ExecutionId] = ec.ExecutionId.ToString();
-        if (!SourceStep.IsSource(ec.EntryId)) state[EntryId] = ec.EntryId.ToString();
+        if (workflowId  != Guid.Empty) state[WorkflowId]  = workflowId.ToString();
+        if (stepId      != Guid.Empty) state[StepId]      = stepId.ToString();
+        if (processorId != Guid.Empty) state[ProcessorId] = processorId.ToString();
+        if (executionId != Guid.Empty) state[ExecutionId] = executionId.ToString();
+        if (!SourceStep.IsSource(entryId)) state[EntryId] = entryId.ToString();
         return state;
     }
 }
