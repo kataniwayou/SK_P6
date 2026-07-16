@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 76-03-PLAN.md
-last_updated: "2026-07-16T10:20:50.717Z"
+stopped_at: Completed 76-04-PLAN.md
+last_updated: "2026-07-16T10:52:02.944Z"
 last_activity: 2026-07-16
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove per
 Phase: 76 (framework-emitted-per-hop-execution-logs-keyed-by-stepid-dec) — EXECUTING
 Current Plan: 1
 Total Plans: 5
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-07-16
 
@@ -1063,6 +1063,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 76 P01 | 25min | 3 tasks | 9 files |
 | Phase 76 P02 | 5min | 3 tasks | 3 files |
 | Phase 76 P03 | 45min | 3 tasks | 5 files |
+| Phase 76 P04 | 23min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1557,6 +1558,8 @@ Recent decisions affecting current work:
 - 76-03: analyzer structural completeness re-keyed onto attributes.StepId (RunTrace.DistinctStepIds); HopLabels deleted (ANL-01/D-15, grep-clean)
 - 76-03: expected set is ES-derived from FW-02 NextStepId records; dispatched-but-never-executed -> binding Fail (ANL-02, TEST-08 closed); no Postgres/graph on the analyzer path
 - 76-03: value-oracle completeness fallback derives from the KEPT ExpectedHopOffset (not a new constant) so PassFailEngineValueChainFacts stay green unchanged; SMP-01 gated on non-empty seed map
+- 76-04: Verdict gained a third class Inconclusive; the verdict splits on evidence sufficiency (trace-dark + self-consistent conservation → Inconclusive regardless of metricGateOk) not severity
+- 76-04: exit-code resolution factored into dot-sourceable scripts/lib/exit-code-resolution.ps1 (Inconclusive→2, sweep-fatal, no auto-retry) proven hermetically before the live gate
 
 ### Roadmap Milestone Log
 
@@ -1665,8 +1668,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-16T10:20:42.293Z
-Stopped at: Completed 76-03-PLAN.md
+Last session: 2026-07-16T10:51:55.284Z
+Stopped at: Completed 76-04-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
