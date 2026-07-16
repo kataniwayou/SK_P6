@@ -7,6 +7,8 @@ using MassTransit;                        // ISendEndpointProvider
 using Messaging.Contracts;
 using Messaging.Contracts.Configuration; // RetryOptions
 using Messaging.Contracts.Projections;   // L2ProjectionKeys
+using Microsoft.Extensions.Logging;              // ILogger (D3/LOG-03 result-sent record)
+using Microsoft.Extensions.Logging.Abstractions; // NullLogger (optional-logger default)
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
@@ -32,8 +34,15 @@ public sealed class OutputTail(
     ISendEndpointProvider sendProvider,
     IOptions<RetryOptions> retryOptions,
     IOptions<ProcessorLivenessOptions> livenessOptions,
-    ProcessorMetrics metrics)
+    ProcessorMetrics metrics,
+    ILogger<OutputTail>? logger = null)
 {
+    // D3/LOG-03: the effective framework logger for the result-sent record. The ctor param is OPTIONAL
+    // (defaults to NullLogger) so every existing `new OutputTail(redis, context, send, retry, options, metrics)`
+    // call — eight hermetic test sites — still compiles unchanged, while production DI (AddScoped<OutputTail>())
+    // fills the real ILogger<OutputTail>. (The primary-ctor param `logger` is in scope for this field initializer.)
+    private readonly ILogger<OutputTail> _log = logger ?? NullLogger<OutputTail>.Instance;
+
     /// <summary>D-10: the jittered <c>random[ExecutionDataTtl, 2×ExecutionDataTtl]</c> TTL carried on the
     /// L2[messageId] write. IN-04: the POLICY now lives in <see cref="L2ProjectionKeys.OutputDataTtl"/> (the
     /// single source of truth shared with the keeper INJECT path); this only supplies the floor from options.</summary>
@@ -78,7 +87,12 @@ public sealed class OutputTail(
             }
         }
 
-        await SendResult(BuildStep(dr, result), limit, ct);   // send-exhaust → throw → broker redelivery
+        var sentMessageId = await SendResult(BuildStep(dr, result), limit, ct);   // send-exhaust → throw → broker redelivery
+        // D3/LOG-03: the send side now carries its OUTBOUND delivery-unit id (Tier-2 {MessageId}) + the resolved
+        // {Outcome} (Tier-3), symmetric with the consume side's `hop executed {MessageId}`. IDs/outcome ONLY —
+        // never dr.Data/payload (FW-03). FW-04: observability must never fail or delay the send, hence the guard.
+        try { _log.LogInformation("result sent {MessageId} {Outcome}", sentMessageId, result.ToString()); }
+        catch { /* FW-04: a throwing/blocking logger cannot fail or delay the send */ }
         return (true, result);   // D-18: the true terminal outcome the pipeline logs on the per-hop record
     }
 
@@ -116,19 +130,28 @@ public sealed class OutputTail(
         };
 
     // ---- Send owners: copied from ProcessorPipeline.SendResult/SendKeeper (object-cast, throw-on-exhaust,
-    //      Phase-74 metrics.MessagesSent tag). The inline/Post send does NOT override the envelope MessageId —
-    //      the inbound envelope already carries it on the Pre path, and Post re-emits to the orchestrator on the
-    //      Result queue (parity with the existing SendResult). The keeper INJECT applies the override. ----
+    //      Phase-74 metrics.MessagesSent tag). D3/LOG-03: SendResult now MINTS + STAMPS + RETURNS its outbound
+    //      envelope MessageId (Tier-2) via the ctx => ctx.MessageId override idiom, so RunAsync can emit the
+    //      FW-04-guarded result-sent framework record carrying that id + the resolved outcome. Never logs
+    //      dr.Data / payload (FW-03). The keeper INJECT applies its own override. ----
 
-    private async Task SendResult(IStepResult result, int limit, CancellationToken ct)
+    private async Task<Guid> SendResult(IStepResult result, int limit, CancellationToken ct)
     {
+        // D3/LOG-03: mint the OUTBOUND envelope MessageId ONCE, outside the RetryLoop, so it is STABLE across
+        // retry attempts (every attempt stamps the same id) and can be returned to RunAsync for the framework
+        // result-sent record. Self-minting is safe: the Result endpoint has no inbox/dedup (parity with the
+        // keeper reinject send), and a Guid.NewGuid() is as unique as the MassTransit-minted id it replaces.
+        var outboundId = Guid.NewGuid();
+
         // IN-01: resolve GetSendEndpoint INSIDE the RetryLoop (mirror the keeper Guard pattern) so a transient
         // GetSendEndpoint fault routes through the bounded retry like the send; an exhaust still throws → broker
         // redelivery (no _error). The inner broker Send uses CancellationToken.None (do not abort a started send).
         var sent = await RetryLoop.ExecuteAsync(async () =>
         {
             var ep = await sendProvider.GetSendEndpoint(new Uri($"queue:{OrchestratorQueues.Result}"));
-            await ep.Send((object)result, CancellationToken.None);
+            // Per-send envelope MessageId override (idiom: BaseProcessor.cs:102). The (object) cast is
+            // load-bearing (CapturingSendProvider captures the object override overload).
+            await ep.Send((object)result, ctx => ctx.MessageId = outboundId, CancellationToken.None);
             return true;
         }, limit, ct);
         if (!sent.Succeeded) throw sent.Error!;   // propagate → throw → broker redelivery (no _error)
@@ -139,6 +162,8 @@ public sealed class OutputTail(
         metrics.MessagesSent.Add(1,
             new KeyValuePair<string, object?>("workflowId", result.WorkflowId.ToString("D")),
             new KeyValuePair<string, object?>("processorId", context.Id!.Value.ToString("D")));
+
+        return outboundId;   // D3/LOG-03: the stamped outbound envelope id, logged by RunAsync
     }
 
     private async Task SendKeeper(IKeeperRecoverable msg, int limit, CancellationToken ct)
