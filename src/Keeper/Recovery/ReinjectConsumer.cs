@@ -29,54 +29,60 @@ public sealed class ReinjectConsumer(
 {
     protected override async Task HandleAsync(KeeperReinject m, CancellationToken ct)
     {
-        // Guard the READ so a Redis EXCEPTION still routes to the exhaustion policy; absent/empty
-        // (STRLEN==0, no exception) is the by-design drop. IN-04: STRLEN, not StringGet — 0 covers
-        // a missing key AND an empty value (KeyExists would be WRONG: an empty-string key EXISTS).
-        var present = await Guard(
-            () => Db.StringLengthAsync(L2ProjectionKeys.ExecutionData(m.EntryId)),
-            ct) != 0;
-        if (!present)
+        // Phase 77 (D2/LOG-02): the keeper now OPENS the 5-id execution scope itself. The bus-wide
+        // InboundExecutionScopeConsumeFilter no-ops on keeper records (they are not IExecutionCorrelated),
+        // so wrap the whole consume body in a MEL scope built from the loose-id BuildState overload (Plan 05).
+        // Every record emitted inside now carries WorkflowId/StepId/ProcessorId/ExecutionId/EntryId as ES
+        // attributes.* from the ambient scope — identical to the processor/orchestrator — so the Tier-1 join
+        // keys are STRIPPED from the reinject strings below (D1/LOG-01). ExecutionLogScope lives in
+        // Messaging.Contracts (already imported).
+        using (logger.BeginScope(ExecutionLogScope.BuildState(
+            m.WorkflowId, m.StepId, m.ProcessorId, m.ExecutionId, m.EntryId)))
         {
-            // Phase 74 (REQ-3): the legacy reinject-drop counter is REMOVED; the by-design-drop
-            // structured warning survives (never log the Payload). No keeper_messages_sent here — a drop
-            // never sends, so CountSent must NEVER fire on this early-return path (D-02 / T-74-06).
-            // Phase 75 (D75-4): widen the drop log to carry all four join keys + a "drop" outcome
-            // discriminator as explicit message-template {Placeholder} args (Pitfall 2 — RecoveryConsumerBase
-            // opens NO ambient scope, so string interpolation would surface NO ES attributes.*; only
-            // placeholder args become attributes.CorrelationId/ExecutionId/EntryId/MessageId/ReinjectOutcome
-            // via the MEL→OTLP bridge, letting the analyzer (Plan 04) join a clean-absent drop to a lost
-            // (correlationId, executionId)). Still NEVER log m.Payload.
-            logger.LogWarning(
-                "REINJECT drop: L2 data gone {CorrelationId} {ExecutionId} {EntryId} {MessageId} {ReinjectOutcome}",
-                m.CorrelationId, m.ExecutionId, m.EntryId, m.MessageId, "drop");
-            return;                                                                          // D-06 silent ack
-        }
+            // Guard the READ so a Redis EXCEPTION still routes to the exhaustion policy; absent/empty
+            // (STRLEN==0, no exception) is the by-design drop. IN-04: STRLEN, not StringGet — 0 covers
+            // a missing key AND an empty value (KeyExists would be WRONG: an empty-string key EXISTS).
+            var present = await Guard(
+                () => Db.StringLengthAsync(L2ProjectionKeys.ExecutionData(m.EntryId)),
+                ct) != 0;
+            if (!present)
+            {
+                // Phase 74 (REQ-3): the legacy reinject-drop counter is REMOVED; the by-design-drop
+                // structured warning survives (never log the Payload). No keeper_messages_sent here — a drop
+                // never sends, so CountSent must NEVER fire on this early-return path (D-02 / T-74-06).
+                // Phase 77 (D1/D2): the Tier-1 join keys (StepId/ExecutionId/EntryId/…) now arrive via the
+                // ambient execution scope opened at the top of HandleAsync (D2), so the string carries ONLY the
+                // Tier-2 {MessageId} (the one id the scope does NOT carry) + the Tier-3 {ReinjectOutcome}
+                // discriminator (D6/LOG-06). Still NEVER log m.Payload (FW-03). PHASE-78 HANDOFF: keeper records
+                // now gain attributes.StepId and enter the analyzer's structural query — discriminate them from
+                // processor "did-run" records via attributes.ReinjectOutcome (only keeper records carry it).
+                logger.LogWarning("REINJECT drop {MessageId} {ReinjectOutcome}", m.MessageId, "drop");
+                return;                                                                          // D-06 silent ack
+            }
 
-        var dispatch = new EntryStepDispatch(m.WorkflowId, m.StepId, m.ProcessorId, m.Payload)
-        {
-            CorrelationId = m.CorrelationId,
-            ExecutionId = m.ExecutionId,
-            EntryId = m.EntryId,
-        };
-        // IN-01: resolve the send endpoint through Guard too, so a transient GetSendEndpoint failure
-        // routes through the bounded RetryLoop like every other op.
-        var ep = await Guard(() => Send.GetSendEndpoint(new Uri($"queue:{m.ProcessorId:D}")), ct);
-        // IN-01: the inner broker Send uses CancellationToken.None to match ProcessorPipeline's send
-        // convention ("do not abort a broker send once started"). The outer Guard keeps ct so the
-        // bounded RetryLoop still observes bus shutdown between attempts.
-        // req 6 (Phase 70): re-inject with the SAME messageId on the outbound envelope — override
-        // SendContext.MessageId to the carried m.MessageId (precedent: OutboundCorrelationSendFilter
-        // sets SendContext.CorrelationId). No inbox/dedup on this endpoint, so the reused id is safe.
-        await Guard(() => ep.Send(dispatch, ctx => ctx.MessageId = m.MessageId, CancellationToken.None), ct);
-        // REQ-3 / D-09: count keeper_messages_sent AFTER the confirmed send (Guard re-throws on exhaustion, so
-        // a failed/exhausted send never reaches here — T-74-06). NEVER on the absent-data drop branch above.
-        CountSent(m.WorkflowId, m.ProcessorId);
-        // Phase 75 (D75-4): symmetric structured success log AFTER the confirmed CountSent (never on the drop
-        // early-return above) — same four join keys + a "reinject" outcome discriminator as explicit
-        // {Placeholder} args (Pitfall 2: placeholder-form only, no interpolation), so the analyzer can join a
-        // recovered (recoverable) execution to its (correlationId, executionId) via ES attributes.*.
-        logger.LogInformation(
-            "REINJECT sent {CorrelationId} {ExecutionId} {EntryId} {MessageId} {ReinjectOutcome}",
-            m.CorrelationId, m.ExecutionId, m.EntryId, m.MessageId, "reinject");
+            var dispatch = new EntryStepDispatch(m.WorkflowId, m.StepId, m.ProcessorId, m.Payload)
+            {
+                CorrelationId = m.CorrelationId,
+                ExecutionId = m.ExecutionId,
+                EntryId = m.EntryId,
+            };
+            // IN-01: resolve the send endpoint through Guard too, so a transient GetSendEndpoint failure
+            // routes through the bounded RetryLoop like every other op.
+            var ep = await Guard(() => Send.GetSendEndpoint(new Uri($"queue:{m.ProcessorId:D}")), ct);
+            // IN-01: the inner broker Send uses CancellationToken.None to match ProcessorPipeline's send
+            // convention ("do not abort a broker send once started"). The outer Guard keeps ct so the
+            // bounded RetryLoop still observes bus shutdown between attempts.
+            // req 6 (Phase 70): re-inject with the SAME messageId on the outbound envelope — override
+            // SendContext.MessageId to the carried m.MessageId (precedent: OutboundCorrelationSendFilter
+            // sets SendContext.CorrelationId). No inbox/dedup on this endpoint, so the reused id is safe.
+            await Guard(() => ep.Send(dispatch, ctx => ctx.MessageId = m.MessageId, CancellationToken.None), ct);
+            // REQ-3 / D-09: count keeper_messages_sent AFTER the confirmed send (Guard re-throws on exhaustion, so
+            // a failed/exhausted send never reaches here — T-74-06). NEVER on the absent-data drop branch above.
+            CountSent(m.WorkflowId, m.ProcessorId);
+            // Phase 77 (D1/D2/D6): symmetric structured success log AFTER the confirmed CountSent (never on the
+            // drop early-return above). Tier-1 join keys ride the ambient execution scope (D2); the string carries
+            // ONLY the Tier-2 {MessageId} + the Tier-3 {ReinjectOutcome}="reinject" discriminator. Never the Payload.
+            logger.LogInformation("REINJECT sent {MessageId} {ReinjectOutcome}", m.MessageId, "reinject");
+        }
     }
 }
