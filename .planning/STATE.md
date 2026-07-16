@@ -1,18 +1,18 @@
 ---
 gsd_state_version: 1.0
-milestone: v9.0.0
-milestone_name: Canonical Two-Consumer Recovery & L2 Delivery Proof
-current_plan: 5
-status: milestone_complete
-stopped_at: Completed 75-04-PLAN.md
-last_updated: "2026-07-15T13:55:44.000Z"
-last_activity: 2026-07-15 -- Phase 75 Plan 04 COMPLETE (keeper reinject-outcome ES-join into the recovery verdict, reinject-wins tie-break, D75-4; live E2E join verify deferred-automated — Docker-less). ALL 5 phase-75 plans now have SUMMARYs.
+milestone: v7.0.0
+milestone_name: Per-Replica Processor Liveness & Self-Watchdog
+current_plan: Not started
+status: completed
+stopped_at: Phase 76 context gathered
+last_updated: "2026-07-16T07:49:42.766Z"
+last_activity: 2026-07-15
 progress:
-  total_phases: 4
-  completed_phases: 1
-  total_plans: 0
-  completed_plans: 0
-  percent: 25
+  total_phases: 22
+  completed_phases: 6
+  total_plans: 24
+  completed_plans: 24
+  percent: 100
 ---
 
 # Project State
@@ -1654,9 +1654,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-15T11:44:33Z
-Stopped at: Completed 75-01-PLAN.md
-Resume file: None
+Last session: --stopped-at
+Stopped at: Phase 76 context gathered
+Resume file: --resume-file
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
 **Phase 29 (Structured Execution-Scope Logging):** 5/5 plans complete — close gate GATE_EXIT=0 (405 Passed ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held; live scopeProof passes on a `processor-sample` Completed log); LOG-01..06 all complete. Awaiting orchestrator phase verification + `phase.complete`. Milestone v3.5.0 = 17/17 plans across phases 25-29.
