@@ -427,15 +427,49 @@ public sealed class PassFailEngine
             Mg1Binding = mg1Binding,
         };
         var metricGateOk = conservationContributes && keeperRecoveryOk && probeLiveOk;
-        var recon = corroborationDetail.Count == 0 ? ReconciliationOutcome.Reconciled : ReconciliationOutcome.Unreconciled;
 
-        // ── VERDICT (ES-binding + binding metric gate) ─────────────────────────────────────────────
-        // The value-chain check (incl. the Step_G-at-seed+6 terminal-anchor proxy) is BINDING (73, D-11),
-        // and the metric gate (MG-1/2/3, metricGateOk) is now ALSO binding — a failing gate flips a green
-        // ES verdict to Fail and sets Reconciliation=Unreconciled (the legacy round(sent/9) corroboration
-        // that was non-fatal is retired).
-        var pass = missing == 0 && !dupFail && valueChainOk && metricGateOk;
-        var verdict = pass ? Verdict.Pass : Verdict.Fail;
+        // ── VERDICT (THREE-CLASS, split on EVIDENCE SUFFICIENCY first — Phase 76, ANL-04/05) ─────────
+        // The verdict has three classes and splits on EVIDENCE SUFFICIENCY, not severity. FAIL requires
+        // POSITIVE evidence of loss; ABSENCE of evidence is INCONCLUSIVE — never a false FAIL, never a
+        // vacuous green.
+        //
+        // EVIDENCE-SUFFICIENCY GATE (checked FIRST, ANL-04a / ANL-05 blind): total trace darkness
+        // (startedRuns == 0) AND self-consistent conservation (orchestrator_consumed == processor_sent within
+        // ConservationTol, i.e. conservationOk) is the TEST-01 cold-ES / collector-blind shape. There are NO
+        // runs to score, and if the metric gate fails it is because Prometheus scrapes an ABSENT collector
+        // (probe/keeper read 0), NOT a real conservation gap — an observability-tier failure, not data loss.
+        // So the verdict is INCONCLUSIVE regardless of metricGateOk (this is the ANL-05 metric-gate inversion:
+        // a gate failing because the metrics tier is absent/frozen → INCONCLUSIVE, never FAIL). A GENUINE
+        // conservation gap (conservationOk == false: live counters with orchestrator_consumed != processor_sent)
+        // is positive evidence of loss, so it does NOT satisfy this gate and stays FAIL (ANL-05 live; the
+        // T-76-12 guard — INCONCLUSIVE can never mask a real gap).
+        //
+        // When evidence IS sufficient, apply the existing ES-binding + binding-metric-gate PASS test. D-01 is
+        // preserved: a reconciled run with a non-zero TelemetryGap is already excluded from `missing` above, so
+        // it stays PASS — the non-binding gap never flips the verdict.
+        var traceDark = startedRuns == 0;
+        var evidenceInsufficient = traceDark && conservationOk;
+
+        Verdict verdict;
+        if (evidenceInsufficient)
+        {
+            verdict = Verdict.Inconclusive;
+            // Blind-case reason carried in CorroborationDetail (and HumanSummary below) so an INCONCLUSIVE
+            // report is trustworthy standalone — DISTINCT from a data-loss FAIL line.
+            corroborationDetail.Add(
+                "INCONCLUSIVE (evidence insufficient) — observability tier blind: total trace darkness " +
+                $"(startedRuns=0) with self-consistent conservation (orchestrator_consumed@end=" +
+                $"{prom.OrchestratorMessagesConsumedAtEnd} == processor_sent@end={prom.ProcessorMessagesSentAtEnd} " +
+                $"within ±{ConservationTol}). An observability-degraded run — explicitly NOT a flow failure and " +
+                "explicitly NOT a green; re-run deliberately against warm ES (no auto-retry).");
+        }
+        else
+        {
+            var pass = missing == 0 && !dupFail && valueChainOk && metricGateOk;
+            verdict = pass ? Verdict.Pass : Verdict.Fail;
+        }
+
+        var recon = corroborationDetail.Count == 0 ? ReconciliationOutcome.Reconciled : ReconciliationOutcome.Unreconciled;
 
         // Build the report (no IO).
         return new AnalyzerReport
@@ -559,9 +593,14 @@ public sealed class PassFailEngine
         // Non-binding note: value-chain-proven-complete runs missing only hop-LOGS (dropped OTLP records).
         var gapNote = telemetryGap > 0 ? $" [{telemetryGap} telemetry-gap: dropped hop-logs, value-chain-proven complete]" : "";
 
-        var driver = verdict == Verdict.Pass
-            ? "every started run complete, no illegitimate duplicate, value-chain intact, metric gate holds"
-            : string.Join("; ", reasons);
+        var driver = verdict switch
+        {
+            Verdict.Pass => "every started run complete, no illegitimate duplicate, value-chain intact, metric gate holds",
+            // ANL-04/05: evidence insufficient — trace-dark + self-consistent conservation (collector-blind).
+            Verdict.Inconclusive => "evidence insufficient — total trace darkness (startedRuns=0) with " +
+                "self-consistent conservation; observability tier blind (explicitly not a flow failure, not a green)",
+            _ => string.Join("; ", reasons),
+        };
 
         // The metric gate is BINDING: an Unreconciled outcome is a FATAL gate failure, not a warning.
         var corroboration = recon == ReconciliationOutcome.Reconciled
