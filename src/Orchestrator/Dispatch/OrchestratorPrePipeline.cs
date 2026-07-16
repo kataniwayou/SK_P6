@@ -86,9 +86,28 @@ public sealed class OrchestratorPrePipeline(
         var selection = advancement.SelectNext(outcome, completed, wf.Steps);
         if (selection.Matches.Count == 0 && selection.UnresolvedIds.Count == 0)
         {
-            logger.LogInformation(
-                "Trip ended (completed-terminal): no matching successor for ({WorkflowId}, {StepId}) outcome={Outcome} — acking (business)",
-                m.WorkflowId, m.StepId, outcome);
+            // FW-04 (T-76-05): both terminal-branch log calls are try/catch-guarded so a throwing/blocking
+            // ILogger can NEVER fail the terminal ack (this branch acks by returning). The existing trip-end
+            // line is guarded here too because it now precedes the FW-02 terminal-reached record on the same
+            // ack path — a throw from either must be absorbed, never surfaced out of RunAsync.
+            try
+            {
+                logger.LogInformation(
+                    "Trip ended (completed-terminal): no matching successor for ({WorkflowId}, {StepId}) outcome={Outcome} — acking (business)",
+                    m.WorkflowId, m.StepId, outcome);
+            }
+            catch { /* observability must never fail the hop */ }
+
+            // FW-02 / D-12 / D-13 (Option C, ids only, no outbound MessageId): the terminal-reached causal-edge
+            // record — the orchestrator resolved NO next steps for this (corr,exec). Step_G fans in twice, so
+            // this fires ×2 per (corr,exec), distinguished by the inbound m.EntryId (= M_N).
+            try
+            {
+                logger.LogInformation(
+                    "terminal reached {CorrelationId} {ExecutionId} {WorkflowId} {EntryId} {StepId}",
+                    m.CorrelationId, m.ExecutionId, m.WorkflowId, m.EntryId, m.StepId);
+            }
+            catch { /* observability must never fail the hop */ }
             return;
         }
 
@@ -142,6 +161,18 @@ public sealed class OrchestratorPrePipeline(
             metrics.MessagesSent.Add(1,
                 new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")),
                 new KeyValuePair<string, object?>("processorId", m.ProcessorId.ToString("D")));
+
+            // FW-02 / D-11 Option C (ids only, FW-03): one fan-out edge record per next step, AFTER the send
+            // landed. Carries (CorrelationId, ExecutionId, WorkflowId, inbound EntryId=M_N, next StepId) — NO
+            // outbound MessageId (Option C: not in hand at the Pre loop; Phase-72 "no override" is not
+            // reversed). FW-04: try/catch-guarded so a throwing logger cannot fail the fan-out send loop.
+            try
+            {
+                logger.LogInformation(
+                    "fan-out {CorrelationId} {ExecutionId} {WorkflowId} {EntryId} {NextStepId}",
+                    m.CorrelationId, m.ExecutionId, m.WorkflowId, m.EntryId, stepId);
+            }
+            catch { /* observability must never fail the hop */ }
         }
 
         // stage-3: each dangling next-step id in selection.UnresolvedIds logs + increments
