@@ -26,8 +26,9 @@ namespace BaseApi.Tests.Processor;
 /// </summary>
 public sealed class OutputTailFacts
 {
-    private static OutputTail Build(IConnectionMultiplexer redis, DispatchTestKit.CapturingSendProvider send) =>
-        new(redis, new FakeProcessorContext { OutputDefinition = null },
+    private static OutputTail Build(
+        IConnectionMultiplexer redis, DispatchTestKit.CapturingSendProvider send, string? outputDef = null) =>
+        new(redis, new FakeProcessorContext { OutputDefinition = outputDef },
             send, DispatchTestKit.Retry(3), DispatchTestKit.Options(300), DispatchTestKit.Metrics());
 
     [Fact]
@@ -39,9 +40,10 @@ public sealed class OutputTailFacts
         var send = new DispatchTestKit.CapturingSendProvider();
 
         var dr = DispatchTestKit.Result(StepOutcome.Completed, "{\"n\":1}", messageId);
-        var proceed = await Build(redis, send).RunAsync(dr, deleteEntryId: Guid.NewGuid(), ct);
+        var (proceed, resolved) = await Build(redis, send).RunAsync(dr, deleteEntryId: Guid.NewGuid(), ct);
 
         Assert.True(proceed);                                       // caller may run its own (entry-delete) tail
+        Assert.Equal(StepOutcome.Completed, resolved);             // D-18: resolved outcome surfaced to the caller
         var completed = Assert.Single(send.Sent.OfType<StepCompleted>());   // one StepCompleted by result
         Assert.Equal(messageId, completed.EntryId);                // A1 closed (req 7): Completed stamps the output messageId
         Assert.Empty(send.SentKeeper);                             // no keeper on the happy path
@@ -63,9 +65,10 @@ public sealed class OutputTailFacts
         var send = new DispatchTestKit.CapturingSendProvider();
 
         var dr = DispatchTestKit.Result(StepOutcome.Failed, "{\"n\":1}", messageId);
-        var proceed = await Build(redis, send).RunAsync(dr, deleteEntryId: Guid.NewGuid(), ct);
+        var (proceed, resolved) = await Build(redis, send).RunAsync(dr, deleteEntryId: Guid.NewGuid(), ct);
 
         Assert.True(proceed);
+        Assert.Equal(StepOutcome.Failed, resolved);                     // D-18
         var failed = Assert.Single(send.Sent.OfType<StepFailed>());     // still sends the failure by result
         Assert.Equal(messageId, failed.EntryId);                        // REQ-2: real EntryId (= output messageId)
         Assert.Empty(send.SentKeeper);
@@ -87,9 +90,10 @@ public sealed class OutputTailFacts
         var send = new DispatchTestKit.CapturingSendProvider();
 
         var dr = DispatchTestKit.Result(StepOutcome.Cancelled, "{\"n\":1}", messageId);
-        var proceed = await Build(redis, send).RunAsync(dr, deleteEntryId: Guid.NewGuid(), ct);
+        var (proceed, resolved) = await Build(redis, send).RunAsync(dr, deleteEntryId: Guid.NewGuid(), ct);
 
         Assert.True(proceed);
+        Assert.Equal(StepOutcome.Cancelled, resolved);                     // D-18
         var cancelled = Assert.Single(send.Sent.OfType<StepCancelled>());   // sends the cancellation by result
         Assert.Equal(messageId, cancelled.EntryId);                         // REQ-2: real EntryId (= output messageId)
         Assert.Empty(send.SentKeeper);
@@ -111,9 +115,10 @@ public sealed class OutputTailFacts
         var send = new DispatchTestKit.CapturingSendProvider();
 
         var dr = DispatchTestKit.Result(StepOutcome.Processing, "{\"n\":1}", messageId);
-        var proceed = await Build(redis, send).RunAsync(dr, deleteEntryId: Guid.NewGuid(), ct);
+        var (proceed, resolved) = await Build(redis, send).RunAsync(dr, deleteEntryId: Guid.NewGuid(), ct);
 
         Assert.True(proceed);
+        Assert.Equal(StepOutcome.Processing, resolved);            // D-18
         var processing = Assert.Single(send.Sent.OfType<StepProcessing>());
         Assert.Equal(Guid.Empty, processing.EntryId);              // D-04: Processing keeps Guid.Empty (no out: blob)
         // D-04: NO OutputData write for the transient Processing status (the gate excludes Processing).
@@ -131,12 +136,32 @@ public sealed class OutputTailFacts
         var send = new DispatchTestKit.CapturingSendProvider();
 
         var dr = DispatchTestKit.Result(StepOutcome.Completed, "{\"n\":1}", messageId);
-        var proceed = await Build(redis, send).RunAsync(dr, deleteEntryId, ct);
+        var (proceed, resolved) = await Build(redis, send).RunAsync(dr, deleteEntryId, ct);
 
         Assert.False(proceed);                                     // INJECT ended the round trip — no delete
+        Assert.Equal(StepOutcome.Completed, resolved);             // D-18: resolved outcome still reported on INJECT-escalation
         var inject = Assert.Single(send.SentKeeper.OfType<KeeperInject>());
         Assert.Equal(messageId, inject.DataResult.MessageId);      // INJECT carries the self-contained DataResult
         Assert.Equal(deleteEntryId, inject.DeleteEntryId);         // and the source entryId to reclaim
         Assert.Empty(send.Sent.OfType<StepCompleted>());           // NO Step* send on the write-exhaust path
+    }
+
+    [Fact]
+    public async Task Completed_OutputSchemaFail_ResolvesFailed_SendsStepFailed()   // D-18 downgrade observable
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var messageId = Guid.NewGuid();
+        var redis = DispatchTestKit.ReadWriteDeleteOkL2(new Dictionary<string, string>(), out _);
+        var send = new DispatchTestKit.CapturingSendProvider();
+
+        // A Completed result whose data "{}" fails an OutputDefinition requiring "x" is forced Failed (:56-59).
+        var dr = DispatchTestKit.Result(StepOutcome.Completed, "{}", messageId);
+        var outputDef = "{\"type\":\"object\",\"required\":[\"x\"]}";
+        var (proceed, resolved) = await Build(redis, send, outputDef).RunAsync(dr, deleteEntryId: Guid.NewGuid(), ct);
+
+        Assert.True(proceed);                                      // still proceeds (the blob was written)
+        Assert.Equal(StepOutcome.Failed, resolved);               // D-18: the downgrade the pipeline cannot see is now returned
+        Assert.Single(send.Sent.OfType<StepFailed>());            // and the wire carries StepFailed (matches the resolved outcome)
+        Assert.Empty(send.Sent.OfType<StepCompleted>());
     }
 }

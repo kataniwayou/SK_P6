@@ -48,6 +48,7 @@ public sealed class PostProcessConsumer(
             new KeyValuePair<string, object?>("processorId", self.ToString("D")));
 
         // Post never touches an entry → deleteEntryId = Guid.Empty (the INJECT delete no-ops on it).
-        await outputTail.RunAsync(ctx.Message, Guid.Empty, ctx.CancellationToken);
+        // D-18: Post logs NO per-hop record, so it deconstructs-and-discards the resolved-outcome tuple.
+        _ = await outputTail.RunAsync(ctx.Message, Guid.Empty, ctx.CancellationToken);
     }
 }

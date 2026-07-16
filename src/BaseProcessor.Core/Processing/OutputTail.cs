@@ -41,12 +41,19 @@ public sealed class OutputTail(
         => L2ProjectionKeys.OutputDataTtl(livenessOptions.Value.ExecutionDataTtlSeconds);
 
     /// <summary>Validate output → (if Completed) write L2[messageId]=data (write-exhaust → INJECT,
-    /// return <c>false</c> = "stop, do not send/delete") → send Step* by result (send-exhaust throws).
-    /// Returns <c>true</c> when the caller may proceed to its own tail (Pre's entry delete); <c>false</c>
-    /// when an INJECT escalation already ended the round trip. <paramref name="deleteEntryId"/> is the
-    /// source entryId the INJECT keeper should delete (Pre passes <c>d.EntryId</c>; Post passes
-    /// <c>Guid.Empty</c> — the delete no-ops on an absent operand).</summary>
-    public async Task<bool> RunAsync(DataResult dr, Guid deleteEntryId, CancellationToken ct)
+    /// return <c>proceed: false</c> = "stop, do not send/delete") → send Step* by result (send-exhaust throws).
+    /// Returns <c>proceed: true</c> when the caller may proceed to its own tail (Pre's entry delete);
+    /// <c>proceed: false</c> when an INJECT escalation already ended the round trip. <paramref name="deleteEntryId"/>
+    /// is the source entryId the INJECT keeper should delete (Pre passes <c>d.EntryId</c>; Post passes
+    /// <c>Guid.Empty</c> — the delete no-ops on an absent operand).
+    /// <para>
+    /// D-18: the second tuple field carries the RESOLVED <see cref="StepOutcome"/> — the outcome AFTER the
+    /// output-schema downgrade at <c>:56-59</c> (a Completed result whose data fails the output schema resolves
+    /// to <c>Failed</c>) — so <see cref="ProcessorPipeline"/> can emit the TRUE terminal outcome on its per-hop
+    /// record (matching the <c>Step*</c> wire), a fact the caller cannot otherwise see. Cannot be an
+    /// <c>out</c> parameter in an async method, hence the tuple.
+    /// </para></summary>
+    public async Task<(bool proceed, StepOutcome resolved)> RunAsync(DataResult dr, Guid deleteEntryId, CancellationToken ct)
     {
         var db = redis.GetDatabase();
         var limit = retryOptions.Value.Limit;
@@ -67,12 +74,12 @@ public sealed class OutputTail(
             if (!write.Succeeded)
             {
                 await SendKeeper(BuildInject(dr, deleteEntryId), limit, ct);   // INJECT + return (no send, no delete)
-                return false;
+                return (false, result);   // D-18: even on INJECT-escalation the resolved outcome is reported
             }
         }
 
         await SendResult(BuildStep(dr, result), limit, ct);   // send-exhaust → throw → broker redelivery
-        return true;
+        return (true, result);   // D-18: the true terminal outcome the pipeline logs on the per-hop record
     }
 
     /// <summary>Mechanical switch on the (possibly output-validation-forced) outcome → one of the 4 Step*

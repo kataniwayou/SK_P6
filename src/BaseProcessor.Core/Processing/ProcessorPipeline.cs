@@ -102,7 +102,7 @@ public sealed class ProcessorPipeline(
                 CorrelationId = d.CorrelationId, ExecutionId = d.ExecutionId, MessageId = messageId,
                 Result = StepOutcome.Failed, Data = validatedData, ErrorMessage = string.Join("; ", inErrs),
             };
-            await outputTail.RunAsync(failDr, d.EntryId, ct);
+            _ = await outputTail.RunAsync(failDr, d.EntryId, ct);   // outcome known (Failed); tuple discarded
             return;   // C-2: NO DeleteTerminalAsync / KeyDeleteAsync here (req 2 — left to TTL)
         }
 
@@ -135,7 +135,7 @@ public sealed class ProcessorPipeline(
                     CancellationMessage = e is CancelledException ? e.Message : "",
                 };
                 if (e is ProcessingException) logger.LogInformation("ProcessAsync threw processing status: {Msg}", e.Message);
-                await outputTail.RunAsync(statusDr, d.EntryId, ct);
+                _ = await outputTail.RunAsync(statusDr, d.EntryId, ct);   // outcome known from statusDr; tuple discarded
                 return;   // C-2 parity: a seam-thrown failure does NOT delete the entry on this phase's model
             }
             catch (Exception ex)   // unexpected (incl. the deserialize JsonException, req 2) ⇒ failed, NO delete
@@ -150,7 +150,7 @@ public sealed class ProcessorPipeline(
                     CorrelationId = d.CorrelationId, ExecutionId = d.ExecutionId, MessageId = messageId,
                     Result = StepOutcome.Failed, Data = validatedData, ErrorMessage = "input deserialization failed",
                 };
-                await outputTail.RunAsync(unexpectedDr, d.EntryId, ct);
+                _ = await outputTail.RunAsync(unexpectedDr, d.EntryId, ct);   // outcome known (Failed); tuple discarded
                 return;
             }
 
@@ -160,7 +160,7 @@ public sealed class ProcessorPipeline(
             // THEN delete L2[entryId] (exhaust → DELETE). Carry the carried messageId onto the DataResult so the
             // output key + INJECT/REINJECT use it.
             var carried = dr with { MessageId = messageId };
-            var proceed = await outputTail.RunAsync(carried, d.EntryId, ct);
+            var (proceed, _) = await outputTail.RunAsync(carried, d.EntryId, ct);
             if (!proceed) return;   // INJECT escalation already ended the round trip (no delete)
 
             // A source step (Guid.Empty) has NO L2 input key to reclaim — skip the delete tail for it
