@@ -58,10 +58,13 @@ public sealed class OrchestratorPrePipelineFacts
                     Record(ci.ArgAt<object>(0));
                 });
 
-            // the envelope-override overload (used by keeper REINJECT/INJECT/DELETE, NOT the live fan-out):
+            // the envelope-override overload (used by keeper REINJECT/INJECT/DELETE AND — since Phase 77 D3 —
+            // the live fan-out, which now stamps ctx.MessageId = outboundId). The fault-injection hook fires
+            // here too so the send-exhaust fact still exercises the throw path on the override send.
             endpoint.Send(Arg.Any<object>(), Arg.Any<IPipe<SendContext>>(), Arg.Any<CancellationToken>())
                 .Returns(async ci =>
                 {
+                    if (_onSend is not null) await _onSend();   // fault-injection hook (send-exhaust)
                     var sendCtx = Substitute.For<SendContext>();
                     await ci.ArgAt<IPipe<SendContext>>(1).Send(sendCtx);
                     OverrideMessageIds.Add(sendCtx.MessageId ?? Guid.Empty);
@@ -121,24 +124,22 @@ public sealed class OrchestratorPrePipelineFacts
 
     // ===== FW-02 record filter helpers ============================================================
 
-    /// <summary>The fan-out EDGE records (D-11 Option C): captured entries carrying BOTH a <c>NextStepId</c>
-    /// and a <c>CorrelationId</c> placeholder — this excludes the stage-3 "Dangling next-step id" log (which
-    /// carries <c>NextStepId</c> but no <c>CorrelationId</c>).</summary>
+    /// <summary>The fan-out EDGE records (Phase 77 / D3): captured entries carrying BOTH a <c>NextStepId</c>
+    /// and the minted outbound <c>MessageId</c> placeholder — this excludes the stage-3 "Dangling next-step id"
+    /// log (which carries <c>NextStepId</c> but no <c>MessageId</c>). The Tier-1 ids (Correlation/Execution/
+    /// Workflow/Entry) are no longer in the template — they arrive via the ambient execution scope.</summary>
     private static List<CapturingLogger<OrchestratorPrePipeline>.Entry> EdgeRecords(
         CapturingLogger<OrchestratorPrePipeline> log) =>
         log.Entries.Where(e => e.State.Any(kv => kv.Key == "NextStepId")
-                            && e.State.Any(kv => kv.Key == "CorrelationId")).ToList();
+                            && e.State.Any(kv => kv.Key == "MessageId")).ToList();
 
-    /// <summary>The terminal-reached records (D-12/D-13): captured entries carrying <c>CorrelationId</c> +
-    /// <c>EntryId</c> + <c>StepId</c> (and NO <c>NextStepId</c>) — this excludes the existing unstructured
-    /// "Trip ended (completed-terminal)" line (no <c>CorrelationId</c>/<c>EntryId</c>) and the fan-out edge
-    /// record (carries <c>NextStepId</c>, not <c>StepId</c>).</summary>
+    /// <summary>The terminal-reached records (Phase 77 / D1): matched by the formatted message
+    /// <c>"terminal reached"</c> — the marker is now argument-less, so its five Tier-1 ids arrive via the
+    /// ambient execution scope (attributes.*), NOT captured placeholder State. This still excludes the
+    /// "Trip ended (completed-terminal)" line and the fan-out edge record by exact message text.</summary>
     private static List<CapturingLogger<OrchestratorPrePipeline>.Entry> TerminalReachedRecords(
         CapturingLogger<OrchestratorPrePipeline> log) =>
-        log.Entries.Where(e => e.State.Any(kv => kv.Key == "CorrelationId")
-                            && e.State.Any(kv => kv.Key == "EntryId")
-                            && e.State.Any(kv => kv.Key == "StepId")
-                            && e.State.All(kv => kv.Key != "NextStepId")).ToList();
+        log.Entries.Where(e => e.Message == "terminal reached").ToList();
 
     /// <summary>Read a single placeholder value off a captured entry's State (null if absent).</summary>
     private static object? StateValue(CapturingLogger<OrchestratorPrePipeline>.Entry e, string key) =>
@@ -255,15 +256,20 @@ public sealed class OrchestratorPrePipelineFacts
         var redis = OutPresentL2(
             new Dictionary<string, string> { [L2ProjectionKeys.OutputData(entryId)] = "the-output" }, out var db);
         var send = new CapturingSendProvider();
+        var logger = new CapturingLogger<OrchestratorPrePipeline>();
 
-        await Build(store, redis, send).RunAsync(
+        await Build(store, redis, send, logger).RunAsync(
             Completed(workflowId, completedStepId, entryId), StepOutcome.Completed, Guid.NewGuid(), ct);
 
         var handoff = Assert.Single(send.Handoffs);
         Assert.Equal(nextStepId, handoff.StepId);
         Assert.Equal(nextProcessorId, handoff.ProcessorId);
         Assert.Equal("the-output", handoff.Data);                 // relocated blob carried inline
-        Assert.Empty(send.OverrideMessageIds);                    // D-11: NO envelope override on fan-out
+        var overrideId = Assert.Single(send.OverrideMessageIds);  // D3: fan-out now stamps a minted outbound id
+        var edge = Assert.Single(EdgeRecords(logger));
+        Assert.Contains(new KeyValuePair<string, object?>("MessageId", overrideId), edge.State);
+        Assert.Contains(new KeyValuePair<string, object?>("NextStepId", nextStepId), edge.State);
+        Assert.DoesNotContain(edge.State, kv => kv.Key is "CorrelationId" or "ExecutionId" or "WorkflowId" or "EntryId");
         // exactly one out: delete keyed by entryId, AFTER the send.
         await db.Received(1).KeyDeleteAsync((RedisKey)L2ProjectionKeys.OutputData(entryId), Arg.Any<CommandFlags>());
         Assert.Empty(send.SentKeeper);
@@ -694,8 +700,8 @@ public sealed class OrchestratorPrePipelineFacts
     [Fact]
     public async Task FanOut_emits_two_edge_records_with_distinct_NextStepId()
     {
-        // FW-02 / D-11 Option C: a 2-way fan-out emits exactly 2 edge records, each carrying the SAME inbound
-        // EntryId (M_N) and DISTINCT next StepIds — and NO outbound MessageId (Option C omits it).
+        // FW-02 / D3 (Phase 77): a 2-way fan-out emits exactly 2 edge records, each carrying its OWN minted
+        // outbound MessageId (Tier-2) and DISTINCT next StepIds (Tier-3) — the Tier-1 ids arrive via scope.
         var ct = TestContext.Current.CancellationToken;
         var workflowId = Guid.NewGuid();
         var completedStepId = Guid.NewGuid();
@@ -724,17 +730,20 @@ public sealed class OrchestratorPrePipelineFacts
         Assert.Equal(2, nextIds.Distinct().Count());                    // DISTINCT next StepIds
         Assert.Contains(next1, nextIds);
         Assert.Contains(next2, nextIds);
-        // each edge carries the SAME inbound EntryId (M_N) and NO outbound MessageId placeholder.
-        Assert.All(edges, e => Assert.Equal(entryId, (Guid)StateValue(e, "EntryId")!));
-        Assert.All(edges, e => Assert.DoesNotContain(e.State, kv => kv.Key == "MessageId"));
+        // each edge carries its OWN minted outbound MessageId (== the stamped override id) and NO Tier-1 id.
+        var msgIds = edges.Select(e => (Guid)StateValue(e, "MessageId")!).ToList();
+        Assert.Equal(2, msgIds.Distinct().Count());
+        Assert.Equal(send.OverrideMessageIds.OrderBy(x => x), msgIds.OrderBy(x => x));
+        Assert.All(edges, e => Assert.DoesNotContain(e.State,
+            kv => kv.Key is "CorrelationId" or "ExecutionId" or "WorkflowId" or "EntryId"));
     }
 
     [Fact]
-    public async Task Terminal_reached_emits_two_records_at_double_fanin_by_distinct_EntryId()
+    public async Task Terminal_reached_emits_two_records_at_double_fanin()
     {
-        // FW-02 / D-12 / D-13: a Step_G-shaped double fan-in — the SAME terminal step reached TWICE by two
-        // distinct inbound EntryIds — emits exactly 2 terminal-reached records, distinguished by inbound
-        // EntryId, on the true-terminal branch only.
+        // FW-02 / D1 (Phase 77): a Step_G-shaped double fan-in — the SAME terminal step reached TWICE by two
+        // distinct inbound EntryIds — emits exactly 2 argument-less "terminal reached" markers on the
+        // true-terminal branch only. The distinguishing EntryId now arrives via the ambient scope, not State.
         var ct = TestContext.Current.CancellationToken;
         var workflowId = Guid.NewGuid();
         var terminalStepId = Guid.NewGuid();
@@ -758,13 +767,12 @@ public sealed class OrchestratorPrePipelineFacts
         await pipeline.RunAsync(Completed(workflowId, terminalStepId, entryB), StepOutcome.Completed, Guid.NewGuid(), ct);
 
         var terminals = TerminalReachedRecords(logger);
-        Assert.Equal(2, terminals.Count);                               // ×2 at the double fan-in
-        var entryIds = terminals.Select(e => (Guid)StateValue(e, "EntryId")!).ToList();
-        Assert.Equal(2, entryIds.Distinct().Count());                   // distinguished by inbound EntryId
-        Assert.Contains(entryA, entryIds);
-        Assert.Contains(entryB, entryIds);
-        // terminal-reached carries no outbound MessageId (D-12).
-        Assert.All(terminals, e => Assert.DoesNotContain(e.State, kv => kv.Key == "MessageId"));
+        Assert.Equal(2, terminals.Count);                               // ×2 at the double fan-in (one per inbound EntryId)
+        // the bare marker carries NO id placeholder args (only the implicit {OriginalFormat}) — every Tier-1
+        // id (incl. the distinguishing EntryId) arrives via the ambient execution scope (attributes.*).
+        Assert.All(terminals, t => Assert.DoesNotContain(t.State, kv =>
+            kv.Key is "CorrelationId" or "ExecutionId" or "WorkflowId" or "EntryId" or "StepId"
+                   or "MessageId" or "NextStepId"));
     }
 
     [Fact]
