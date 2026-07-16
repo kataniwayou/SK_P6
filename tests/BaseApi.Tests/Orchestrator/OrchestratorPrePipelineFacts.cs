@@ -83,15 +83,34 @@ public sealed class OrchestratorPrePipelineFacts
         public ConnectHandle ConnectSendObserver(ISendObserver observer) => throw new NotSupportedException();
     }
 
-    /// <summary>A capturing <see cref="ILogger{T}"/> recording each formatted message so the two DISTINCT
-    /// trip-end lines (<c>completed-terminal</c> / <c>completed-unresolved</c>) are assertable.</summary>
+    /// <summary>Phase 76 (FW-02) — a structured-State capturing <see cref="ILogger{T}"/> (adopted from
+    /// <c>Keeper/ReinjectConsumerFacts.cs:24-48</c>) that materializes each entry's message-template State (the
+    /// <c>{Placeholder}</c> args MEL exposes as an <see cref="IReadOnlyList{T}"/> of
+    /// <see cref="KeyValuePair{TKey,TValue}"/>) so a hermetic fact can assert per-record fields — e.g. the
+    /// fan-out edge record's <c>NextStepId</c> distinctness and the terminal-reached record's inbound
+    /// <c>EntryId</c>. <see cref="Messages"/> is retained (formatted-string projection) so the existing
+    /// DISTINCT trip-end facts (<c>completed-terminal</c> / <c>completed-unresolved</c> / <c>clean-absent</c>)
+    /// still assert against the rendered text.</summary>
     private sealed class CapturingLogger<T> : ILogger<T>
     {
-        public List<string> Messages { get; } = [];
+        internal sealed record Entry(LogLevel Level, string Message, IReadOnlyList<KeyValuePair<string, object?>> State);
+
+        private readonly List<Entry> _entries = [];
+        public IReadOnlyList<Entry> Entries => _entries;
+
+        /// <summary>Back-compat projection: the formatted message text of every captured entry.</summary>
+        public List<string> Messages => _entries.Select(e => e.Message).ToList();
+
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
         public bool IsEnabled(LogLevel logLevel) => true;
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
-            Func<TState, Exception?, string> formatter) => Messages.Add(formatter(state, exception));
+            Func<TState, Exception?, string> formatter)
+        {
+            var pairs = state is IReadOnlyList<KeyValuePair<string, object?>> kvps
+                ? kvps.ToList()
+                : new List<KeyValuePair<string, object?>>();
+            _entries.Add(new Entry(logLevel, formatter(state, exception), pairs));
+        }
 
         private sealed class NullScope : IDisposable
         {
@@ -99,6 +118,31 @@ public sealed class OrchestratorPrePipelineFacts
             public void Dispose() { }
         }
     }
+
+    // ===== FW-02 record filter helpers ============================================================
+
+    /// <summary>The fan-out EDGE records (D-11 Option C): captured entries carrying BOTH a <c>NextStepId</c>
+    /// and a <c>CorrelationId</c> placeholder — this excludes the stage-3 "Dangling next-step id" log (which
+    /// carries <c>NextStepId</c> but no <c>CorrelationId</c>).</summary>
+    private static List<CapturingLogger<OrchestratorPrePipeline>.Entry> EdgeRecords(
+        CapturingLogger<OrchestratorPrePipeline> log) =>
+        log.Entries.Where(e => e.State.Any(kv => kv.Key == "NextStepId")
+                            && e.State.Any(kv => kv.Key == "CorrelationId")).ToList();
+
+    /// <summary>The terminal-reached records (D-12/D-13): captured entries carrying <c>CorrelationId</c> +
+    /// <c>EntryId</c> + <c>StepId</c> (and NO <c>NextStepId</c>) — this excludes the existing unstructured
+    /// "Trip ended (completed-terminal)" line (no <c>CorrelationId</c>/<c>EntryId</c>) and the fan-out edge
+    /// record (carries <c>NextStepId</c>, not <c>StepId</c>).</summary>
+    private static List<CapturingLogger<OrchestratorPrePipeline>.Entry> TerminalReachedRecords(
+        CapturingLogger<OrchestratorPrePipeline> log) =>
+        log.Entries.Where(e => e.State.Any(kv => kv.Key == "CorrelationId")
+                            && e.State.Any(kv => kv.Key == "EntryId")
+                            && e.State.Any(kv => kv.Key == "StepId")
+                            && e.State.All(kv => kv.Key != "NextStepId")).ToList();
+
+    /// <summary>Read a single placeholder value off a captured entry's State (null if absent).</summary>
+    private static object? StateValue(CapturingLogger<OrchestratorPrePipeline>.Entry e, string key) =>
+        e.State.FirstOrDefault(kv => kv.Key == key).Value;
 
     // ===== Redis muxes ===========================================================================
 
@@ -643,5 +687,125 @@ public sealed class OrchestratorPrePipelineFacts
 
         var handoff = Assert.Single(send.Handoffs);
         Assert.Equal(inboundExecutionId, handoff.ExecutionId);   // threaded UNCHANGED (REQ-71-11)
+    }
+
+    // ===== FW-02 fan-out edge + terminal-reached records (Phase 76, D-11 Option C / D-12 / D-13) =====
+
+    [Fact]
+    public async Task FanOut_emits_two_edge_records_with_distinct_NextStepId()
+    {
+        // FW-02 / D-11 Option C: a 2-way fan-out emits exactly 2 edge records, each carrying the SAME inbound
+        // EntryId (M_N) and DISTINCT next StepIds — and NO outbound MessageId (Option C omits it).
+        var ct = TestContext.Current.CancellationToken;
+        var workflowId = Guid.NewGuid();
+        var completedStepId = Guid.NewGuid();
+        var next1 = Guid.NewGuid();
+        var next2 = Guid.NewGuid();
+        var entryId = Guid.NewGuid();
+
+        var steps = new Dictionary<Guid, StepProjection>
+        {
+            [completedStepId] = Step(0, Guid.NewGuid(), "{}", next1, next2),
+            [next1] = Step((int)StepOutcome.Completed, Guid.NewGuid(), "{}"),
+            [next2] = Step((int)StepOutcome.Completed, Guid.NewGuid(), "{}"),
+        };
+        var store = Seed(workflowId, steps);
+        var redis = OutPresentL2(
+            new Dictionary<string, string> { [L2ProjectionKeys.OutputData(entryId)] = "the-output" }, out _);
+        var send = new CapturingSendProvider();
+        var logger = new CapturingLogger<OrchestratorPrePipeline>();
+
+        await Build(store, redis, send, logger).RunAsync(
+            Completed(workflowId, completedStepId, entryId), StepOutcome.Completed, Guid.NewGuid(), ct);
+
+        var edges = EdgeRecords(logger);
+        Assert.Equal(2, edges.Count);                                   // one edge record per next step
+        var nextIds = edges.Select(e => (Guid)StateValue(e, "NextStepId")!).ToList();
+        Assert.Equal(2, nextIds.Distinct().Count());                    // DISTINCT next StepIds
+        Assert.Contains(next1, nextIds);
+        Assert.Contains(next2, nextIds);
+        // each edge carries the SAME inbound EntryId (M_N) and NO outbound MessageId placeholder.
+        Assert.All(edges, e => Assert.Equal(entryId, (Guid)StateValue(e, "EntryId")!));
+        Assert.All(edges, e => Assert.DoesNotContain(e.State, kv => kv.Key == "MessageId"));
+    }
+
+    [Fact]
+    public async Task Terminal_reached_emits_two_records_at_double_fanin_by_distinct_EntryId()
+    {
+        // FW-02 / D-12 / D-13: a Step_G-shaped double fan-in — the SAME terminal step reached TWICE by two
+        // distinct inbound EntryIds — emits exactly 2 terminal-reached records, distinguished by inbound
+        // EntryId, on the true-terminal branch only.
+        var ct = TestContext.Current.CancellationToken;
+        var workflowId = Guid.NewGuid();
+        var terminalStepId = Guid.NewGuid();
+        var failGatedStepId = Guid.NewGuid();
+
+        // the only successor is Failed-gated → a Completed result has NO match (true terminal).
+        var steps = new Dictionary<Guid, StepProjection>
+        {
+            [terminalStepId] = Step(0, Guid.NewGuid(), "{}", failGatedStepId),
+            [failGatedStepId] = Step((int)StepOutcome.Failed, Guid.NewGuid(), "{}"),
+        };
+        var store = Seed(workflowId, steps);
+        var redis = OutPresentL2(new Dictionary<string, string>(), out _);
+        var send = new CapturingSendProvider();
+        var logger = new CapturingLogger<OrchestratorPrePipeline>();
+        var entryA = Guid.NewGuid();
+        var entryB = Guid.NewGuid();
+
+        var pipeline = Build(store, redis, send, logger);
+        await pipeline.RunAsync(Completed(workflowId, terminalStepId, entryA), StepOutcome.Completed, Guid.NewGuid(), ct);
+        await pipeline.RunAsync(Completed(workflowId, terminalStepId, entryB), StepOutcome.Completed, Guid.NewGuid(), ct);
+
+        var terminals = TerminalReachedRecords(logger);
+        Assert.Equal(2, terminals.Count);                               // ×2 at the double fan-in
+        var entryIds = terminals.Select(e => (Guid)StateValue(e, "EntryId")!).ToList();
+        Assert.Equal(2, entryIds.Distinct().Count());                   // distinguished by inbound EntryId
+        Assert.Contains(entryA, entryIds);
+        Assert.Contains(entryB, entryIds);
+        // terminal-reached carries no outbound MessageId (D-12).
+        Assert.All(terminals, e => Assert.DoesNotContain(e.State, kv => kv.Key == "MessageId"));
+    }
+
+    [Fact]
+    public async Task L1_miss_emits_no_terminal_reached_record()
+    {
+        // D-12 negative: the completed-unresolved (L1-miss) branch must NOT emit a terminal-reached record.
+        var ct = TestContext.Current.CancellationToken;
+        var store = new WorkflowL1Store();   // empty — every (wf,step) is a miss
+        var redis = OutPresentL2(new Dictionary<string, string>(), out _);
+        var send = new CapturingSendProvider();
+        var logger = new CapturingLogger<OrchestratorPrePipeline>();
+
+        await Build(store, redis, send, logger).RunAsync(
+            Completed(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid()), StepOutcome.Completed, Guid.NewGuid(), ct);
+
+        Assert.Empty(TerminalReachedRecords(logger));                   // L1-miss is NOT "reached terminal"
+    }
+
+    [Fact]
+    public async Task Clean_absent_emits_no_terminal_reached_record()
+    {
+        // D-12 negative: the clean-absent out: skip must NOT emit a terminal-reached record.
+        var ct = TestContext.Current.CancellationToken;
+        var workflowId = Guid.NewGuid();
+        var failedStepId = Guid.NewGuid();
+        var nextStepId = Guid.NewGuid();
+        var entryId = Guid.NewGuid();
+
+        var steps = new Dictionary<Guid, StepProjection>
+        {
+            [failedStepId] = Step(0, Guid.NewGuid(), "{}", nextStepId),
+            [nextStepId] = Step((int)StepOutcome.Failed, Guid.NewGuid(), "{}"),
+        };
+        var store = Seed(workflowId, steps);
+        var redis = OutPresentL2(new Dictionary<string, string>(), out _);   // empty → clean-absent
+        var send = new CapturingSendProvider();
+        var logger = new CapturingLogger<OrchestratorPrePipeline>();
+
+        await Build(store, redis, send, logger).RunAsync(
+            Failed(workflowId, failedStepId, entryId), StepOutcome.Failed, Guid.NewGuid(), ct);
+
+        Assert.Empty(TerminalReachedRecords(logger));                   // clean-absent is NOT "reached terminal"
     }
 }
