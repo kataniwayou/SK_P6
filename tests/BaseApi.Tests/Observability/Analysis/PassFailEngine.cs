@@ -38,8 +38,9 @@ namespace BaseApi.Tests.Observability.Analysis;
 ///   L2 wipe causes tolerated loss), MG-2 keeper-recovery activity (per-scenario via
 ///   <paramref name="expectsKeeperActivity"/>), and MG-3 keeper-l2-probe liveness (universal). A failing
 ///   BINDING gate flips the verdict and emits a CorroborationDetail line (Reconciliation=Unreconciled).</item>
-/// <item>VERDICT: Pass iff (every started run complete) AND (no duplicate) AND (value-chain intact) AND
-///   (the binding metric gate holds).</item>
+/// <item>VERDICT: Pass iff (every started run complete) AND (no duplicate) AND
+///   (the binding metric gate holds). (D-03/Phase 78: the concrete value chain is deleted — structural
+///   stepId completeness + ANL-03 redundancy + the metric gate are the sole axes.)</item>
 /// </list>
 /// </para>
 /// </summary>
@@ -72,11 +73,6 @@ public sealed class PassFailEngine
     /// synthetic/empty. Default null ⇒ empty map (keeps existing callers compiling, no behaviour change).
     /// </param>
     /// <param name="tripDurationMsByCorrelation">Per-<c>correlationId</c> aggregate trip duration ms (73, D-12). Default null ⇒ empty.</param>
-    /// <param name="seedsByExecution">
-    /// VALUE-CHAIN seed map (73, D-11): per-<c>(corr, exec)</c> seed keyed <c>"correlationId|executionId"</c>, used to
-    /// check each label's surfaced value equals <c>seed + hop-count</c>. When a run has no entry here, its seed is
-    /// recovered from the chain itself (<c>Values["Step_B"] - 1</c>). Default null ⇒ recover-from-chain for all.
-    /// </param>
     /// <param name="keeperOutcomeByExecution">
     /// RECOVERABILITY evidence (75, D75-3/D75-4): per-<c>(corr, exec)</c> keeper REINJECT outcome keyed
     /// <c>"correlationId|executionId"</c> → outcome string (<c>"drop"</c> for a keeper-confirmed clean-absent DROP
@@ -109,7 +105,6 @@ public sealed class PassFailEngine
                                   string scenarioId,
                                   IReadOnlyDictionary<string, double>? tripDurationMsByExecution = null,
                                   IReadOnlyDictionary<string, double>? tripDurationMsByCorrelation = null,
-                                  IReadOnlyDictionary<string, int>? seedsByExecution = null,
                                   bool expectsKeeperActivity = false,
                                   bool mg1Binding = true,
                                   DateTimeOffset? recoveryUtc = null,
@@ -194,13 +189,6 @@ public sealed class PassFailEngine
         var lastHop  = lastHopUtcByExecution  ?? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var keeperOutcome = keeperOutcomeByExecution ?? new Dictionary<string, string>(StringComparer.Ordinal);
 
-        // VALUE-ORACLE APPLICABILITY (SMP-01 degrade rule): the value chain is APPLICABLE only when a NON-EMPTY
-        // seed oracle is supplied. With no StepLabel/Produced/seed present (a processor with zero author logs),
-        // the oracle is genuinely ABSENT ⇒ the value-chain check degrades to NOT-APPLICABLE, never FAIL. (An
-        // EMPTY-but-non-null map — the live fixture always passes a dict — no longer counts as "supplied", so a
-        // sample that logged no Produced values cannot manufacture a WR-02 vacuous-green FAIL.)
-        var valueOracleSupplied = seedsByExecution is { Count: > 0 };
-
         var incomplete = scored.Where(r => !RunComplete(r)).ToList();
         var inFlightLoss = 0;
         var bindingMissing = 0;
@@ -209,15 +197,6 @@ public sealed class PassFailEngine
         var unrecoverableLossDetail = new List<string>();
         var missingDetail = new List<string>();
         var telemetryGapDetail = new List<string>();
-        // Keys of runs classified as TOLERATED (non-binding) losses — keeper-confirmed clean-absent DROP (D75-3)
-        // OR redis-wipe in-flight-at-wipe (D75-5). A tolerated run has, by definition, a PARTIAL trace (some hops
-        // never landed in ES) — its value chain is expected to be incomplete/unanchored, so the binding value-
-        // chain check below MUST skip it (D75-8, commit 3028f43). Otherwise a terminal-only survivor (e.g. Step_G
-        // @ seed+6 with no Step_B/Step_A) recovers seed 0 and falsely fails (Step_G expected 6 got 206) — the
-        // TEST-03 orchestrator-crash false FAIL. The loss is already accounted (non-binding); it must not ALSO
-        // trip a second binding gate. inFlightLossKeys is populated for EVERY tolerated key so the value-chain
-        // loop at the skip-set consumer below keeps skipping them.
-        var inFlightLossKeys = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var r in incomplete)
         {
@@ -225,29 +204,10 @@ public sealed class PassFailEngine
             var missingSteps = MissingStepIds(r);
             var missingList = string.Join(",", missingSteps.OrderBy(s => s, StringComparer.Ordinal));
 
-            // ── 1. VALUE-ORACLE TELEMETRY-GAP RECONCILIATION (checked FIRST — strongest evidence) ──
-            // A trace-incomplete run whose SURFACED values still form a valid deterministic chain culminating
-            // in the terminal Step_G == seed+6 has PROVABLY completed: the terminal value (and every present
-            // downstream value) is unreachable unless every missing hop actually ran, so the absent framework
-            // records are dropped OTLP records, NOT lost work. Treat as a NON-binding telemetry gap, not a miss.
-            // Gated on a supplied value oracle so the seed is trusted (not a defaulted 0) and so legacy
-            // completeness-only callers are unaffected. A terminal-only survivor with a WRONG seed fails the
-            // Step_G==seed+6 check and drops through to the normal loss classification below.
-            var reconSeed = ResolveSeed(r, seedsByExecution);
-            if (valueOracleSupplied
-                && r.Values.TryGetValue("Step_G", out var terminalVal)
-                && terminalVal == reconSeed + ExpectedHopOffset["Step_G"]
-                && CheckValueChain(r, reconSeed, out _))
-            {
-                telemetryGap++;
-                telemetryGapDetail.Add(
-                    $"[{key}] trace-incomplete (missing {missingList}) but terminal " +
-                    $"Step_G=={reconSeed + ExpectedHopOffset["Step_G"]} with intact value chain — dropped " +
-                    "hop-LOG(s) under load, not lost work (telemetry gap, non-binding).");
-                continue;
-            }
-
-            // ── 2. FRAMEWORK-REDUNDANCY RECONCILIATION (ANL-03, NO seed oracle required) ──
+            // ── FRAMEWORK-REDUNDANCY RECONCILIATION (ANL-03, NO seed oracle required) — SOLE non-binding path ──
+            // (D-03/Phase 78: the value-oracle telemetry-gap path #1 is deleted; ANL-03 below is the ONLY
+            // non-binding reconciliation. The sample author logs are gone post-Phase-77, so there is no seed /
+            // surfaced-value evidence left to reconcile a dropped record — only framework redundancy remains.)
             // A missing expected stepId whose output EntryId (M_N) was consumed by an orchestrator FW-02
             // fan-out/terminal record PROVABLY ran — the orchestrator independently witnessed its output. When
             // EVERY missing stepId is so proven, the run's absent processor records are dropped telemetry, not
@@ -283,7 +243,6 @@ public sealed class PassFailEngine
             if (tolerated)
             {
                 inFlightLoss++;
-                inFlightLossKeys.Add(key);   // D75-8: skip-set for the value-chain loop (commit 3028f43)
                 if (keeperCleanDrop)
                 {
                     var line = $"[{key}] keeper clean-absent DROP (provably-unrecoverable, tolerated).";
@@ -314,77 +273,10 @@ public sealed class PassFailEngine
         var duplicates = scored.Where(r => r.HasIllegitimateDuplicate).ToList();
         var dupFail = duplicates.Count > 0;
 
-        // VALUE-CHAIN ASSERTION (NEW, 73, D-11, BINDING): each STARTED run's surfaced values must follow the
-        // deterministic chain Values[label] == seed + hop-count (B=seed+1 … G=seed+6), and BOTH Step_G arrivals
-        // sit at the shared terminal seed+6.
-        //
-        // WR-01 — what this pins on the LIVE path: the seed is recovered from the chain itself (Step_B - 1, see
-        // ResolveSeed) because the ES-read-only auditor has no independent absolute seed oracle live. So the LIVE
-        // check binds the inter-hop +1 DELTAS (and the Step_G ×2 agreement at the shared terminal seed+6), NOT
-        // the ABSOLUTE base value — a uniform constant shift of the whole live chain would still pass. The
-        // ABSOLUTE-value terminal-anchor proof (Step_G at 106 / 206 against the fixed 100/200 seeds) is owned by
-        // the hermetic harness (FanInHermeticHarnessFacts, Plan 02), which reads the durable L2 blob; it is NOT
-        // re-proven here. The hermetic value-chain facts pass an EXPLICIT seed oracle, so their anchor is real.
-        // A run is checked ONLY if it surfaced any values; WR-02 below additionally fails a COMPLETE-but-zero-
-        // values cohort when a value oracle is supplied. valueChainOk folds into the verdict.
-        var valueChainDetail = new List<string>();
-        var valueChainOk = true;
-
-        // VALUE-ORACLE GATE (WR-02): the empty-value-map vacuous-pass hardening below only applies when the
-        // caller actually supplied a value oracle (a non-null seedsByExecution). The migrated legacy
-        // completeness-only callers (PassFailEngineFacts) pass NO value map AND NO seedsByExecution — for them
-        // the empty-map run is genuinely not value-chain-checked and the run continues as before (no behaviour
-        // change). When an oracle IS supplied (the live fixture, the value-chain facts), a COMPLETE run that
-        // surfaced ZERO Produced values is treated as UNVERIFIED (fail), NOT a vacuous pass.
-        // valueOracleSupplied is defined above (before the classification loop) and reused here.
-        var completeRunsWithValues = 0;
-
-        foreach (var run in scored)
-        {
-            // A tolerated in-flight loss has a partial-by-design trace (stalled before recovery); its chain is
-            // expected to be incomplete, so it is NOT value-chain-checked (its bounded loss already gates the
-            // verdict). Skipping it prevents the TEST-03 false FAIL where a terminal-only survivor recovers the
-            // wrong seed. Complete runs are never in this set (in-flight losses are incomplete), so the WR-02
-            // terminal-cohort accounting below is unaffected.
-            if (inFlightLossKeys.Contains($"{run.CorrelationId}|{run.ExecutionId}"))
-            {
-                continue;
-            }
-
-            if (run.Values.Count == 0)
-            {
-                continue; // no surfaced values → checked for vacuous-pass below when a value oracle is supplied
-            }
-
-            if (RunComplete(run))
-            {
-                completeRunsWithValues++;
-            }
-
-            var seed = ResolveSeed(run, seedsByExecution);
-            if (!CheckValueChain(run, seed, out var detail))
-            {
-                valueChainOk = false;
-            }
-            valueChainDetail.Add(detail);
-        }
-
-        // WR-02 vacuous-green guard: with a value oracle supplied, if there is at least one COMPLETE run but
-        // NONE of them surfaced a Produced value, the binding value-chain assertion checked NOTHING for the
-        // terminal cohort — report it UNVERIFIED (fail) rather than a silent OK. The most likely live cause is
-        // the ES mapping for attributes.Produced being absent/odd-shaped so TryReadProduced returns false for
-        // every hit, collapsing every run's value map to empty.
-        // SMP-01 degrade: `valueOracleSupplied` is now non-empty-seed-gated (see its definition), so a
-        // framework-records-only cohort (no Produced ⇒ empty seed map ⇒ oracle NOT supplied) skips this guard
-        // entirely — value chain N/A, never FAIL. A genuinely-supplied oracle whose COMPLETE cohort surfaced no
-        // value is still the WR-02 unverified-FAIL (broken attributes.Produced mapping).
-        if (valueOracleSupplied && complete.Count > 0 && completeRunsWithValues == 0)
-        {
-            valueChainOk = false;
-            valueChainDetail.Add(
-                $"{complete.Count} complete run(s) surfaced no Produced value — value chain unverified " +
-                "(value oracle supplied but no terminal cohort carried a surfaced value; likely attributes.Produced unmapped).");
-        }
+        // D-03/Phase 78: the concrete value-chain assertion (Values[label] == seed + hop-count) and the WR-02
+        // vacuous-green guard are DELETED. Post-Phase-77 the sample author logs are gone, so no run surfaces a
+        // Produced value — leaving the check dormant would be a vacuous-green trap. The verdict now stands on
+        // structural stepId completeness + ANL-03 redundancy + the binding metric gate alone.
 
         var tripByExec = tripDurationMsByExecution ?? new Dictionary<string, double>(StringComparer.Ordinal);
         var tripByCorr = tripDurationMsByCorrelation ?? new Dictionary<string, double>(StringComparer.Ordinal);
@@ -458,7 +350,7 @@ public sealed class PassFailEngine
         }
         else
         {
-            var pass = missing == 0 && !dupFail && valueChainOk && metricGateOk;
+            var pass = missing == 0 && !dupFail && metricGateOk;
             verdict = pass ? Verdict.Pass : Verdict.Fail;
         }
 
@@ -481,14 +373,12 @@ public sealed class PassFailEngine
             CorroborationDetail = corroborationDetail,
             Prom = prom,
             Traces = runs,
-            ValueChainOk = valueChainOk,
-            ValueChainDetail = valueChainDetail,
             TelemetryGap = telemetryGap,
             TelemetryGapDetail = telemetryGapDetail,
             TripDurationMsByExecution = tripByExec,
             TripDurationMsByCorrelation = tripByCorr,
             HumanSummary = BuildSummary(
-                scenarioId, verdict, startedRuns, complete.Count, missing, dupFail, valueChainOk,
+                scenarioId, verdict, startedRuns, complete.Count, missing, dupFail,
                 metricGateOk, recon, corroborationDetail, telemetryGap),
             MetricGate = metricGate,
         };
@@ -512,83 +402,21 @@ public sealed class PassFailEngine
             ["Step_G"] = 6,
         };
 
-    /// <summary>
-    /// Resolve the seed for a run's value chain (73, D-11): the explicit <paramref name="seedsByExecution"/>
-    /// entry keyed <c>"correlationId|executionId"</c> if present, else recovered from the chain itself
-    /// (<c>Values["Step_B"] - 1</c>), else <c>Values["Step_A"]</c> (the seed source), else 0.
-    /// <para>
-    /// WR-01 — anchor strength. On the LIVE path the seed is recovered from the chain (<c>Step_B - 1</c>),
-    /// because no independent live executionId→seed oracle exists (the framework-owned GUID executionId carries
-    /// no seed, and Mode-2 <c>Step_A</c> surfaces no <c>Produced</c> value). A chain-derived seed makes
-    /// <c>Step_B</c>'s own assertion a tautology and pins only the inter-hop <c>+1</c> DELTAS, NOT the ABSOLUTE
-    /// base — a uniform constant shift of the whole chain still passes. The absolute-value proof (101..106 /
-    /// 201..206) is owned by the hermetic harness (<c>FanInHermeticHarnessFacts</c>), which reads the durable L2
-    /// blob. The hermetic value-chain facts DO pass an explicit seed oracle, so their absolute anchor is real.
-    /// </para>
-    /// </summary>
-    private static int ResolveSeed(RunTrace run, IReadOnlyDictionary<string, int>? seedsByExecution)
-    {
-        if (seedsByExecution is not null &&
-            seedsByExecution.TryGetValue($"{run.CorrelationId}|{run.ExecutionId}", out var seed))
-        {
-            return seed;
-        }
-        if (run.Values.TryGetValue("Step_B", out var b))
-        {
-            return b - 1;
-        }
-        if (run.Values.TryGetValue("Step_A", out var a))
-        {
-            return a;
-        }
-        return 0;
-    }
-
-    /// <summary>
-    /// Check a run's deterministic value chain (73, D-11): for every surfaced label, assert
-    /// <c>Values[label] == seed + ExpectedHopOffset[label]</c>. Both Step_G arrivals share the single map
-    /// entry at the terminal <c>seed + 6</c> — the LIVE terminal-anchor proxy. Emits a per-run evidence line
-    /// (expected-vs-actual) and returns false on the first mismatch (recorded in the detail).
-    /// </summary>
-    private static bool CheckValueChain(RunTrace run, int seed, out string detail)
-    {
-        var mismatches = new List<string>();
-        foreach (var (label, actual) in run.Values.OrderBy(kv => kv.Key, StringComparer.Ordinal))
-        {
-            if (!ExpectedHopOffset.TryGetValue(label, out var offset))
-            {
-                continue; // unknown label carries no chain expectation
-            }
-            var expected = seed + offset;
-            if (actual != expected)
-            {
-                mismatches.Add($"{label} expected {expected} got {actual}");
-            }
-        }
-
-        var ok = mismatches.Count == 0;
-        detail = ok
-            ? $"[{run.CorrelationId}|{run.ExecutionId}] value-chain OK (seed {seed}; Step_G terminal {seed + 6})."
-            : $"[{run.CorrelationId}|{run.ExecutionId}] value-chain FAIL (seed {seed}): {string.Join(", ", mismatches)}.";
-        return ok;
-    }
-
     private static string BuildSummary(string scenarioId, Verdict verdict, int startedRuns,
-        int completeRuns, int missing, bool dupFail, bool valueChainOk, bool metricGateOk,
+        int completeRuns, int missing, bool dupFail, bool metricGateOk,
         ReconciliationOutcome recon,
         IReadOnlyList<string> corroborationDetail, int telemetryGap = 0)
     {
         var reasons = new List<string>();
         if (missing > 0) reasons.Add($"{missing} started-but-incomplete");
         if (dupFail) reasons.Add("illegitimate duplicate (fail-closed)");
-        if (!valueChainOk) reasons.Add("value-chain mismatch (seed + hop-count / Step_G terminal anchor)");
         if (!metricGateOk) reasons.Add("metric gate (MG-1/2/3)");
-        // Non-binding note: value-chain-proven-complete runs missing only hop-LOGS (dropped OTLP records).
-        var gapNote = telemetryGap > 0 ? $" [{telemetryGap} telemetry-gap: dropped hop-logs, value-chain-proven complete]" : "";
+        // Non-binding note: ANL-03 framework-redundancy-proven runs missing only hop-LOGS (dropped OTLP records).
+        var gapNote = telemetryGap > 0 ? $" [{telemetryGap} telemetry-gap: dropped hop-logs, framework-redundancy-proven]" : "";
 
         var driver = verdict switch
         {
-            Verdict.Pass => "every started run complete, no illegitimate duplicate, value-chain intact, metric gate holds",
+            Verdict.Pass => "every started run complete, no illegitimate duplicate, metric gate holds",
             // ANL-04/05: evidence insufficient — trace-dark + self-consistent conservation (collector-blind).
             Verdict.Inconclusive => "evidence insufficient — total trace darkness (startedRuns=0) with " +
                 "self-consistent conservation; observability tier blind (explicitly not a flow failure, not a green)",

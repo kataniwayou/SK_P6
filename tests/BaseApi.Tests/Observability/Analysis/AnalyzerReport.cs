@@ -24,15 +24,16 @@ public sealed record MetricGateResult
 public enum Verdict
 {
     /// <summary>
-    /// Green: every STARTED run (distinct correlationId with ≥1 Step_* log) is COMPLETE (all 9 labels
-    /// incl. both sinks), no duplicate (correlationId, StepLabel), the value chain is intact, AND the
-    /// binding metric gate (MG-1 conservation / MG-2 keeper / MG-3 probe) holds.
+    /// Green: every STARTED run (distinct correlationId with ≥1 Step_* log) is COMPLETE (its stepId set
+    /// covers the ANL-02 expected set), no duplicate (correlationId, StepLabel), AND the binding metric gate
+    /// (MG-1 conservation / MG-2 keeper / MG-3 probe) holds. (D-03/Phase 78: the concrete value chain is
+    /// deleted from the verdict.)
     /// </summary>
     Pass,
 
     /// <summary>
     /// Red: at least one started-but-incomplete run (1–8 labels) OR any duplicate (fail-closed) OR a
-    /// value-chain mismatch OR a failing binding metric-gate check (MG-1/2/3) driven by a GENUINE
+    /// failing binding metric-gate check (MG-1/2/3) driven by a GENUINE
     /// conservation gap (live counters with orchestrator_consumed != processor_sent). A failing binding
     /// gate flips the verdict and sets <see cref="ReconciliationOutcome.Unreconciled"/>. FAIL requires
     /// POSITIVE evidence of loss — absence of evidence is <see cref="Inconclusive"/>, never a false FAIL.
@@ -91,8 +92,9 @@ public enum ReconciliationOutcome
 /// <b>Verdict drivers (ES-binding):</b> <see cref="StartedRuns"/> is the binding denominator —
 /// distinct correlationIds with ≥1 Step_* log (runs that started). <see cref="CompleteRuns"/> /
 /// <see cref="Missing"/> account against THAT denominator, and the loud <see cref="Duplicates"/>
-/// stay fail-closed. <b>Metric gate (BINDING):</b> the verdict folds in the ES value chain AND the
-/// binding metric gate (MG-1 conservation / MG-2 keeper / MG-3 probe); a failing binding gate flips the
+/// stay fail-closed. <b>Metric gate (BINDING):</b> the verdict folds in structural stepId completeness
+/// (with ANL-03 redundancy) AND the binding metric gate (MG-1 conservation / MG-2 keeper / MG-3 probe);
+/// a failing binding gate flips the
 /// verdict to Fail and sets <see cref="Reconciliation"/> = <see cref="ReconciliationOutcome.Unreconciled"/>,
 /// with the MG-1/2/3 failure lines carried in <see cref="CorroborationDetail"/>. (The former Prom
 /// corroboration math was retired.)
@@ -171,43 +173,15 @@ public sealed record AnalyzerReport
     public required IReadOnlyList<RunTrace> Traces { get; init; }
 
     /// <summary>
-    /// BINDING (73, D-11): true iff EVERY checked run's deterministic value chain holds —
-    /// <c>Values[label] == seed + hop-count</c> per <c>(corr, exec)</c>, with both <c>Step_G</c> arrivals
-    /// at the terminal <c>seed + 6</c>. A wrong mid-chain or terminal value sets this false and folds into
-    /// Verdict.Fail (<c>pass = … &amp;&amp; ValueChainOk</c>).
-    /// <para>
-    /// WR-01 — what the LIVE auditor pins. On the live ES-read-only path the seed is recovered from the chain
-    /// itself (<c>Step_B - 1</c>), so this field binds the inter-hop <c>+1</c> DELTAS (and the <c>Step_G</c> ×2
-    /// agreement at the shared terminal <c>seed + 6</c>), NOT the ABSOLUTE base value — a uniform constant shift
-    /// of the whole live chain would still pass. The ABSOLUTE-value terminal-anchor proof (<c>Step_G</c> at 106
-    /// for exec_a/seed 100, 206 for exec_b/seed 200) is owned by the hermetic harness (Plan 02), which reads the
-    /// durable <c>skp:out:</c> L2 blob; the ES-read-only auditor cannot read Redis and does NOT re-prove it here.
-    /// </para>
-    /// <para>
-    /// WR-02 — when a value oracle is supplied (live fixture), a COMPLETE run that surfaced ZERO <c>Produced</c>
-    /// values sets this false (UNVERIFIED), so a complete-but-unmapped cohort can no longer pass vacuously.
-    /// </para>
-    /// </summary>
-    public required bool ValueChainOk { get; init; }
-
-    /// <summary>
-    /// Per-exec expected-vs-actual value-chain evidence (73, D-11): one line per run describing the
-    /// surfaced values vs the expected <c>seed + hop-count</c> chain (so a value-chain failure is
-    /// trustworthy standalone in the report, like <see cref="MissingDetail"/>). Empty when no started run
-    /// carries any surfaced value (e.g. legacy callers that pass no value map).
-    /// </summary>
-    public required IReadOnlyList<string> ValueChainDetail { get; init; }
-
-    /// <summary>
-    /// TELEMETRY-GAP reconciliation (trace-export hardening): the count of STARTED runs that are
-    /// trace-incomplete (missing one or more hop-LOGS) but whose surfaced values still form a valid
-    /// deterministic chain culminating in the terminal <c>Step_G == seed + 6</c> — PROVABLY completed, since
-    /// the terminal value is unreachable unless every missing-label hop actually ran. The absent labels are
-    /// therefore dropped OTLP trace records, not lost work. NON-binding: these are excluded from
-    /// <see cref="Missing"/> and do NOT fail the verdict. A non-zero count is a signal to harden trace export
-    /// (the observability pipeline dropped records under load), NOT a data-loss failure. Only populated when a
-    /// value oracle (<c>seedsByExecution</c>) is supplied, so legacy completeness-only callers are unaffected.
-    /// Default 0 keeps existing constructors compiling.
+    /// TELEMETRY-GAP reconciliation (ANL-03 framework-redundancy — trace-export hardening): the count of STARTED
+    /// runs that are trace-incomplete (missing one or more processor hop-records) but EVERY missing stepId's
+    /// output EntryId (M_N) was consumed by an orchestrator FW-02 fan-out/terminal record — so the orchestrator
+    /// independently witnessed each missing hop's output. The absent processor records are therefore dropped
+    /// OTLP records, not lost work. NON-binding: these are excluded from <see cref="Missing"/> and do NOT fail
+    /// the verdict. A non-zero count is a signal to harden trace export (the observability pipeline dropped
+    /// records under load), NOT a data-loss failure. Needs NO seed oracle (the ANL-03 acceptance). (D-03/Phase
+    /// 78: the value-oracle telemetry-gap path #1 is deleted; ANL-03 is the sole source.) Default 0 keeps
+    /// existing constructors compiling.
     /// </summary>
     public int TelemetryGap { get; init; }
 

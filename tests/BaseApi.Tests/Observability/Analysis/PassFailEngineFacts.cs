@@ -428,30 +428,12 @@ public sealed class PassFailEngineFacts
     }
 
     [Fact]
-    public void PassFailEngine_OracleAbsent_FrameworkRecordsOnly_ValueChainNotApplicable_Yields_Pass()
-    {
-        // SMP-01: with framework StepId records ONLY (no StepLabel/Received/Produced, no seed oracle), the
-        // stepId completeness/expected-set still computes correctly, and the value chain degrades to
-        // NOT-APPLICABLE (ValueChainOk stays true) — never FAIL. A complete cohort with zero author values
-        // yields Pass.
-        var run = RunTrace.FromStepIds("corr-1", "exec-1", FullHopStepIds, convergentStepId: ConvergentStepId);
-        var expected = Expect(("corr-1|exec-1", DistinctHopStepIds()));
-
-        var report = new PassFailEngine().Analyze(new[] { run }, CleanSnapshot(), "unit-oracle-absent",
-            expectedStepIdsByExecution: expected);   // seedsByExecution NULL ⇒ value chain N/A
-
-        Assert.Equal(1, report.CompleteRuns);
-        Assert.True(report.ValueChainOk);                // N/A treated as OK, NOT a vacuous-green FAIL
-        Assert.Equal(Verdict.Pass, report.Verdict);
-    }
-
-    [Fact]
     public void PassFailEngine_ReconcileRedundancy_MissingHop_OrchestratorConsumed_NoSeedOracle_Yields_Pass()
     {
         // ANL-03: a run missing hop-f2's OWN processor record but whose missing hop is PROVEN-run by an
         // orchestrator FW-02 record that consumed its output EntryId (M_N) reconciles as a NON-binding telemetry
-        // gap — WITH NO seed oracle (seedsByExecution NULL, the ANL-03 acceptance). Missing 0, TelemetryGap 1,
-        // Pass. (Contrast the value-oracle telemetry-gap path, which REQUIRES a seed + terminal-anchor.)
+        // gap — WITH NO seed oracle (the ANL-03 acceptance). Missing 0, TelemetryGap 1, Pass. (D-03/Phase 78:
+        // ANL-03 is the SOLE non-binding reconciliation — the value-oracle telemetry-gap path is deleted.)
         var observed = FullHopStepIds.Where(s => s != "hop-f2").ToArray();
         var run = RunTrace.FromStepIds("corr-1", "exec-1", observed, convergentStepId: ConvergentStepId);
         var expected = Expect(("corr-1|exec-1", DistinctHopStepIds()));
@@ -460,7 +442,7 @@ public sealed class PassFailEngineFacts
 
         var report = new PassFailEngine().Analyze(new[] { run }, CleanSnapshot(), "unit-redundancy",
             expectedStepIdsByExecution: expected,
-            orchestratorConsumedStepIdsByExecution: proven);   // seedsByExecution NULL — no value oracle
+            orchestratorConsumedStepIdsByExecution: proven);   // no value oracle — ANL-03 redundancy only
 
         Assert.Equal(0, report.Missing);                       // reconciled, not a recoverable-but-lost miss
         Assert.Equal(1, report.TelemetryGap);                  // framework-redundancy telemetry gap (non-binding)
