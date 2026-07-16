@@ -31,6 +31,7 @@
     EXIT-CODE TABLE (D-04):
         0   analyzer PASS (final verdict green)
         1   analyzer FAIL verdict (mirrors the dotnet test exit — the legitimate verdict path)
+        2   analyzer INCONCLUSIVE verdict (observability-degraded — deliberate warm-ES re-run, NO auto-retry; D-02)
         10  bring-up (phase-65-up.ps1) failed
         20  reset (phase-65-reset.ps1) failed
         25  orchestrator clean-restart / health-wait failed (clean-window guarantee, STEP B1)
@@ -78,6 +79,13 @@ try {
     function Write-Phase([string]$msg, [string]$color = 'Cyan') {
         Write-Host "[phase-67-harness] $msg" -ForegroundColor $color
     }
+
+    # -----------------------------------------------------------------------
+    # FRAME 2.1 / D-02 — dot-source the shared exit-code resolution lib (pure functions, no side
+    # effects). Resolve-AnalyzerExitCode maps the analyzer report Verdict -> 0/1/2 (STEP H); the 2 =
+    # INCONCLUSIVE class is proven HERMETICALLY in scripts/lib before this live gate ever runs.
+    # -----------------------------------------------------------------------
+    . (Join-Path $PSScriptRoot 'lib/exit-code-resolution.ps1')
 
     # -----------------------------------------------------------------------
     # FRAME 10 / D-12 — in-script scenario table (the Phase 68 "just data" seam).
@@ -526,9 +534,27 @@ try {
     # Locate + echo the analyzer report path (D-04 requires printing it).
     $report = Get-ChildItem -Path (Join-Path $repoRoot 'tests/BaseApi.Tests/bin') -Recurse -Filter "$ScenarioId.json" -ErrorAction SilentlyContinue |
               Where-Object { $_.FullName -match 'analyzer-reports' } | Select-Object -First 1
-    if ($report) { Write-Phase "analyzer report: $($report.FullName)" 'Green' }
+    if ($report) {
+        Write-Phase "analyzer report: $($report.FullName)" 'Green'
+        # D-02 — RESOLVE THE AUTHORITATIVE VERDICT CLASS FROM THE JSON ARTIFACT. The fixture asserts
+        # Verdict==Pass, so on a non-Pass verdict $LASTEXITCODE mirrored 1 — but the report JSON is written
+        # BEFORE the assert, so it carries the TRUE class. Resolve-AnalyzerExitCode maps Inconclusive->2
+        # (observability-degraded), Fail->1, Pass->0. This OVERRIDES the mirrored dotnet-test exit so an
+        # Inconclusive run surfaces exit 2, NOT 1. Do NOT remap 2 to an infra code — it is a verdict class.
+        try {
+            $reportObj = Get-Content $report.FullName -Raw | ConvertFrom-Json
+            $resolved = Resolve-AnalyzerExitCode $reportObj
+            if ($resolved -ne $analyzerExit) {
+                Write-Phase "  report Verdict='$($reportObj.Verdict)' resolves exit $resolved (overrides mirrored dotnet-test exit $analyzerExit)." 'Gray'
+            }
+            $analyzerExit = $resolved
+        } catch {
+            Write-Phase "  WARNING: could not parse analyzer report for exit-code resolution: $($_.Exception.Message)" 'Yellow'
+        }
+    }
     else { Write-Phase "WARNING: analyzer-reports/$ScenarioId.json not found" 'Yellow' }
-    Write-Phase "analyzer verdict exit = $analyzerExit (0=PASS, non-0=FAIL)" $(if ($analyzerExit -eq 0) { 'Green' } else { 'Yellow' })
+    $verdictClass = (Resolve-SweepClass $analyzerExit).Class
+    Write-Phase "analyzer verdict exit = $analyzerExit ($verdictClass; 0=PASS 1=FAIL 2=INCONCLUSIVE)" $(if ($analyzerExit -eq 0) { 'Green' } else { 'Yellow' })
 
     # -----------------------------------------------------------------------
     # STEP Z — TEARDOWN (FRAME 11 / D-15; code 70 NON-FATAL). `docker compose down` keeps volumes

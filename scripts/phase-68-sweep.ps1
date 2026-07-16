@@ -19,6 +19,7 @@
     of truth the switch below maps against):
         0   analyzer PASS (final verdict green)
         1   analyzer FAIL verdict (the legitimate verdict path) — a REAL finding, NEVER auto-retried (D-04)
+        2   analyzer INCONCLUSIVE verdict (observability tier blind — deliberate warm-ES re-run, NO auto-retry; D-02)
         10  bring-up (phase-65-up.ps1) failed
         20  reset (phase-65-reset.ps1) failed
         25  orchestrator clean-restart / health-wait failed (clean-window guarantee, STEP B1)
@@ -60,6 +61,11 @@ try {
         Write-Host "[phase-68-sweep] $msg" -ForegroundColor $color
     }
 
+    # D-02/D-03 — dot-source the SHARED exit-code resolution lib (the same one the harness consumes), so
+    # the roll-up classifies 2 -> INCONCLUSIVE with the distinct instrument-failure / no-auto-retry message
+    # instead of an inline switch. Pure functions, no side effects.
+    . (Join-Path $PSScriptRoot 'lib/exit-code-resolution.ps1')
+
     # Scenario-id order seam (D-02 / baseline-first per Phase 67 D-10). Defaults to all 7 in numeric
     # order; an operator may pass a subset to re-run. The harness is the source of truth for the keys.
     $Ids = @($ScenarioIds)
@@ -76,14 +82,12 @@ try {
         & pwsh -File (Join-Path $PSScriptRoot 'phase-67-harness.ps1') -ScenarioId $id
         $code = $LASTEXITCODE
 
-        # Classify the child exit per the Phase 67 EXIT-CODE TABLE (D-04). No auto-retry on any class.
-        $class = switch ($code) {
-            0       { 'PASS' }
-            1       { 'VERDICT_FAIL' }   # real finding — NEVER auto-retried (D-04)
-            64      { 'BAD_ARG' }
-            default { 'INFRA_ABORT' }    # 10/20/25/30/40/50/60/70 — operator re-runnable (D-04)
-        }
-        Write-Phase "  $id -> harness exit $code ($class)" $(if ($code -eq 0) { 'Green' } else { 'Yellow' })
+        # Classify the child exit via the shared resolution lib (D-04). Adds 2 -> INCONCLUSIVE with a DISTINCT
+        # instrument-failure message advising a deliberate warm-ES re-run — sweep-fatal, NO auto-retry on any
+        # class. (0 PASS / 1 VERDICT_FAIL / 2 INCONCLUSIVE / 64 BAD_ARG / else INFRA_ABORT.)
+        $resolved = Resolve-SweepClass $code
+        $class = $resolved.Class
+        Write-Phase "  $id -> harness exit $code ($class): $($resolved.Message)" $(if ($code -eq 0) { 'Green' } else { 'Yellow' })
 
         # Per-scenario analyzer report discovery (copied from harness lines 353-354). The wrapper only
         # READS + tabulates the analyzer's already-computed values — it NEVER re-scores.
