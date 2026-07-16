@@ -212,6 +212,50 @@ public sealed class ConsoleExecutionScopeFilterTests
     }
 
     [Fact]
+    public async Task OperatorFreedom_ExecutionScopeFilter_Registered_Unconditionally()
+    {
+        // D5 / LOG-05 operator-freedom guard: BuildHarness wires the bus-wide
+        // InboundExecutionScopeConsumeFilter UNCONDITIONALLY (exactly as the console registers it), so an
+        // operator who writes a BARE log string with NO MEL {Placeholder} args STILL receives all five
+        // Tier-1 execution ids as attributes.* — the operator is NEVER obligated to use placeholders to get
+        // Tier-1 attribution. ExecProbeConsumer logs the placeholder-free literal "exec-probe consumed"; the
+        // five ids ride the ambient scope the filter opened, proving Tier-1 attribution is FILTER-supplied,
+        // not author-supplied. (This is the D4 counterpart: the concrete author now writes zero logs, yet the
+        // filter guarantee that ANY operator log — had one existed — carries the ids is unchanged.)
+        var ct = TestContext.Current.CancellationToken;
+        var capturing = new CapturingProvider();
+
+        var workflowId = Guid.NewGuid();
+        var stepId = Guid.NewGuid();
+        var processorId = Guid.NewGuid();
+        var executionId = Guid.NewGuid();
+        var entryId = Guid.NewGuid();
+
+        await using var provider = BuildHarness(capturing, x => x.AddConsumer<ExecProbeConsumer>());
+        var harness = provider.GetRequiredService<ITestHarness>();
+        await harness.Start();
+        try
+        {
+            await harness.Bus.Publish(
+                new ExecProbeMessage(Guid.NewGuid(), workflowId, stepId, processorId, executionId, entryId), ct);
+            Assert.True(await harness.Consumed.Any<ExecProbeMessage>(ct));
+
+            var scope = ExecutionScope(capturing);
+            // All five Tier-1 ids present DESPITE the consumer's placeholder-free bare log string.
+            Assert.Equal(5, scope.Count);
+            Assert.Equal(workflowId.ToString(), scope[ExecutionLogScope.WorkflowId]);
+            Assert.Equal(stepId.ToString(), scope[ExecutionLogScope.StepId]);
+            Assert.Equal(processorId.ToString(), scope[ExecutionLogScope.ProcessorId]);
+            Assert.Equal(executionId.ToString(), scope[ExecutionLogScope.ExecutionId]);
+            Assert.Equal(entryId.ToString(), scope[ExecutionLogScope.EntryId]);
+        }
+        finally
+        {
+            await harness.Stop(ct);
+        }
+    }
+
+    [Fact]
     public async Task Case_D_Empty_String_EntryId_Is_Skipped()
     {
         var ct = TestContext.Current.CancellationToken;

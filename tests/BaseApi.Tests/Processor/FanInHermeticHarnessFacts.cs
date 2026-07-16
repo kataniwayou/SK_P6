@@ -148,8 +148,7 @@ public sealed class FanInHermeticHarnessFacts
     private static async Task<DagRun> RunDag(int[] gOrder, CancellationToken ct)
     {
         var l2 = new DictBackedL2Fake();
-        var processor = new global::Processor.Sample.SampleProcessor(
-            NullLogger<global::Processor.Sample.SampleProcessor>.Instance);
+        var processor = new global::Processor.Sample.SampleProcessor();
         var send = new DispatchTestKit.CapturingSendProvider();
 
         var values = new Dictionary<(int, string), int>();
@@ -304,8 +303,7 @@ public sealed class FanInHermeticHarnessFacts
 
         // re-run the DAG against a store we keep so we can read the persisted out: blobs back by messageId.
         var l2 = new DictBackedL2Fake();
-        var processor = new global::Processor.Sample.SampleProcessor(
-            NullLogger<global::Processor.Sample.SampleProcessor>.Instance);
+        var processor = new global::Processor.Sample.SampleProcessor();
         var send = new DispatchTestKit.CapturingSendProvider();
         var executions = await RunSource(l2, processor, send, ct);
 

@@ -2,7 +2,6 @@ using System.Text.Json;
 using BaseProcessor.Core.Configuration;
 using BaseProcessor.Core.Processing;
 using Messaging.Contracts;
-using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Processor.Sample;
 using StackExchange.Redis;
@@ -19,33 +18,19 @@ namespace BaseApi.Tests.Processor;
 ///   <item><b>ENTRY</b> (<c>executionId == Guid.Empty</c>, Mode-2): spawns EXACTLY TWO completed
 ///   <see cref="DataResult"/>s to the <c>-post</c> queue with DISTINCT executionIds, DELETES the inbound entry,
 ///   and the seam returns NULL (the Pre consumer writes/sends/deletes nothing inline). Seeds the TWO FIXED
-///   deterministic values <c>100</c> and <c>200</c> (Phase 73, D-01) and logs the
-///   <c>"{label} seeded the following numbers: 100, 200"</c> line.</item>
+///   deterministic values <c>100</c> and <c>200</c> (Phase 73, D-01).</item>
 ///   <item><b>DOWNSTREAM</b> (<c>executionId != Guid.Empty</c>, Mode-1): returns ONE completed
-///   <see cref="DataResult"/> reusing the inbound executionId (the inline tail runs it), no spawn, no delete.
-///   Logs the value-clarifying <c>"{label} received {Received} produced {Produced}"</c> line (Phase 73,
-///   D-03/D-11 — the ES <c>attributes.Received</c>/<c>attributes.Produced</c> contract).</item>
+///   <see cref="DataResult"/> reusing the inbound executionId (the inline tail runs it), no spawn, no delete,
+///   producing <c>7 + 3 = 10</c>.</item>
 /// </list>
+/// Per D4/LOG-04 the concrete processor emits NO author logs — behaviour is proven ENTIRELY via
+/// <c>send.SentData</c> / <c>dr.Data</c> (never via log assertions), and the framework verdict never depends
+/// on a concrete-processor log. The D5/LOG-05 operator-freedom guard (the bus-wide execution-scope filter
+/// stays registered unconditionally, so any author string still gets Tier-1 <c>attributes.*</c>) lives in
+/// <c>ConsoleExecutionScopeFilterTests</c> to reuse its MassTransit harness without duplication.
 /// </summary>
 public sealed class SampleProcessorFacts
 {
-    /// <summary>Records every log entry's level + formatted message so the Mode-2 "seeded the following
-    /// numbers" / Mode-1 "received … produced …" line is observable hermetically.</summary>
-    private sealed class CapturingLogger : ILogger<SampleProcessor>
-    {
-        public List<(LogLevel Level, string Message)> Entries { get; } = new();
-        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
-        public bool IsEnabled(LogLevel logLevel) => true;
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
-            Func<TState, Exception?, string> formatter)
-            => Entries.Add((logLevel, formatter(state, exception)));
-        private sealed class NullScope : IDisposable
-        {
-            public static readonly NullScope Instance = new();
-            public void Dispose() { }
-        }
-    }
-
     private static void WireSeam(
         BaseProcessorBase processor, IDatabase db, DispatchTestKit.CapturingSendProvider send,
         Guid entryId, Guid processorId)
@@ -61,11 +46,10 @@ public sealed class SampleProcessorFacts
             escalateDelete: () => Task.CompletedTask);
 
     [Fact]
-    public async Task Entry_Spawns_Two_Distinct_ExecIds_DeletesEntry_ReturnsNull_AndLogs()
+    public async Task Entry_Spawns_Two_Distinct_ExecIds_DeletesEntry_ReturnsNull()
     {
         var ct = TestContext.Current.CancellationToken;
-        var logger = new CapturingLogger();
-        var processor = new SampleProcessor(logger);
+        var processor = new SampleProcessor();
 
         var entryId = Guid.NewGuid();
         var processorId = Guid.NewGuid();
@@ -92,17 +76,13 @@ public sealed class SampleProcessorFacts
         Assert.Equal(new[] { 100, 200 }, seededNumbers);
         // the inbound entry was deleted (Mode-2 DeleteEntry).
         await db.Received(1).KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
-        // logs the "{label} seeded the following numbers: 100, 200" line (Phase 73, D-01).
-        Assert.Contains(logger.Entries, e => e.Message.Contains("seeded the following numbers: 100, 200"));
-        Assert.Single(logger.Entries);
     }
 
     [Fact]
-    public async Task Downstream_Returns_One_Completed_ReusesInboundExec_NoSpawn_NoDelete_AndLogs()
+    public async Task Downstream_Returns_One_Completed_ReusesInboundExec_NoSpawn_NoDelete()
     {
         var ct = TestContext.Current.CancellationToken;
-        var logger = new CapturingLogger();
-        var processor = new SampleProcessor(logger);
+        var processor = new SampleProcessor();
 
         var entryId = Guid.NewGuid();
         var db = Substitute.For<IDatabase>();
@@ -123,17 +103,13 @@ public sealed class SampleProcessorFacts
 
         Assert.Empty(send.SentData);                               // no spawn (Mode-1)
         await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());   // no DeleteEntry inline
-        // value-clarifying line (Phase 73, D-03/D-11): received 7 (inbound) → produced 10 (7 + config 3).
-        Assert.Contains(logger.Entries, e => e.Message.Contains("received 7 produced 10"));
-        Assert.Single(logger.Entries);
     }
 
     [Fact]
-    public async Task Entry_NullConfig_StillSpawnsTwo_AndLogs()
+    public async Task Entry_NullConfig_StillSpawnsTwo()
     {
         var ct = TestContext.Current.CancellationToken;
-        var logger = new CapturingLogger();
-        var processor = new SampleProcessor(logger);
+        var processor = new SampleProcessor();
 
         var db = Substitute.For<IDatabase>();
         db.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
@@ -145,7 +121,6 @@ public sealed class SampleProcessorFacts
 
         Assert.Null(dr);
         Assert.Equal(2, send.SentData.Count);
-        Assert.Single(logger.Entries);
         // Mode-2 seeds the TWO FIXED deterministic values 100/200 (Phase 73, D-01) — independent of config,
         // so a null config still yields exactly {100, 200} (no random, no baseNumber offset).
         var seededNumbers = send.SentData
