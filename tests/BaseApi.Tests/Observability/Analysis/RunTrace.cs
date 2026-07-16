@@ -17,7 +17,7 @@ namespace BaseApi.Tests.Observability.Analysis;
 ///
 /// <para>
 /// <b>Duplicates are retained in <see cref="Labels"/>.</b> A redelivered/double-effect Step_C
-/// appears TWICE in <see cref="Labels"/> but ONCE in <see cref="DistinctLabels"/>; the gap is the
+/// appears TWICE in <see cref="Labels"/> but the duplicate is collapsed when computing the
 /// fail-closed duplicate signal (<see cref="HasAnyDuplicateLabel"/>). Label comparison is
 /// <see cref="StringComparer.Ordinal"/> — the labels are fixed verbatim identifiers (Step_A …
 /// Step_F2 … Step_G), never culture-folded.
@@ -72,10 +72,6 @@ public sealed record RunTrace
     /// </summary>
     public required IReadOnlyList<string> Labels { get; init; }
 
-    /// <summary>The distinct StepLabel set for this correlationId (Ordinal). VALUE-ORACLE axis only (D-16) — it
-    /// no longer drives structural completeness (that moved to <see cref="DistinctStepIds"/>, ANL-01/D-15).</summary>
-    public required HashSet<string> DistinctLabels { get; init; }
-
     /// <summary>
     /// Every framework <c>attributes.StepId</c> that emitted a per-hop execution record for this
     /// <c>(correlationId, executionId)</c> — duplicates RETAINED (the convergent terminal fans in twice, and a
@@ -91,15 +87,15 @@ public sealed record RunTrace
     /// STRUCTURAL COMPLETE (ANL-01, D-15): a run is complete when this set covers the ES-derived expected set
     /// (from FW-02 dispatch records). This is the single stepId-keyed source of truth that replaces the deleted
     /// <c>HopLabels</c> <c>StepLabel</c>-keyed set-comparison. For a legacy <see cref="FromLabels"/> run this is
-    /// populated from the distinct labels so the value-oracle facts keep computing completeness against the
-    /// KEPT <c>ExpectedHopOffset</c> hop set (no second structural constant is introduced — D-15).
+    /// populated from the raw labels so a label-built run still resolves completeness via the explicit expected
+    /// set or the cohort observedUnion (D-03/Phase 78: the value-oracle label-fallback hop set is deleted).
     /// </summary>
     public required HashSet<string> DistinctStepIds { get; init; }
 
     /// <summary>
-    /// True iff any StepLabel appears more than once for this correlationId
-    /// (<c>Labels.Count != DistinctLabels.Count</c>). The fail-closed duplicate signal (OBS-02):
-    /// there is no live dedupe counter to corroborate a redelivery, so any duplicate FAILS.
+    /// True iff any StepLabel appears more than once for this correlationId (the raw label list has a
+    /// repeat). The fail-closed duplicate signal (OBS-02): there is no live dedupe counter to corroborate
+    /// a redelivery, so any duplicate FAILS.
     /// </summary>
     public required bool HasAnyDuplicateLabel { get; init; }
 
@@ -163,10 +159,9 @@ public sealed record RunTrace
             CorrelationId = correlationId,
             ExecutionId = executionId,
             Labels = labels,
-            DistinctLabels = distinct,
-            // VALUE-ORACLE run: the structural stepId axis mirrors the distinct labels so the KEPT
-            // ExpectedHopOffset hop set (PassFailEngine) still gates completeness for the label-keyed
-            // value-oracle facts (D-16). A framework-record run uses FromStepIds instead (real StepIds).
+            // A label-built run mirrors its raw labels onto the structural stepId axis so completeness still
+            // resolves (via the explicit expected set or the cohort observedUnion). D-03/Phase 78: the value-
+            // oracle label→depth fallback is deleted; a framework-record run uses FromStepIds instead.
             StepIds = labels,
             DistinctStepIds = new HashSet<string>(labels, StringComparer.Ordinal),
             // Legacy "any raw repeat" — retained for report-shape stability; NOT the binding signal anymore.
@@ -231,7 +226,6 @@ public sealed record RunTrace
             DistinctStepIds = distinctSteps,
             // VALUE-ORACLE axis (D-16) — optional, separate from the structural stepId completeness above.
             Labels = labelList,
-            DistinctLabels = new HashSet<string>(labelList, StringComparer.Ordinal),
             HasAnyDuplicateLabel = stepIds.Count != distinctSteps.Count,
             HasIllegitimateDuplicate = illegitimate.Count > 0,
             DuplicateLabels = illegitimate.OrderBy(s => s, StringComparer.Ordinal).ToList(),

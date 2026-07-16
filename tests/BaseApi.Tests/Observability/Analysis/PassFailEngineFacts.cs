@@ -32,10 +32,10 @@ public sealed class PassFailEngineFacts
     /// <summary>
     /// The full 10-label completeness set as RAW labels for a COMPLETE run (73, D-10): Step_A…Step_F2 once
     /// PLUS the convergent terminal Step_G TWICE (the legitimate per-arrival fan-in). DISTINCT collapses to 10;
-    /// the Step_G ×2 is exempt from the duplicate-fail via RunTrace.HasIllegitimateDuplicate. These facts pass
-    /// NO value map, so the engine's value-chain check skips them (legacy-caller behaviour) and each fact stays
-    /// focused on its ONE branch (completeness / duplicate / Prom corroboration). The dedicated value-chain
-    /// Pass/Fail proofs live in PassFailEngineValueChainFacts.
+    /// the Step_G ×2 is exempt from the duplicate-fail via RunTrace.HasIllegitimateDuplicate. A complete
+    /// label-built cohort resolves completeness via the cohort observedUnion (D-03/Phase 78: the value-oracle
+    /// label-fallback hop set is deleted), so each fact stays focused on its ONE branch (completeness /
+    /// duplicate / Prom corroboration).
     /// </summary>
     private static readonly string[] AllTenLabelsWithConvergentGx2 =
         { "Step_A", "Step_B", "Step_C", "Step_D1", "Step_E1", "Step_F1", "Step_D2", "Step_E2", "Step_F2", "Step_G", "Step_G" };
@@ -81,15 +81,18 @@ public sealed class PassFailEngineFacts
     [Fact]
     public void Incomplete_StartedRun_DropsStepF2_Yields_Fail()
     {
-        // The run STARTED (it logged Step_A…) but is missing the Step_F2 sink → 9 distinct labels → incomplete.
-        // Step_G ×2 stays legitimate (not a duplicate); the ONLY failure driver is the missing Step_F2.
-        var missingF2Labels = AllTenLabelsWithConvergentGx2.Where(l => l != "Step_F2").ToArray();
-        var run = RunTrace.FromLabels("corr-1", "exec-1", missingF2Labels);
+        // The run STARTED (it logged hops) but is missing the hop-f2 sink → incomplete against the EXPLICIT
+        // ES-derived expected set. (Hazard-C migration D-03/Phase 78: built on the stepId path with an explicit
+        // expectedStepIdsByExecution — the live mechanism — not the deleted value-oracle label fallback.)
+        var observed = FullHopStepIds.Where(s => s != "hop-f2").ToArray();
+        var run = RunTrace.FromStepIds("corr-1", "exec-1", observed, convergentStepId: ConvergentStepId);
+        var expected = Expect(("corr-1|exec-1", DistinctHopStepIds()));
         var snap = CleanSnapshot();
 
-        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-test");
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-test",
+            expectedStepIdsByExecution: expected);
 
-        Assert.Equal(1, report.StartedRuns);     // it DID start (≥1 Step_* log)
+        Assert.Equal(1, report.StartedRuns);     // it DID start (≥1 hop record)
         Assert.Equal(0, report.CompleteRuns);
         Assert.Equal(1, report.Missing);         // OBS-02: started-but-incomplete, bound to ES denominator
         Assert.Equal(Verdict.Fail, report.Verdict);
@@ -240,14 +243,18 @@ public sealed class PassFailEngineFacts
     [Fact]
     public void Incomplete_StartedAfterRecovery_Yields_Fail()
     {
-        var stalled  = RunTrace.FromLabels("corr-9", "exec-9", Missing4Hops);
+        // Hazard-C migration (D-03/Phase 78): stepId path + explicit expected set. A stalled run whose first hop
+        // is AFTER recovery is NOT in-flight-at-wipe → recoverable-but-lost → binding miss.
+        var stalled  = RunTrace.FromStepIds("corr-9", "exec-9", StalledHopStepIds, convergentStepId: ConvergentStepId);
+        var expected = Expect(("corr-9|exec-9", DistinctHopStepIds()));
         var recovery = DateTimeOffset.Parse("2026-06-18T10:00:30Z");
         var lastHop  = new Dictionary<string, DateTimeOffset> { ["corr-9|exec-9"] = DateTimeOffset.Parse("2026-06-18T10:01:10Z") };
         var firstHop = new Dictionary<string, DateTimeOffset> { ["corr-9|exec-9"] = DateTimeOffset.Parse("2026-06-18T10:01:05Z") };
         var snap = ConservingSnapshot(results: 9);
 
         var report = new PassFailEngine().Analyze(new[] { stalled }, snap, "TEST-05",
-            recoveryUtc: recovery, firstHopUtcByExecution: firstHop, lastHopUtcByExecution: lastHop);
+            recoveryUtc: recovery, firstHopUtcByExecution: firstHop, lastHopUtcByExecution: lastHop,
+            expectedStepIdsByExecution: expected);
 
         Assert.Equal(1, report.Missing);
         Assert.Equal(Verdict.Fail, report.Verdict);
@@ -260,15 +267,21 @@ public sealed class PassFailEngineFacts
         // keeper-confirmed clean-absent DROPs (provably-unrecoverable) → tolerated regardless of count.
         // Under the OLD engine six in-flight losses (> 4) forced a FAIL on the cron-rate-coupled bound;
         // now N clean drops (any N) do NOT by themselves fail — the verdict is a pure function of
-        // per-(corr,exec) recoverability, never a firing-rate proxy.
+        // per-(corr,exec) recoverability, never a firing-rate proxy. (Hazard-C migration D-03/Phase 78: each run
+        // is incomplete against its EXPLICIT expected set — the stepId path — so tolerance is the real mechanism
+        // under test, not the deleted label fallback scoring a stalled run as vacuously complete.)
         var runs = Enumerable.Range(1, 6)
-            .Select(i => RunTrace.FromLabels($"corr-{i}", $"exec-{i}", Missing4Hops)).ToArray();
+            .Select(i => RunTrace.FromStepIds($"corr-{i}", $"exec-{i}", StalledHopStepIds, convergentStepId: ConvergentStepId))
+            .ToArray();
         var keeperDrops = runs.ToDictionary(
             r => $"{r.CorrelationId}|{r.ExecutionId}", _ => "drop", StringComparer.Ordinal);
+        var expected = runs.ToDictionary(
+            r => $"{r.CorrelationId}|{r.ExecutionId}",
+            _ => (IReadOnlySet<string>)DistinctHopStepIds(), StringComparer.Ordinal);
         var snap = ConservingSnapshot(results: 9);
 
         var report = new PassFailEngine().Analyze(runs, snap, "TEST-06",
-            keeperOutcomeByExecution: keeperDrops);
+            keeperOutcomeByExecution: keeperDrops, expectedStepIdsByExecution: expected);
 
         Assert.Equal(0, report.Missing);
         Assert.Equal(Verdict.Pass, report.Verdict);   // any count of clean drops passes — no absolute bound
@@ -298,8 +311,10 @@ public sealed class PassFailEngineFacts
     {
         // D75-3 (binding): one incomplete run with NO keeper outcome entry and last-hop AFTER recovery
         // (not stalled-before-recovery). It was recoverable (keeper could have reinjected) but did not
-        // complete → binding FAIL. Missing==1, Fail.
-        var stalled  = RunTrace.FromLabels("corr-9", "exec-9", Missing4Hops);
+        // complete → binding FAIL. Missing==1, Fail. (Hazard-C migration D-03/Phase 78: stepId path +
+        // explicit expected set.)
+        var stalled  = RunTrace.FromStepIds("corr-9", "exec-9", StalledHopStepIds, convergentStepId: ConvergentStepId);
+        var expected = Expect(("corr-9|exec-9", DistinctHopStepIds()));
         var recovery = DateTimeOffset.Parse("2026-06-18T10:00:30Z");
         var lastHop  = new Dictionary<string, DateTimeOffset> { ["corr-9|exec-9"] = DateTimeOffset.Parse("2026-06-18T10:01:10Z") };
         var firstHop = new Dictionary<string, DateTimeOffset> { ["corr-9|exec-9"] = DateTimeOffset.Parse("2026-06-18T10:01:05Z") };
@@ -307,7 +322,8 @@ public sealed class PassFailEngineFacts
 
         var report = new PassFailEngine().Analyze(new[] { stalled }, snap, "TEST-04",
             recoveryUtc: recovery, firstHopUtcByExecution: firstHop, lastHopUtcByExecution: lastHop,
-            keeperOutcomeByExecution: new Dictionary<string, string>(StringComparer.Ordinal));
+            keeperOutcomeByExecution: new Dictionary<string, string>(StringComparer.Ordinal),
+            expectedStepIdsByExecution: expected);
 
         Assert.Equal(1, report.Missing);
         Assert.Equal(Verdict.Fail, report.Verdict);
@@ -343,8 +359,10 @@ public sealed class PassFailEngineFacts
         // WAS recoverable and the keeper confirmed a re-send — MUST be a BINDING FAIL even when its timestamps
         // satisfy the redis-wipe tolerance path (last hop < recovery, no first-hop-after-recovery). Without the
         // veto this run would be falsely tolerated via redisWipeInFlight; with it, the reinject evidence wins and
-        // the recoverable-but-still-incomplete execution is a binding miss (Missing==1, Fail).
-        var stalled  = RunTrace.FromLabels("corr-2", "exec-2", Missing4Hops);
+        // the recoverable-but-still-incomplete execution is a binding miss (Missing==1, Fail). (Hazard-C migration
+        // D-03/Phase 78: stepId path + explicit expected set.)
+        var stalled  = RunTrace.FromStepIds("corr-2", "exec-2", StalledHopStepIds, convergentStepId: ConvergentStepId);
+        var expected = Expect(("corr-2|exec-2", DistinctHopStepIds()));
         var recovery = DateTimeOffset.Parse("2026-06-18T10:00:30Z");
         // Timestamps satisfy stalled-before-recovery (last hop < recovery) and NOT started-after-recovery —
         // exactly the RedisWipe_StalledBeforeRecovery tolerance window, so the ONLY differentiator is the
@@ -356,7 +374,7 @@ public sealed class PassFailEngineFacts
 
         var report = new PassFailEngine().Analyze(new[] { stalled }, snap, "TEST-05",
             recoveryUtc: recovery, firstHopUtcByExecution: firstHop, lastHopUtcByExecution: lastHop,
-            keeperOutcomeByExecution: keeperOutcome);
+            keeperOutcomeByExecution: keeperOutcome, expectedStepIdsByExecution: expected);
 
         Assert.Equal(0, report.InFlightLoss);   // NOT tolerated — the reinject veto overrode the timestamp path
         Assert.Equal(1, report.Missing);        // recoverable-but-lost → binding miss
@@ -373,6 +391,12 @@ public sealed class PassFailEngineFacts
     private static readonly string[] FullHopStepIds =
         { "hop-b", "hop-c", "hop-d1", "hop-e1", "hop-f1", "hop-d2", "hop-e2", "hop-f2", "hop-g", "hop-g" };
     private const string ConvergentStepId = "hop-g";
+
+    // A started-but-stalled observed stepId set (3 of the 9 expected hops) — the stepId-path analog of the
+    // former `Missing4Hops` label list. The Hazard-C-migrated recoverability facts (D-03/Phase 78) build their
+    // stalled run from this + an EXPLICIT expectedStepIdsByExecution (the live completeness mechanism), so the
+    // run scores incomplete via the stepId path rather than the deleted value-oracle label fallback.
+    private static readonly string[] StalledHopStepIds = { "hop-b", "hop-c", "hop-d1" };
 
     /// <summary>The DISTINCT 9-hop stepId expected set (the convergent terminal collapsed to one).</summary>
     private static IReadOnlySet<string> DistinctHopStepIds() =>
@@ -544,11 +568,15 @@ public sealed class PassFailEngineFacts
     {
         // ANL-04b: PARTIAL evidence (a started-but-incomplete run, startedRuns > 0) + a REAL conservation gap
         // (orch_consumed != proc_sent). Evidence is SUFFICIENT (a run started), so the gate does not short to
-        // Inconclusive; the missing hop + the genuine gap are positive evidence of loss → FAIL.
-        var incomplete = RunTrace.FromLabels("corr-1", "exec-1", Missing4Hops);
+        // Inconclusive; the missing hop + the genuine gap are positive evidence of loss → FAIL. (Hazard-C
+        // migration D-03/Phase 78: stepId path + explicit expected set — the run is incomplete against the live
+        // mechanism, not the deleted label fallback.)
+        var incomplete = RunTrace.FromStepIds("corr-1", "exec-1", StalledHopStepIds, convergentStepId: ConvergentStepId);
+        var expected = Expect(("corr-1|exec-1", DistinctHopStepIds()));
         var snap = CleanSnapshot() with { OrchestratorMessagesConsumedAtEnd = 9, ProcessorMessagesSentAtEnd = 4 };
 
-        var report = new PassFailEngine().Analyze(new[] { incomplete }, snap, "unit-anl04b");
+        var report = new PassFailEngine().Analyze(new[] { incomplete }, snap, "unit-anl04b",
+            expectedStepIdsByExecution: expected);
 
         Assert.Equal(1, report.StartedRuns);                 // partial evidence present (not trace-dark)
         Assert.False(report.MetricGate.ConservationOk);      // genuine conservation gap

@@ -48,9 +48,9 @@ public sealed class PassFailEngine
 {
     // ── ANL-01 / D-15: the old StepLabel-keyed structural hop-set constant is DELETED (clean break). Structural
     // completeness is now stepId-keyed (RunTrace.DistinctStepIds) against the ES-derived expected set (FW-02
-    // dispatch NextStepIds) — see the `ExpectedFor`/`RunComplete` locals in Analyze. The ONLY canonical hop
-    // set that survives is the value oracle's own `ExpectedHopOffset` (label→depth, KEPT per D-16), which the
-    // completeness fallback derives its legacy value-oracle-run shape from — never a second structural constant.
+    // dispatch NextStepIds) — see the `ExpectedFor`/`RunComplete` locals in Analyze. (D-03/Phase 78: the value
+    // oracle's label→depth offset map AND its `ExpectedFor` label-fallback are now DELETED too — the last
+    // value-oracle residue is gone; completeness resolves via the explicit expected set or observedUnion.)
 
     /// <summary>The empty stepId proven-set reused when a run has no orchestrator-redundancy evidence (ANL-03).</summary>
     private static readonly IReadOnlySet<string> EmptyStepSet = new HashSet<string>(StringComparer.Ordinal);
@@ -129,9 +129,10 @@ public sealed class PassFailEngine
         // ── EXPECTED-SET RESOLUTION (ANL-02) ──────────────────────────────────────────────────────────────
         // Structural completeness is stepId-keyed against the per-(corr,exec) EXPECTED set. Priority:
         //   1. explicit ES-derived FW-02 dispatch set (expectedStepIdsByExecution) — the ANL-02 binding path;
-        //   2. else the value oracle's canonical hop set (ExpectedHopOffset, D-16) for a legacy label-carrying
-        //      run — so the value-oracle facts keep computing completeness without a structural constant;
-        //   3. else the union of observed stepIds across the whole cohort (framework-only fallback).
+        //   2. else the union of observed stepIds across the whole cohort (framework-only fallback).
+        // (D-03/Phase 78: the middle value-oracle label-fallback branch — the label→depth hop set used when a
+        // run carried labels — is DELETED. It was dead in production once the value oracle went dark, so the
+        // hermetic facts that leaned on it were migrated to the explicit stepId set.)
         var expectedByExec = expectedStepIdsByExecution
             ?? new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal);
         var orchestratorConsumed = orchestratorConsumedStepIdsByExecution
@@ -140,17 +141,10 @@ public sealed class PassFailEngine
         var observedUnion = new HashSet<string>(StringComparer.Ordinal);
         foreach (var r in scored) observedUnion.UnionWith(r.DistinctStepIds);
 
-        // The value oracle's canonical hop set: ExpectedHopOffset keys with a non-zero offset (offset 0 is the
-        // Step_A seed/entry, excluded — the D-09 entry-marker analog on the label axis). Derived from the KEPT
-        // ExpectedHopOffset (D-16), NOT a standalone structural hop-set constant (deleted per D-15).
-        var valueOracleHopSet = ExpectedHopOffset.Where(kv => kv.Value != 0)
-            .Select(kv => kv.Key).ToHashSet(StringComparer.Ordinal);
-
         IReadOnlySet<string> ExpectedFor(RunTrace r)
         {
             var k = $"{r.CorrelationId}|{r.ExecutionId}";
             if (expectedByExec.TryGetValue(k, out var explicitSet)) return explicitSet;
-            if (r.DistinctLabels.Count > 0) return valueOracleHopSet;   // legacy value-oracle completeness
             return observedUnion;                                       // framework-only fallback
         }
 
@@ -383,24 +377,6 @@ public sealed class PassFailEngine
             MetricGate = metricGate,
         };
     }
-
-    /// <summary>
-    /// The expected per-hop value offset from the run's seed (73, D-11/D-02): the deterministic chain
-    /// seed → B=seed+1, C=seed+2, {D1,D2}=seed+3, {E1,E2}=seed+4, {F1,F2}=seed+5, G=seed+6 (both Step_G
-    /// arrivals share the terminal seed+6). Step_A is the seed source itself (offset 0). Symmetric branches
-    /// carry the same per-hop value, distinguished only by their framework-owned entryId (D-07).
-    /// </summary>
-    private static readonly IReadOnlyDictionary<string, int> ExpectedHopOffset =
-        new Dictionary<string, int>(StringComparer.Ordinal)
-        {
-            ["Step_A"] = 0,
-            ["Step_B"] = 1,
-            ["Step_C"] = 2,
-            ["Step_D1"] = 3, ["Step_D2"] = 3,
-            ["Step_E1"] = 4, ["Step_E2"] = 4,
-            ["Step_F1"] = 5, ["Step_F2"] = 5,
-            ["Step_G"] = 6,
-        };
 
     private static string BuildSummary(string scenarioId, Verdict verdict, int startedRuns,
         int completeRuns, int missing, bool dupFail, bool metricGateOk,
