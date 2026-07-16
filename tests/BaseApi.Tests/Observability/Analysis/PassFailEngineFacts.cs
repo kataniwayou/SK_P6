@@ -466,6 +466,48 @@ public sealed class PassFailEngineFacts
     }
 
     [Fact]
+    public void PassFailEngine_ReconcileRedundancy_MissingHop_OrchestratorConsumed_NoSeedOracle_Yields_Pass()
+    {
+        // ANL-03: a run missing hop-f2's OWN processor record but whose missing hop is PROVEN-run by an
+        // orchestrator FW-02 record that consumed its output EntryId (M_N) reconciles as a NON-binding telemetry
+        // gap — WITH NO seed oracle (seedsByExecution NULL, the ANL-03 acceptance). Missing 0, TelemetryGap 1,
+        // Pass. (Contrast the value-oracle telemetry-gap path, which REQUIRES a seed + terminal-anchor.)
+        var observed = FullHopStepIds.Where(s => s != "hop-f2").ToArray();
+        var run = RunTrace.FromStepIds("corr-1", "exec-1", observed, convergentStepId: ConvergentStepId);
+        var expected = Expect(("corr-1|exec-1", DistinctHopStepIds()));
+        var proven = Expect(("corr-1|exec-1",
+            (IReadOnlySet<string>)new HashSet<string>(StringComparer.Ordinal) { "hop-f2" }));
+
+        var report = new PassFailEngine().Analyze(new[] { run }, CleanSnapshot(), "unit-redundancy",
+            expectedStepIdsByExecution: expected,
+            orchestratorConsumedStepIdsByExecution: proven);   // seedsByExecution NULL — no value oracle
+
+        Assert.Equal(0, report.Missing);                       // reconciled, not a recoverable-but-lost miss
+        Assert.Equal(1, report.TelemetryGap);                  // framework-redundancy telemetry gap (non-binding)
+        Assert.Equal(Verdict.Pass, report.Verdict);
+        Assert.NotEmpty(report.TelemetryGapDetail);
+    }
+
+    [Fact]
+    public void PassFailEngine_ReconcileRedundancy_MissingBoth_Yields_Fail()
+    {
+        // ANL-03 guard: a run missing hop-f2's processor record AND with NO orchestrator-consumed evidence for
+        // it (missing BOTH records) stays a binding miss. Missing 1, Fail.
+        var observed = FullHopStepIds.Where(s => s != "hop-f2").ToArray();
+        var run = RunTrace.FromStepIds("corr-1", "exec-1", observed, convergentStepId: ConvergentStepId);
+        var expected = Expect(("corr-1|exec-1", DistinctHopStepIds()));
+
+        var report = new PassFailEngine().Analyze(new[] { run }, CleanSnapshot(), "unit-redundancy-miss",
+            expectedStepIdsByExecution: expected,
+            orchestratorConsumedStepIdsByExecution: Expect());   // empty proven set — no redundancy evidence
+
+        Assert.Equal(1, report.Missing);
+        Assert.Equal(0, report.TelemetryGap);
+        Assert.Equal(Verdict.Fail, report.Verdict);
+        Assert.NotEmpty(report.MissingDetail);
+    }
+
+    [Fact]
     public void RemovedDedupCounters_HaveNoSnapshotField_AbsenceProvenByCompile()
     {
         // D-14 absence proof (compile-time): the three removed counters
