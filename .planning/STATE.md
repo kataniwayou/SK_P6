@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 77-01-PLAN.md
-last_updated: "2026-07-16T16:14:31.095Z"
+stopped_at: Completed 77-02-PLAN.md
+last_updated: "2026-07-16T16:52:04.021Z"
 last_activity: 2026-07-16
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove per
 Phase: 77 (consistent-framework-logging-model-scope-carried-execution-i) — EXECUTING
 Current Plan: 1
 Total Plans: 5
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-07-16
 
@@ -1067,6 +1067,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 76 P03 | 45min | 3 tasks | 5 files |
 | Phase 76 P04 | 23min | 2 tasks | 6 files |
 | Phase 77 P01 | 20min | 2 tasks | 2 files |
+| Phase 77 P02 | 35min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1564,6 +1565,7 @@ Recent decisions affecting current work:
 - 76-04: Verdict gained a third class Inconclusive; the verdict splits on evidence sufficiency (trace-dark + self-consistent conservation → Inconclusive regardless of metricGateOk) not severity
 - 76-04: exit-code resolution factored into dot-sourceable scripts/lib/exit-code-resolution.ps1 (Inconclusive→2, sweep-fatal, no auto-retry) proven hermetically before the live gate
 - Phase 77-01: strip Tier-1 execution ids from processor per-hop template — ids arrive via ambient InboundExecutionScopeConsumeFilter scope, string keeps only {MessageId}+{Outcome} (D1/LOG-01, D6/LOG-06)
+- 77-02: OutputTail send side self-mints+stamps+returns its outbound envelope MessageId once outside the RetryLoop (stable across retries); RunAsync logs FW-04-guarded 'result sent {MessageId} {Outcome}' (ids/outcome only, no payload); optional trailing ILogger<OutputTail> ctor param (NullLogger default) keeps all 8 direct-construction test sites compiling (LOG-03).
 
 ### Roadmap Milestone Log
 
@@ -1672,8 +1674,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-16T16:14:20.448Z
-Stopped at: Completed 77-01-PLAN.md
+Last session: 2026-07-16T16:51:57.136Z
+Stopped at: Completed 77-02-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
