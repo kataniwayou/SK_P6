@@ -804,13 +804,16 @@ Plans:
 
 ### Phase 78: Rework the resilience sweep to verify purely from the new framework ES logs — adapt the analyzer to the consistent-logging model (entry-marker = absent ExecutionId not Guid.Empty; discriminate keeper reinject records via attributes.ReinjectOutcome; drop the concrete value oracle), keep Prometheus as the secondary collector-blind axis, then re-run the reseed + 7-scenario live gate and confirm the verdict reconstructs from framework logs alone
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** The resilience verdict reconstructs purely from Phase-77 framework ES logs — the entry marker self-excludes by absent `attributes.ExecutionId`, keeper reinject records are query-excluded from structural completeness via `must_not exists attributes.ReinjectOutcome`, and the concrete value oracle is fully deleted (fixture + engine + `PassFailEngineValueChainFacts.cs`) — leaving structural stepId completeness + ANL-03 framework-redundancy + the Prometheus metric gate as the sole axes; the hermetic analyzer facts are green (zero new failures), and all 7 live scenarios reproduce their committed-HEAD baseline verdict.
+**Requirements**: D-01, D-02, D-03, D-04 (tracked via 78-CONTEXT.md — no REQUIREMENTS.md for this milestone)
 **Depends on:** Phase 77
-**Plans:** 0 plans
+**Plans:** 4 plans (4 waves)
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 78 to break down)
+- [ ] 78-01-PLAN.md — D-01 delete entry-marker detector + D-02 keeper `must_not` on the structural query [wave 1]
+- [ ] 78-02-PLAN.md — D-03 delete the value oracle (fixture query/parse + engine value-chain machinery + `PassFailEngineValueChainFacts.cs`), keep the ExpectedHopOffset scaffold [wave 2]
+- [ ] 78-03-PLAN.md — D-03 Hazard C atomic: delete ExpectedHopOffset residue + migrate the ~6 label-fallback facts to the stepId path, then the hermetic green gate [wave 3]
+- [ ] 78-04-PLAN.md — D-04 live gate: SourceHash reseed + 7-scenario sweep + HEAD-baseline reproduction (operator-gated) [wave 4]
 
 ---
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
