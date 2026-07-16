@@ -148,8 +148,9 @@ public sealed class OrchestratorPrePipeline(
                 CorrelationId = m.CorrelationId,
                 ExecutionId   = m.ExecutionId,         // D-13: threaded UNCHANGED
             };
+            var outboundId = Guid.NewGuid();   // D3/LOG-03: mint the outbound envelope id (captures the id D-11 Option C dropped)
             var sent = await RetryLoop.ExecuteAsync(
-                async () => { await post.Send((object)handoff, CancellationToken.None); return true; }, limit, ct);
+                async () => { await post.Send((object)handoff, ctx => ctx.MessageId = outboundId, CancellationToken.None); return true; }, limit, ct);
             if (!sent.Succeeded) throw sent.Error!;    // send-exhaust → throw → broker redelivery (NO delete)
 
             // Phase 74 (REQ-1/D-02): count-AFTER-success, ONCE per successful fan-out post.Send — N matches
@@ -160,16 +161,13 @@ public sealed class OrchestratorPrePipeline(
                 new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")),
                 new KeyValuePair<string, object?>("processorId", m.ProcessorId.ToString("D")));
 
-            // FW-02 / D-11 Option C (ids only, FW-03): one fan-out edge record per next step, AFTER the send
-            // landed. Carries (CorrelationId, ExecutionId, WorkflowId, inbound EntryId=M_N, next StepId) — NO
-            // outbound MessageId (Option C: not in hand at the Pre loop; Phase-72 "no override" is not
-            // reversed). FW-04: try/catch-guarded so a throwing logger cannot fail the fan-out send loop.
-            try
-            {
-                logger.LogInformation(
-                    "fan-out {CorrelationId} {ExecutionId} {WorkflowId} {EntryId} {NextStepId}",
-                    m.CorrelationId, m.ExecutionId, m.WorkflowId, m.EntryId, stepId);
-            }
+            // FW-02 / D3 (Phase 77, reverses D-11 Option C): one fan-out edge record per next step, AFTER the
+            // send landed. The outbound envelope id is now MINTED + stamped on the send (ctx.MessageId) AND
+            // logged as the Tier-2 {MessageId}; the Tier-3 {NextStepId} is the next step. The five Tier-1 ids
+            // arrive via the ambient MEL execution scope (attributes.*), NOT the template (FW-03: never the
+            // relocated blob). FW-04: try/catch-guarded so a throwing logger cannot fail the fan-out send loop.
+            // (Phase-78 analyzer adapts its fan-out parsing to the new {MessageId} {NextStepId} shape.)
+            try { logger.LogInformation("fan-out {MessageId} {NextStepId}", outboundId, stepId); }
             catch { /* observability must never fail the hop */ }
         }
 
