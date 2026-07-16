@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 78-03-PLAN.md
-last_updated: "2026-07-16T21:11:36.975Z"
+stopped_at: 78-04 live gate executed -> BLOCKING FINDING (D-04 not reproduced; see 78-04-SUMMARY.md)
+last_updated: "2026-07-16T22:46:07.281Z"
 last_activity: 2026-07-16
 progress:
   total_phases: 4
@@ -1685,6 +1685,7 @@ None yet.
 - Testcontainers + Windows Docker Desktop: confirm WSL2 backend before Phase 8.
 - 22-05 Task 5 (close gate) paused: Plan 04 liveness gate + Plan 03 no-create boundary break ~10 happy-path /start tests across 8+ files OUTSIDE Plan 05 scope (StartLoopFacts, IdempotencyFacts, HappyPathE2EFacts, StartCleanupFacts, StopScanFacts, StartOrchestrationFacts, ValidationOrderFacts). Needs operator decision on fix strategy (per-test seed vs centralized harness helper) before full-suite-GREEN x3 close gate can run.
 - 57-04 CFG-10 freeze defect: SchemaDefinitionFreezeFacts.NameDescription_Edit_On_Referenced_Schema_Returns_200 returns 409 instead of 200 (Definition-change detection bug in SchemaService.UpdateAsync). Out of scope for 57-03; logged in deferred-items.md; must fix before CFG-10 sign-off.
+- D-04 live gate (78-04) FAILED-FINDING: reworked live analyzer flips all scenarios PASS->FAIL incl the no-fault baseline (Duplicates==StartedRuns, 100% effect-once violations, Missing=0). Root cause: Phase-77 uniform execution-scope logging emits multiple StepId-scoped framework records per hop; the reworked structural step query counts each as a distinct step execution. Value axis was dark. NOT re-baselined. Needs a follow-up fix plan (collapse multi-record hops per {executionId,stepId} in BuildStepSearchBody/cohort). D-04 remains OPEN.
 
 ## Deferred Items
 
@@ -1696,9 +1697,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-16T21:11:36.959Z
-Stopped at: Completed 78-03-PLAN.md
-Resume file: None
+Last session: 2026-07-16T22:46:07.267Z
+Stopped at: 78-04 live gate executed -> BLOCKING FINDING (D-04 not reproduced; see 78-04-SUMMARY.md)
+Resume file: 78-04-SUMMARY.md (finding); needs follow-up fix plan
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
 **Phase 29 (Structured Execution-Scope Logging):** 5/5 plans complete — close gate GATE_EXIT=0 (405 Passed ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held; live scopeProof passes on a `processor-sample` Completed log); LOG-01..06 all complete. Awaiting orchestrator phase verification + `phase.complete`. Milestone v3.5.0 = 17/17 plans across phases 25-29.
