@@ -428,26 +428,6 @@ public sealed class PassFailEngineFacts
     }
 
     [Fact]
-    public void PassFailEngine_EntryMarker_EmptyExecutionId_Excluded_From_Scoring_D09()
-    {
-        // D-09: a framework record with ExecutionId == Guid.Empty is an ENTRY MARKER — counted as entry-ran,
-        // EXCLUDED from every (corr,exec) expected/complete set. Here it would be "incomplete" (only hop-b) but
-        // must NOT be scored as a started run or a miss; the one real complete run alone drives the verdict.
-        var marker = RunTrace.FromStepIds("corr-1", Guid.Empty.ToString(), new[] { "hop-b" },
-            convergentStepId: ConvergentStepId);
-        var real = RunTrace.FromStepIds("corr-1", "exec-1", FullHopStepIds, convergentStepId: ConvergentStepId);
-        var expected = Expect(("corr-1|exec-1", DistinctHopStepIds()));
-
-        var report = new PassFailEngine().Analyze(new[] { marker, real }, CleanSnapshot(), "unit-d09",
-            expectedStepIdsByExecution: expected);
-
-        Assert.Equal(1, report.StartedRuns);             // the marker is NOT a started run
-        Assert.Equal(1, report.CompleteRuns);
-        Assert.Equal(0, report.Missing);                 // the marker is NOT a miss
-        Assert.Equal(Verdict.Pass, report.Verdict);
-    }
-
-    [Fact]
     public void PassFailEngine_OracleAbsent_FrameworkRecordsOnly_ValueChainNotApplicable_Yields_Pass()
     {
         // SMP-01: with framework StepId records ONLY (no StepLabel/Received/Produced, no seed oracle), the

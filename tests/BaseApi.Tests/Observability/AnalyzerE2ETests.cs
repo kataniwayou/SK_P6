@@ -540,7 +540,6 @@ public sealed class AnalyzerE2ETests
         // The convergent terminal stepId is derived from the FW-02 DISPATCH edges below (dispatch in-degree),
         // NOT from a terminal-reached structural bucket — see BuildRunTraces' convergent derivation and the
         // note in the no-MessageId branch for why the structural bucket cannot be a clean terminal-reached set.
-        var entryMarkerCorrelations = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var hit in structuralHits)
         {
@@ -572,19 +571,8 @@ public sealed class AnalyzerE2ETests
                 // over-population of `proven` can only reconcile a would-be-missing hop as non-binding — it can
                 // mask loss (a separate, fault-scenario-verified concern), never manufacture it, so it cannot
                 // produce the false FAIL this fix targets.
-                if (!IsEntryMarkerExecution(executionId))
-                {
-                    var pkey = $"{correlationId}|{executionId}";
-                    (proven.TryGetValue(pkey, out var pset) ? pset : proven[pkey] = new(StringComparer.Ordinal)).Add(stepId);
-                }
-                continue;
-            }
-
-            // D-09: the Mode-2 entry marker (ExecutionId == all-zeros) is counted as entry-ran but excluded from
-            // any (corr,exec) run's expected/complete set.
-            if (IsEntryMarkerExecution(executionId))
-            {
-                entryMarkerCorrelations.Add(correlationId);
+                var pkey = $"{correlationId}|{executionId}";
+                (proven.TryGetValue(pkey, out var pset) ? pset : proven[pkey] = new(StringComparer.Ordinal)).Add(stepId);
                 continue;
             }
 
@@ -614,7 +602,6 @@ public sealed class AnalyzerE2ETests
             if (!attrs.TryGetProperty("CorrelationId", out var corrEl) || corrEl.ValueKind != JsonValueKind.String) continue;
             if (!attrs.TryGetProperty("ExecutionId", out var execEl) || execEl.ValueKind != JsonValueKind.String) continue;
             if (!attrs.TryGetProperty("NextStepId", out var nextEl) || nextEl.ValueKind != JsonValueKind.String) continue;
-            if (IsEntryMarkerExecution(execEl.GetString()!)) continue;
 
             var key = $"{corrEl.GetString()!}|{execEl.GetString()!}";
             // ANL-02: the dispatched next step is EXPECTED to run.
@@ -645,7 +632,6 @@ public sealed class AnalyzerE2ETests
             if (!attrs.TryGetProperty("CorrelationId", out var corrEl) || corrEl.ValueKind != JsonValueKind.String) continue;
             if (!attrs.TryGetProperty("ExecutionId", out var execEl) || execEl.ValueKind != JsonValueKind.String) continue;
             if (!attrs.TryGetProperty("StepLabel", out var labelEl) || labelEl.ValueKind != JsonValueKind.String) continue;
-            if (IsEntryMarkerExecution(execEl.GetString()!)) continue;
 
             var key = (corrEl.GetString()!, execEl.GetString()!);
             _ = TryReadSum(attrs, out _);
@@ -708,11 +694,6 @@ public sealed class AnalyzerE2ETests
                 kv => kv.Key, kv => (IReadOnlySet<string>)kv.Value, StringComparer.Ordinal),
         };
     }
-
-    /// <summary>D-09: true iff the executionId is the all-zeros sentinel (the Mode-2 entry marker) — counted
-    /// as entry-ran but excluded from any spawned <c>(corr, exec)</c> run.</summary>
-    private static bool IsEntryMarkerExecution(string executionId)
-        => Guid.TryParse(executionId, out var g) && g == Guid.Empty;
 
     /// <summary>
     /// Defensive <c>attributes.Sum</c> read (A1): the field surfaces numeric (<c>long</c>) once Step_*

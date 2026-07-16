@@ -55,14 +55,6 @@ public sealed class PassFailEngine
     private static readonly IReadOnlySet<string> EmptyStepSet = new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>
-    /// D-09: true iff the run is the Mode-2 ENTRY MARKER (ExecutionId == the all-zeros sentinel) — counted as
-    /// entry-ran but EXCLUDED from every <c>(corr, exec)</c> expected/complete set (it belongs to neither
-    /// execution). Generalizes the old "structural hop-set excludes Step_A" special case to an executionId rule.
-    /// </summary>
-    private static bool IsEntryMarker(RunTrace r)
-        => Guid.TryParse(r.ExecutionId, out var g) && g == Guid.Empty;
-
-    /// <summary>
     /// Score a set of per-correlationId traces against the live Prometheus counter deltas, producing
     /// the single per-scenario <see cref="AnalyzerReport"/>. PURE: no IO — the caller (fixture) writes
     /// the report.
@@ -129,9 +121,10 @@ public sealed class PassFailEngine
     {
         // ── ES-BINDING ARBITER (67-03) + STEPID-KEYED STRUCTURAL COMPLETENESS (Phase 76, ANL-01/02) ──────
 
-        // D-09: an entry MARKER (ExecutionId == Guid.Empty) is counted as entry-ran but is NOT a member of any
-        // (corr, exec) run — it belongs to neither execution's expected/complete set. Exclude it from scoring.
-        var scored = runs.Where(r => !IsEntryMarker(r)).ToList();
+        // D-01 (Phase 78): the Mode-2 entry marker no longer carries an ExecutionId (empty GUID skipped by
+        // ExecutionLogScope), so the fixture's `exists attributes.ExecutionId` ES query filter drops it upstream
+        // — no engine-level entry-marker predicate is needed. Every run reaching the engine is a real scored run.
+        var scored = runs.ToList();
 
         // STARTED (denominator): distinct (correlationId, executionId) instances with ≥1 framework hop record =
         // one RunTrace each (each spawned execution is its own run). D75-1 LOCKED: the verdict is founded on this
