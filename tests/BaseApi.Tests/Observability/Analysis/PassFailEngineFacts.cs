@@ -507,6 +507,159 @@ public sealed class PassFailEngineFacts
         Assert.NotEmpty(report.MissingDetail);
     }
 
+    // ── Phase 76 (ANL-04/05, D-01): the THREE-CLASS verdict — the verdict splits on EVIDENCE SUFFICIENCY,
+    //    not severity. FAIL requires POSITIVE evidence of loss; total trace darkness (startedRuns==0) with
+    //    self-consistent conservation is INCONCLUSIVE (collector-blind / TEST-01 cold-ES), never a false FAIL
+    //    and never a vacuous green; a GENUINE conservation gap stays FAIL. ──────────────────────────────────
+
+    // A trace-dark window (ZERO started runs) whose conservation is self-consistent at a LIVE (non-zero,
+    // EQUAL) counter pair — the TEST-01 cold-ES shape where ES is cold but the stack itself is healthy.
+    private static PromCounterSnapshot ConservationIntactTraceDarkSnapshot(double probeRate = 0.2) => new()
+    {
+        OrchestratorMessagesSentDelta = 0,
+        OrchestratorMessagesConsumedDelta = 0,
+        ProcessorMessagesConsumedDelta = 0,
+        ProcessorMessagesSentDelta = 0,
+        OrchestratorMessagesConsumedAtEnd = 50,   // == processor_sent@end → conservation intact (gap 0)
+        ProcessorMessagesSentAtEnd = 50,
+        KeeperMessagesConsumedDelta = 0,
+        KeeperMessagesSentDelta = 0,
+        KeeperL2ProbeRate = probeRate,
+    };
+
+    // A fully COLLECTOR-BLIND window: every counter frozen/absent at zero AND the probe dead — Prometheus
+    // scrapes an absent collector, so conservation reads self-consistent (0 == 0) but the gate fails on MG-3.
+    private static PromCounterSnapshot CollectorBlindSnapshot() => new()
+    {
+        OrchestratorMessagesSentDelta = 0,
+        OrchestratorMessagesConsumedDelta = 0,
+        ProcessorMessagesConsumedDelta = 0,
+        ProcessorMessagesSentDelta = 0,
+        OrchestratorMessagesConsumedAtEnd = 0,   // frozen/absent — conservation vacuously self-consistent
+        ProcessorMessagesSentAtEnd = 0,
+        KeeperMessagesConsumedDelta = 0,
+        KeeperMessagesSentDelta = 0,
+        KeeperL2ProbeRate = 0.0,                 // probe DEAD → metric gate fails on MG-3 (collector blind)
+    };
+
+    [Fact]
+    public void Verdict_TraceDark_ConservationIntact_MetricGateFalse_Yields_Inconclusive()
+    {
+        // ANL-04a: total trace darkness (startedRuns == 0) + self-consistent conservation (orch_consumed ==
+        // proc_sent) → INCONCLUSIVE REGARDLESS of metricGateOk. Here the probe is DEAD so the metric gate is
+        // FALSE — the OLD two-class engine would have flipped this to FAIL (a false data-loss report), but the
+        // gate failure is the collector being blind, not a conservation gap, so the run is Inconclusive.
+        var snap = ConservationIntactTraceDarkSnapshot(probeRate: 0.0);   // metricGateOk false via dead probe
+
+        var report = new PassFailEngine().Analyze(Array.Empty<RunTrace>(), snap, "TEST-01");
+
+        Assert.Equal(0, report.StartedRuns);                 // trace-dark
+        Assert.True(report.MetricGate.ConservationOk);       // conservation self-consistent (50 == 50)
+        Assert.False(report.MetricGate.ProbeLiveOk);         // metric gate is FALSE here
+        Assert.Equal(Verdict.Inconclusive, report.Verdict);  // …yet the verdict is Inconclusive, not Fail
+        Assert.NotEmpty(report.CorroborationDetail);         // blind-case reason carried in the report
+    }
+
+    [Fact]
+    public void Verdict_TraceDark_ConservationIntact_MetricGateHolds_Yields_Inconclusive_NotVacuousPass()
+    {
+        // ANL-04a (the core TEST-01 fix): trace darkness + conservation intact + a CLEAN metric gate (probe
+        // LIVE). Under the OLD two-class engine this scored missing==0/no-dup/valueChainOk/metricGateOk → a
+        // VACUOUS GREEN. The three-class gate returns INCONCLUSIVE: zero started runs is not evidence of
+        // success, it is absence of evidence.
+        var snap = ConservationIntactTraceDarkSnapshot(probeRate: 0.2);   // metricGateOk TRUE (probe live)
+
+        var report = new PassFailEngine().Analyze(Array.Empty<RunTrace>(), snap, "TEST-01");
+
+        Assert.Equal(0, report.StartedRuns);
+        Assert.True(report.MetricGate.ConservationOk);
+        Assert.True(report.MetricGate.ProbeLiveOk);          // metric gate HOLDS — would have been vacuous PASS
+        Assert.Equal(Verdict.Inconclusive, report.Verdict);  // …but zero evidence → Inconclusive, not Pass
+    }
+
+    [Fact]
+    public void Verdict_PartialEvidence_RealConservationGap_Yields_Fail()
+    {
+        // ANL-04b: PARTIAL evidence (a started-but-incomplete run, startedRuns > 0) + a REAL conservation gap
+        // (orch_consumed != proc_sent). Evidence is SUFFICIENT (a run started), so the gate does not short to
+        // Inconclusive; the missing hop + the genuine gap are positive evidence of loss → FAIL.
+        var incomplete = RunTrace.FromLabels("corr-1", "exec-1", Missing4Hops);
+        var snap = CleanSnapshot() with { OrchestratorMessagesConsumedAtEnd = 9, ProcessorMessagesSentAtEnd = 4 };
+
+        var report = new PassFailEngine().Analyze(new[] { incomplete }, snap, "unit-anl04b");
+
+        Assert.Equal(1, report.StartedRuns);                 // partial evidence present (not trace-dark)
+        Assert.False(report.MetricGate.ConservationOk);      // genuine conservation gap
+        Assert.Equal(Verdict.Fail, report.Verdict);
+        Assert.NotEqual(Verdict.Inconclusive, report.Verdict);
+    }
+
+    [Fact]
+    public void Verdict_CompleteCohort_Yields_Pass()
+    {
+        // ANL-04c: a COMPLETE framework-record cohort with a clean metric gate → PASS (evidence sufficient
+        // and positive).
+        var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
+
+        var report = new PassFailEngine().Analyze(new[] { run }, CleanSnapshot(), "unit-anl04c");
+
+        Assert.Equal(1, report.CompleteRuns);
+        Assert.Equal(Verdict.Pass, report.Verdict);
+    }
+
+    [Fact]
+    public void Verdict_NonZeroTelemetryGap_StaysPass_D01()
+    {
+        // D-01: a reconciled run with a NON-ZERO TelemetryGap stays PASS (preserves 6e90216). A run missing
+        // hop-f2's own processor record but whose missing hop is proven-run by an orchestrator FW-02 record
+        // (framework redundancy, NO seed oracle) is a non-binding telemetry gap — Missing 0, TelemetryGap 1.
+        // The three-class gate must NOT let the non-zero gap flip PASS → FAIL or → Inconclusive.
+        var observed = FullHopStepIds.Where(s => s != "hop-f2").ToArray();
+        var run = RunTrace.FromStepIds("corr-1", "exec-1", observed, convergentStepId: ConvergentStepId);
+        var expected = Expect(("corr-1|exec-1", DistinctHopStepIds()));
+        var proven = Expect(("corr-1|exec-1",
+            (IReadOnlySet<string>)new HashSet<string>(StringComparer.Ordinal) { "hop-f2" }));
+
+        var report = new PassFailEngine().Analyze(new[] { run }, CleanSnapshot(), "unit-d01",
+            expectedStepIdsByExecution: expected,
+            orchestratorConsumedStepIdsByExecution: proven);
+
+        Assert.Equal(1, report.TelemetryGap);                // non-zero telemetry gap
+        Assert.Equal(0, report.Missing);
+        Assert.Equal(Verdict.Pass, report.Verdict);          // D-01: non-binding gap stays PASS
+    }
+
+    [Fact]
+    public void MetricGate_CollectorBlind_FrozenCounters_TraceDark_Yields_Inconclusive()
+    {
+        // ANL-05 (inverted metric gate — blind case): frozen/absent counters + absent traces. The gate FAILS
+        // (probe dead, MG-3) but the cause is the observability tier being blind (Prometheus scrapes an absent
+        // collector), NOT a genuine conservation gap → INCONCLUSIVE, not FAIL. This is the inversion: a metric
+        // gate failing because the metrics tier is absent must never be reported as data loss.
+        var report = new PassFailEngine().Analyze(Array.Empty<RunTrace>(), CollectorBlindSnapshot(), "TEST-01");
+
+        Assert.Equal(0, report.StartedRuns);
+        Assert.True(report.MetricGate.ConservationOk);       // 0 == 0, vacuously self-consistent
+        Assert.False(report.MetricGate.ProbeLiveOk);         // gate FALSE (collector blind)
+        Assert.Equal(Verdict.Inconclusive, report.Verdict);  // inverted → Inconclusive, not Fail
+    }
+
+    [Fact]
+    public void MetricGate_LiveCounters_GenuineGap_NotInconclusive_Yields_Fail()
+    {
+        // ANL-05 (live case — the T-76-12 guard): a run with LIVE counters and a GENUINE orch_consumed !=
+        // proc_sent gap is positive evidence of loss → FAIL, NOT Inconclusive. INCONCLUSIVE must never be
+        // misused to mask a real conservation gap — it fires only on frozen/absent counters + absent traces.
+        var run = RunTrace.FromLabels("corr-1", "exec-1", AllTenLabelsWithConvergentGx2);
+        var snap = ConservingSnapshot(results: 9) with { OrchestratorMessagesConsumedAtEnd = 9, ProcessorMessagesSentAtEnd = 4 };
+
+        var report = new PassFailEngine().Analyze(new[] { run }, snap, "unit-anl05-live");
+
+        Assert.False(report.MetricGate.ConservationOk);      // genuine live gap (9 != 4)
+        Assert.Equal(Verdict.Fail, report.Verdict);
+        Assert.NotEqual(Verdict.Inconclusive, report.Verdict);
+    }
+
     [Fact]
     public void RemovedDedupCounters_HaveNoSnapshotField_AbsenceProvenByCompile()
     {

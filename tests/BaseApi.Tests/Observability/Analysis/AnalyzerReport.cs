@@ -32,10 +32,27 @@ public enum Verdict
 
     /// <summary>
     /// Red: at least one started-but-incomplete run (1–8 labels) OR any duplicate (fail-closed) OR a
-    /// value-chain mismatch OR a failing binding metric-gate check (MG-1/2/3). A failing binding gate
-    /// flips the verdict and sets <see cref="ReconciliationOutcome.Unreconciled"/>.
+    /// value-chain mismatch OR a failing binding metric-gate check (MG-1/2/3) driven by a GENUINE
+    /// conservation gap (live counters with orchestrator_consumed != processor_sent). A failing binding
+    /// gate flips the verdict and sets <see cref="ReconciliationOutcome.Unreconciled"/>. FAIL requires
+    /// POSITIVE evidence of loss — absence of evidence is <see cref="Inconclusive"/>, never a false FAIL.
     /// </summary>
     Fail,
+
+    /// <summary>
+    /// Amber (Phase 76, ANL-04/05): evidence insufficient to judge — an observability-degraded run,
+    /// explicitly NOT a flow failure and explicitly NOT a green. The verdict splits on EVIDENCE
+    /// SUFFICIENCY, not severity: total trace darkness (<c>startedRuns == 0</c>) with self-consistent
+    /// conservation (orchestrator_consumed == processor_sent within tolerance) is the collector-blind /
+    /// cold-ES shape (TEST-01) — the metric gate may fail only because Prometheus scrapes an absent
+    /// collector (probe/keeper read 0), which is NOT a real conservation gap. Such a run is Inconclusive
+    /// regardless of the metric gate, so an observability-tier failure is never reported as data loss and
+    /// never as a vacuous green. Serializes as "Inconclusive" (<see cref="JsonStringEnumConverter"/>) so the
+    /// sweep reads the class from JSON for free; the harness maps it to exit code 2 (deliberate re-run, no
+    /// auto-retry). The blind-case reason is carried in <see cref="AnalyzerReport.CorroborationDetail"/> /
+    /// <see cref="AnalyzerReport.HumanSummary"/>.
+    /// </summary>
+    Inconclusive,
 }
 
 /// <summary>
@@ -86,7 +103,7 @@ public sealed record AnalyzerReport
     /// <summary>The scenario under analysis (e.g. "TEST-01-happy-path" or "unit-test").</summary>
     public required string ScenarioId { get; init; }
 
-    /// <summary>The single correctness verdict. Serializes as its string name ("Pass"/"Fail").</summary>
+    /// <summary>The single correctness verdict. Serializes as its string name ("Pass"/"Fail"/"Inconclusive").</summary>
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public required Verdict Verdict { get; init; }
 
