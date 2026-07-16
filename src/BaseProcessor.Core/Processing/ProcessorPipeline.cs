@@ -190,13 +190,23 @@ public sealed class ProcessorPipeline(
         finally { processor.ClearSeamState(); }   // CR-01: per-consume AsyncLocal cleanup
     }
 
-    /// <summary>FW-01/D-05/D-06/D-08/D-10: emit the framework's own per-hop execution record — ONE structured
-    /// <see cref="LogLevel.Information"/> line carrying the six ids + the terminal outcome as explicit
-    /// <c>{Placeholder}</c> args (never <c>$"..."</c>, never a payload arg — FW-03/T-76-01), so they surface as
-    /// ES <c>attributes.StepId/ExecutionId/CorrelationId/EntryId/MessageId/Outcome</c> via the MEL→OTLP bridge.
-    /// "Did this step execute" becomes platform-level operability for ANY processor with zero author-written
-    /// logs. <paramref name="d"/>.ExecutionId is passed EXPLICITLY (it is <see cref="Guid.Empty"/> for the
-    /// Mode-2 entry step — D-09 all-zeros marker; the ambient scope omits empty GUIDs).
+    /// <summary>FW-01/D-05/D-06/D-08/D-10 + D1/LOG-01: emit the framework's own per-hop execution record — ONE
+    /// structured <see cref="LogLevel.Information"/> line carrying the Tier-2 <c>{MessageId}</c> (the single
+    /// delivery id the ambient scope does NOT carry) + the Tier-3 <c>{Outcome}</c> (D6/LOG-06 — the emitting
+    /// component knows the terminal outcome at emit time) as explicit <c>{Placeholder}</c> args (never
+    /// <c>$"..."</c>, never a payload arg — FW-03/T-76-01). The five Tier-1 ids
+    /// (WorkflowId/StepId/ProcessorId/ExecutionId/EntryId) are NO LONGER restated in the template — they arrive
+    /// on the record from the ambient bus-wide <c>InboundExecutionScopeConsumeFilter</c> scope as ES
+    /// <c>attributes.*</c> (D1/LOG-01: one uniform pattern, no id ever duplicated in a string the scope already
+    /// carries). "Did this step execute" stays platform-level operability for ANY processor with zero
+    /// author-written logs.
+    /// <para>
+    /// PHASE-78 HANDOFF (documented, not fixed here): the Mode-2 entry step has <see cref="Guid.Empty"/>
+    /// ExecutionId. With <c>{ExecutionId}</c> no longer an explicit arg, <c>ExecutionLogScope.BuildState</c>
+    /// skips the empty GUID, so the entry marker's <c>attributes.ExecutionId</c> becomes ABSENT (not an
+    /// all-zeros value). The live analyzer's entry-marker detection (<c>PassFailEngine.IsEntryMarker</c>,
+    /// <c>== Guid.Empty</c>) must switch to "attribute absent" — that is Phase 78 (Category=RealStack).
+    /// </para>
     /// <para>
     /// FW-04/T-76-02: the call is wrapped in a swallow-guard — a throwing/blocking <see cref="ILogger"/> must
     /// NEVER fail or delay the hop, and the pipeline outcome is unchanged whether the log succeeds or throws.
@@ -205,9 +215,7 @@ public sealed class ProcessorPipeline(
     {
         try
         {
-            logger.LogInformation(
-                "hop executed {StepId} {ExecutionId} {CorrelationId} {EntryId} {MessageId} {Outcome}",
-                d.StepId, d.ExecutionId, d.CorrelationId, d.EntryId, messageId, outcome);
+            logger.LogInformation("hop executed {MessageId} {Outcome}", messageId, outcome);
         }
         catch { /* FW-04: observability must never fail or delay the hop */ }
     }
