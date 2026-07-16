@@ -48,6 +48,45 @@ internal sealed class CapturingLogger<T> : ILogger<T>
 }
 
 /// <summary>
+/// Phase 77 (D2/LOG-02): a capturing <see cref="ILogger{TCategoryName}"/> that records each
+/// <c>BeginScope</c> state which is an <c>IEnumerable&lt;KeyValuePair&lt;string,object&gt;&gt;</c> (the shape
+/// a <c>Dictionary&lt;string,object&gt;</c> — i.e. the <see cref="ExecutionLogScope"/> dict — presents to
+/// MEL). Unlike <see cref="CapturingLogger{T}"/> (which drops scopes to a NullScope), this double proves the
+/// keeper reinject consumers OPEN the 5-id execution scope themselves — the bus-wide inbound filter no-ops on
+/// keeper records, so the ids must arrive via the consumer's own <c>BeginScope</c>. Mirrors the
+/// scope-capturing double in ConsoleExecutionScopeFilterTests.
+/// </summary>
+internal sealed class ScopeCapturingLogger<T> : ILogger<T>
+{
+    private readonly List<Dictionary<string, object>> _scopes = new();
+
+    public IDisposable BeginScope<TState>(TState state) where TState : notnull
+    {
+        if (state is IEnumerable<KeyValuePair<string, object>> kvps)
+            _scopes.Add(new Dictionary<string, object>(kvps));
+        return NullScope.Instance;
+    }
+
+    public bool IsEnabled(LogLevel logLevel) => true;
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+        Func<TState, Exception?, string> formatter) { }
+
+    /// <summary>The captured execution-id scope (the one carrying any <see cref="ExecutionLogScope"/> key).</summary>
+    public Dictionary<string, object> ExecutionScope() =>
+        _scopes.FirstOrDefault(s =>
+            s.ContainsKey(ExecutionLogScope.WorkflowId) || s.ContainsKey(ExecutionLogScope.StepId)
+            || s.ContainsKey(ExecutionLogScope.ProcessorId) || s.ContainsKey(ExecutionLogScope.ExecutionId)
+            || s.ContainsKey(ExecutionLogScope.EntryId))
+        ?? new Dictionary<string, object>();
+
+    private sealed class NullScope : IDisposable
+    {
+        internal static readonly NullScope Instance = new();
+        public void Dispose() { }
+    }
+}
+
+/// <summary>
 /// Phase 70 / req 6 (D-12): the Keeper REINJECT state reads L2[entryId]; present → re-injects a
 /// reconstructed EntryStepDispatch carrying the Payload to queue:{ProcessorId} with the outbound envelope
 /// MessageId overridden to the carried m.MessageId AND emits keeper_messages_sent (Phase 74); absent/empty
@@ -204,14 +243,57 @@ public sealed class ReinjectConsumerFacts
         AssertJoinFields(warn, m, outcome: "drop");
     }
 
-    /// <summary>Phase 75 (D75-4): assert a captured log entry's structured state carries the four join
-    /// keys with the message's values plus the ReinjectOutcome discriminator (placeholder-form only).</summary>
+    /// <summary>Phase 77 (D1/D2/D6): after the strip, the EXPLICIT message-template state carries ONLY the
+    /// Tier-2 <c>MessageId</c> (the one id the ambient execution scope does NOT carry) + the Tier-3
+    /// <c>ReinjectOutcome</c> discriminator; the Tier-1 join keys (CorrelationId/ExecutionId/EntryId) are NO
+    /// LONGER explicit args — they now arrive via the <c>logger.BeginScope(ExecutionLogScope.BuildState(...))</c>
+    /// the consumer opens (proven separately by <see cref="Reinject_present_opens_execution_scope_with_five_ids"/>,
+    /// since <see cref="CapturingLogger{T}"/> records the placeholder state, not the scope).</summary>
     private static void AssertJoinFields(CapturingLogger<ReinjectConsumer>.Entry entry, KeeperReinject m, string outcome)
     {
-        Assert.Contains(new KeyValuePair<string, object?>("CorrelationId", m.CorrelationId), entry.State);
-        Assert.Contains(new KeyValuePair<string, object?>("ExecutionId", m.ExecutionId), entry.State);
-        Assert.Contains(new KeyValuePair<string, object?>("EntryId", m.EntryId), entry.State);
         Assert.Contains(new KeyValuePair<string, object?>("MessageId", m.MessageId), entry.State);
         Assert.Contains(new KeyValuePair<string, object?>("ReinjectOutcome", outcome), entry.State);
+        Assert.DoesNotContain(entry.State, kv => kv.Key is "CorrelationId" or "ExecutionId" or "EntryId");
+    }
+
+    [Fact]
+    [Trait("Phase", "77")]
+    public async Task Reinject_present_opens_execution_scope_with_five_ids()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var m = new KeeperReinject(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid())
+        {
+            CorrelationId = Guid.NewGuid(),
+            ExecutionId = Guid.NewGuid(),
+            EntryId = Guid.NewGuid(),   // non-source, non-empty → carried by the scope
+            MessageId = Guid.NewGuid(),
+            Payload = "{\"cfg\":7}",
+        };
+        var db = RecoveryTestKit.Db();
+        db.StringLengthAsync(L2ProjectionKeys.ExecutionData(m.EntryId), Arg.Any<CommandFlags>())
+            .Returns(10L);   // present → the consume runs the full body inside the scope
+        var send = new RecoveryTestKit.CapturingSendProvider();
+
+        // Phase 77 (D2/LOG-02): a scope-capturing logger records the BeginScope state (an
+        // IEnumerable<KeyValuePair<string,object>> — the ExecutionLogScope dict), so the fact can prove the
+        // consumer opens the 5-id execution scope itself (the bus-wide filter no-ops on keeper records).
+        var log = new ScopeCapturingLogger<ReinjectConsumer>();
+        var consumer = new ReinjectConsumer(
+            RecoveryTestKit.Mux(db), send,
+            RecoveryTestKit.Retry(),
+            RecoveryTestKit.Metrics(), log);
+
+        await consumer.Consume(Ctx(m, ct));
+
+        var scope = log.ExecutionScope();
+        // Exactly the five execution-id keys with the message's .ToString() values — and NO CorrelationId key
+        // (that is the correlation filter's, not opened here / D-01).
+        Assert.Equal(5, scope.Count);
+        Assert.Equal(m.WorkflowId.ToString(), scope[ExecutionLogScope.WorkflowId]);
+        Assert.Equal(m.StepId.ToString(), scope[ExecutionLogScope.StepId]);
+        Assert.Equal(m.ProcessorId.ToString(), scope[ExecutionLogScope.ProcessorId]);
+        Assert.Equal(m.ExecutionId.ToString(), scope[ExecutionLogScope.ExecutionId]);
+        Assert.Equal(m.EntryId.ToString(), scope[ExecutionLogScope.EntryId]);
+        Assert.False(scope.ContainsKey("CorrelationId"));
     }
 }

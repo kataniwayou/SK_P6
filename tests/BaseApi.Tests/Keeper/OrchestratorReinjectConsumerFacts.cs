@@ -5,6 +5,7 @@ using MassTransit;
 using Messaging.Contracts;
 using Messaging.Contracts.Projections;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using StackExchange.Redis;
@@ -95,6 +96,35 @@ public sealed class OrchestratorReinjectConsumerFacts
 
         // Phase 74: the confirmed Send incremented the uniform keeper_messages_sent exactly once.
         Assert.Equal(1, Interlocked.Read(ref sent));
+    }
+
+    [Fact]
+    [Trait("Phase", "77")]
+    public async Task Reinject_present_emits_sent_record()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var m = NewReinject(StepOutcome.Completed);
+        var db = RecoveryTestKit.Db();
+        // STRLEN > 0 → the out: blob is present → the confirmed-send path runs, emitting the NEW sent record.
+        db.StringLengthAsync(L2ProjectionKeys.OutputData(m.EntryId), Arg.Any<CommandFlags>())
+            .Returns(12L);
+        var send = new RecoveryTestKit.CapturingSendProvider();
+
+        // Phase 77 (D1/D2/D6): capture the structured message-template state so the fact can assert the new
+        // symmetric sent record carries the Tier-2 MessageId + the Tier-3 ReinjectOutcome="reinject"
+        // discriminator (the Tier-1 join keys ride the ambient execution scope, not the string).
+        var log = new CapturingLogger<OrchestratorReinjectConsumer>();
+        var consumer = new OrchestratorReinjectConsumer(
+            RecoveryTestKit.Mux(db), send,
+            RecoveryTestKit.Retry(),
+            RecoveryTestKit.Metrics(), log);
+
+        await consumer.Consume(Ctx(m, ct));
+
+        Assert.Single(send.Sent);   // confirmed send happened (the sent record sits after it)
+        var info = Assert.Single(log.Entries, e => e.Level == LogLevel.Information);
+        Assert.Contains(new KeyValuePair<string, object?>("MessageId", m.MessageId), info.State);
+        Assert.Contains(new KeyValuePair<string, object?>("ReinjectOutcome", "reinject"), info.State);
     }
 
     [Fact]
