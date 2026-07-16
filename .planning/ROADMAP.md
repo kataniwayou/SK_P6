@@ -787,6 +787,26 @@ Plans:
 - [x] 76-04-PLAN.md — Three-class verdict + metric-gate inversion + exit-2 harness/sweep plumbing (ANL-04/05) [wave 2] ✅ 2026-07-16 (d5e74bb, fe9b70c, 55eb5ba) — Verdict.Inconclusive third class (JsonStringEnumConverter); verdict gate splits on EVIDENCE SUFFICIENCY first (traceDark startedRuns==0 && conservationOk → Inconclusive regardless of metricGateOk, the TEST-01 cold-ES / collector-blind shape), genuine orch_consumed!=proc_sent gap stays FAIL (T-76-12), D-01 non-zero TelemetryGap stays PASS; scripts/lib/exit-code-resolution.ps1 dot-sourceable Resolve-AnalyzerExitCode (Inconclusive→2/Fail→1/Pass→0, unknown→1 fail-closed T-76-11) + Resolve-SweepClass (2→INCONCLUSIVE, distinct no-auto-retry message, sweep-fatal); harness STEP H resolves the class from the JSON artifact + overrides the mirrored exit, sweep roll-up consumes the shared lib; Verdict 6/6 + MetricGate 10/10 + Analysis 44/44 GREEN, hermetic exit-code acceptance green, both scripts parse, 0-warning Debug+Release; live exit-2 surfacing deferred-automated (Docker-less)
 - [ ] 76-05-PLAN.md — Live gate: mandatory SourceHash reseed → 204 → 7-scenario sweep, classify every non-PASS (autonomous:false)
 
+### Phase 77: Consistent framework logging model — scope-carried execution ids, messageId on send/consume, keeper symmetric, drop concrete-processor logs
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 76
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 77 to break down)
+
+### Phase 78: Rework the resilience sweep to verify purely from the new framework ES logs — adapt the analyzer to the consistent-logging model (entry-marker = absent ExecutionId not Guid.Empty; discriminate keeper reinject records via attributes.ReinjectOutcome; drop the concrete value oracle), keep Prometheus as the secondary collector-blind axis, then re-run the reseed + 7-scenario live gate and confirm the verdict reconstructs from framework logs alone
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 77
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 78 to break down)
+
 ---
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
 
