@@ -2,7 +2,6 @@ using System.Text.Json;                  // JsonSerializer — NOT in .NET 8 imp
 using BaseProcessor.Core.Configuration;  // ProcessorConfig.SerializerOptions
 using BaseProcessor.Core.Processing;
 using Messaging.Contracts;               // DataResult / StepOutcome / ExecutionLogScope
-using Microsoft.Extensions.Logging;
 
 namespace Processor.Sample;
 
@@ -14,18 +13,18 @@ namespace Processor.Sample;
 /// Phase 70 (req 10): the two-mode worked example, keyed on the inbound <c>executionId</c>:
 /// <list type="bullet">
 ///   <item><b>ENTRY/seed</b> (<c>executionId == Guid.Empty</c>, Mode-2): seeds the TWO FIXED values
-///   <c>100</c> and <c>200</c> (deterministic — NO random), logs <c>"{label} seeded the following numbers: …"</c>,
-///   then SPAWNS two completed <see cref="DataResult"/>s to the Post-Process queue via <c>SpawnToPost</c>
-///   with DISTINCT freshly-minted executionIds (D-09, swallow), DELETES the inbound entry via
-///   <c>DeleteEntry</c>, and RETURNS NULL — the framework writes/sends/deletes nothing
-///   inline (req 3).</item>
+///   <c>100</c> and <c>200</c> (deterministic — NO random), then SPAWNS two completed
+///   <see cref="DataResult"/>s to the Post-Process queue via <c>SpawnToPost</c> with DISTINCT
+///   freshly-minted executionIds (D-09, swallow), DELETES the inbound entry via <c>DeleteEntry</c>,
+///   and RETURNS NULL — the framework writes/sends/deletes nothing inline (req 3).</item>
 ///   <item><b>DOWNSTREAM</b> (<c>executionId != Guid.Empty</c>, Mode-1): accumulates ONE number
-///   (<c>incomingNumber + baseNumber</c>, deterministic — NO random), logs the value-clarifying
-///   <c>"{label} received {Received} produced {Produced}"</c> line (the ES <c>attributes.Received</c>/
-///   <c>attributes.Produced</c> contract), and RETURNS ONE completed <see cref="DataResult"/> REUSING the
-///   inbound executionId — the framework's inline tail runs (no spawn, no delete).</item>
+///   (<c>incomingNumber + baseNumber</c>, deterministic — NO random), and RETURNS ONE completed
+///   <see cref="DataResult"/> REUSING the inbound executionId — the framework's inline tail runs
+///   (no spawn, no delete).</item>
 /// </list>
-/// The author writes NO RetryLoop/keeper/envelope code — <c>SpawnToPost</c> /
+/// Per D4/LOG-04 the concrete processor emits NO author logs: the framework's per-hop record and
+/// result-send record carry the full execution evidence, and the verdict never depends on a
+/// concrete-processor log. The author writes NO RetryLoop/keeper/envelope code — <c>SpawnToPost</c> /
 /// <c>DeleteEntry</c> own resilience, and <c>NewResult</c> stamps
 /// the ambient ids + carried messageId.
 /// </para>
@@ -34,7 +33,7 @@ namespace Processor.Sample;
 /// DI-registered <c>AddSingleton&lt;BaseProcessor, SampleProcessor&gt;</c> (Program.cs:17, unchanged) —
 /// SampleProcessor IS-A BaseProcessor via BaseProcessor&lt;SampleConfig&gt;.
 /// </remarks>
-public sealed class SampleProcessor(ILogger<SampleProcessor> logger) : BaseProcessor<SampleConfig>
+public sealed class SampleProcessor : BaseProcessor<SampleConfig>
 {
     /// <inheritdoc/>
     protected override async Task<DataResult?> ProcessAsync(
@@ -57,16 +56,13 @@ public sealed class SampleProcessor(ILogger<SampleProcessor> logger) : BaseProce
 
         if (executionId == Guid.Empty)
         {
-            // ENTRY/seed (Mode-2): seed 2 fixed numbers, log the line, spawn 2 to Post (distinct minted execIds,
-            // swallow on exhaust), delete the inbound entry, return null.
+            // ENTRY/seed (Mode-2): seed 2 fixed numbers, spawn 2 to Post (distinct minted execIds,
+            // swallow on exhaust), delete the inbound entry, return null. No author log (D4/LOG-04).
             // D-01/D-02: seed the two FIXED execution values (100, 200). Every step's payload number = 1
             // (seeder data change, Plan 04) so each downstream hop increments by exactly +1, making the L2
             // value at each step deterministically seed + hop-count. Synthetic deterministic proof values
             // (D-03) — no real/sensitive payload is logged.
             var numbers = new[] { 100, 200 };
-
-            logger.LogInformation("{StepLabel} seeded the following numbers: {Numbers}",
-                label, string.Join(", ", numbers));
 
             foreach (var number in numbers)
             {
@@ -81,13 +77,6 @@ public sealed class SampleProcessor(ILogger<SampleProcessor> logger) : BaseProce
         using var parsed = JsonDocument.Parse(validatedData);
         var incomingNumber = parsed.RootElement.GetProperty("number").GetInt32();
         var accumulated    = incomingNumber + baseNumber;
-
-        // D-03/D-11: the value-clarifying line. {Received} = inbound L2 value, {Produced} = accumulated
-        // output value, both surfaced as ES attributes.Received / attributes.Produced for the live auditor's
-        // value-chain assertion. ExecutionId/CorrelationId ride the ambient ExecutionLogScope (no extra args).
-        // Synthetic deterministic proof integers — no real/sensitive payload (D-03).
-        logger.LogInformation("{StepLabel} received {Received} produced {Produced}",
-            label, incomingNumber, accumulated);
 
         var downstreamData = JsonSerializer.Serialize(
             new { number = accumulated, label }, ProcessorConfig.SerializerOptions);
