@@ -288,6 +288,9 @@ public sealed class AnalyzerE2ETests
               { "exists": { "field": "{{EsIndexNames.ExecutionIdFieldPath}}" } },
               { "range": { "{{EsIndexNames.WindowTimestampFieldPath}}": {
                   "gte": "{{windowStart:o}}", "lte": "{{snapshot:o}}" } } }
+            ],
+            "must_not": [
+              { "exists": { "field": "{{EsIndexNames.ReinjectOutcomeFieldPath}}" } }
             ]
           }
         },
