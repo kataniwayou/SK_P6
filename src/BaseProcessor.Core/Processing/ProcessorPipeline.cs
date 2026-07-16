@@ -103,6 +103,7 @@ public sealed class ProcessorPipeline(
                 Result = StepOutcome.Failed, Data = validatedData, ErrorMessage = string.Join("; ", inErrs),
             };
             _ = await outputTail.RunAsync(failDr, d.EntryId, ct);   // outcome known (Failed); tuple discarded
+            LogHopExecuted(d, messageId, nameof(StepOutcome.Failed));   // FW-01: input-schema-fail is an executed hop
             return;   // C-2: NO DeleteTerminalAsync / KeyDeleteAsync here (req 2 — left to TTL)
         }
 
@@ -136,6 +137,10 @@ public sealed class ProcessorPipeline(
                 };
                 if (e is ProcessingException) logger.LogInformation("ProcessAsync threw processing status: {Msg}", e.Message);
                 _ = await outputTail.RunAsync(statusDr, d.EntryId, ct);   // outcome known from statusDr; tuple discarded
+                // FW-01: a seam-thrown Failed/Cancelled is an executed hop; the transient Processing status is
+                // NOT (D-05 — one record at a terminal outcome), so skip the per-hop record for it.
+                if (statusDr.Result != StepOutcome.Processing)
+                    LogHopExecuted(d, messageId, statusDr.Result.ToString());
                 return;   // C-2 parity: a seam-thrown failure does NOT delete the entry on this phase's model
             }
             catch (Exception ex)   // unexpected (incl. the deserialize JsonException, req 2) ⇒ failed, NO delete
@@ -151,17 +156,27 @@ public sealed class ProcessorPipeline(
                     Result = StepOutcome.Failed, Data = validatedData, ErrorMessage = "input deserialization failed",
                 };
                 _ = await outputTail.RunAsync(unexpectedDr, d.EntryId, ct);   // outcome known (Failed); tuple discarded
+                LogHopExecuted(d, messageId, nameof(StepOutcome.Failed));   // FW-01: an unexpected fault is an executed hop
                 return;
             }
 
-            if (dr is null) return;   // req 3: Mode-2 spawn handled everything; skip the tail (no write/send/delete)
+            // req 3: Mode-2 spawn handled everything; skip the tail (no write/send/delete). D-09: this IS an
+            // executed entry hop — log it with the outcome "Completed" and d.ExecutionId passed EXPLICITLY (it is
+            // Guid.Empty for the entry step; the ambient scope OMITS empty GUIDs, so the all-zeros marker must be
+            // an explicit placeholder arg to surface in ES).
+            if (dr is null) { LogHopExecuted(d, messageId, nameof(StepOutcome.Completed)); return; }
 
             // req 4: inline tail = shared OutputTail (write completed-only → INJECT on exhaust → send by result),
             // THEN delete L2[entryId] (exhaust → DELETE). Carry the carried messageId onto the DataResult so the
             // output key + INJECT/REINJECT use it.
             var carried = dr with { MessageId = messageId };
-            var (proceed, _) = await outputTail.RunAsync(carried, d.EntryId, ct);
-            if (!proceed) return;   // INJECT escalation already ended the round trip (no delete)
+            var (proceed, resolvedOutcome) = await outputTail.RunAsync(carried, d.EntryId, ct);
+            if (!proceed) return;   // INJECT escalation already ended the round trip (no delete, no per-hop record)
+
+            // FW-01 / D-18: the normal-path hop executed — log the TRUE terminal outcome the OutputTail resolved
+            // (a Completed result whose output blob failed the output schema is logged as Failed, matching the
+            // Step* wire). Emitted AFTER the !proceed guard so an INJECT-escalated hop does NOT log here.
+            LogHopExecuted(d, messageId, resolvedOutcome.ToString());
 
             // A source step (Guid.Empty) has NO L2 input key to reclaim — skip the delete tail for it
             // (pre-Phase-70 "Forward — source-delete tail … Skipped on a Guid.Empty source step").
@@ -173,6 +188,28 @@ public sealed class ProcessorPipeline(
             }
         }
         finally { processor.ClearSeamState(); }   // CR-01: per-consume AsyncLocal cleanup
+    }
+
+    /// <summary>FW-01/D-05/D-06/D-08/D-10: emit the framework's own per-hop execution record — ONE structured
+    /// <see cref="LogLevel.Information"/> line carrying the six ids + the terminal outcome as explicit
+    /// <c>{Placeholder}</c> args (never <c>$"..."</c>, never a payload arg — FW-03/T-76-01), so they surface as
+    /// ES <c>attributes.StepId/ExecutionId/CorrelationId/EntryId/MessageId/Outcome</c> via the MEL→OTLP bridge.
+    /// "Did this step execute" becomes platform-level operability for ANY processor with zero author-written
+    /// logs. <paramref name="d"/>.ExecutionId is passed EXPLICITLY (it is <see cref="Guid.Empty"/> for the
+    /// Mode-2 entry step — D-09 all-zeros marker; the ambient scope omits empty GUIDs).
+    /// <para>
+    /// FW-04/T-76-02: the call is wrapped in a swallow-guard — a throwing/blocking <see cref="ILogger"/> must
+    /// NEVER fail or delay the hop, and the pipeline outcome is unchanged whether the log succeeds or throws.
+    /// </para></summary>
+    private void LogHopExecuted(EntryStepDispatch d, Guid messageId, string outcome)
+    {
+        try
+        {
+            logger.LogInformation(
+                "hop executed {StepId} {ExecutionId} {CorrelationId} {EntryId} {MessageId} {Outcome}",
+                d.StepId, d.ExecutionId, d.CorrelationId, d.EntryId, messageId, outcome);
+        }
+        catch { /* FW-04: observability must never fail or delay the hop */ }
     }
 
     /// <summary>Populate the framework-owned per-dispatch state on the <see cref="BaseProcessor"/> the
