@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 78-01-PLAN.md
-last_updated: "2026-07-16T20:10:47.240Z"
+stopped_at: Completed 78-02-PLAN.md
+last_updated: "2026-07-16T20:32:19.341Z"
 last_activity: 2026-07-16
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove per
 Phase: 78 (rework-the-resilience-sweep-to-verify-purely-from-the-new-fr) — EXECUTING
 Current Plan: 1
 Total Plans: 5
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-07-16
 
@@ -1074,6 +1074,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 77 P05 | 5min | 3 tasks | 3 files |
 | Phase 77 P06 | 15min | 3 tasks | 4 files |
 | Phase 78 P01 | 5min | 2 tasks | 3 files |
+| Phase 78 P02 | 16min | 2 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1582,6 +1583,8 @@ Recent decisions affecting current work:
 - OrchestratorReinjectConsumer gains a NEW symmetric sent record on the confirmed-send path (after CountSent, never on drop) completing send-carries-{MessageId} pattern
 - 78-01: Deleted the analyzer entry-marker predicate (D-01) — exists attributes.ExecutionId ES filter is now the sole exclusion
 - 78-01: Keeper reinject records excluded from the structural cohort via must_not exists attributes.ReinjectOutcome (D-02), scoped to BuildStepSearchBody only
+- D-03 (78-02): value oracle FULLY DELETED end-to-end (fixture query/parse + engine value-CHAIN machinery + PassFailEngineValueChainFacts.cs); ANL-03 framework-redundancy is the sole non-binding reconciliation
+- 78-02: ValueChainOk/ValueChainDetail report fields REMOVED (not nulled); ExpectedHopOffset scaffold retained until Plan 03 (Hazard C atomic fact migration)
 
 ### Roadmap Milestone Log
 
@@ -1690,8 +1693,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-16T20:10:47.226Z
-Stopped at: Completed 78-01-PLAN.md
+Last session: 2026-07-16T20:32:03.802Z
+Stopped at: Completed 78-02-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.

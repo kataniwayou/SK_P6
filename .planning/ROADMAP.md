@@ -811,7 +811,7 @@ Plans:
 
 Plans:
 - [x] 78-01-PLAN.md — D-01 delete entry-marker detector + D-02 keeper `must_not` on the structural query [wave 1] — COMPLETE (`1daa8f6`/`02cd16d`; 41/41 analyzer facts green; 0-warning Debug+Release; entry-marker predicate gone, structural query forbids attributes.ReinjectOutcome)
-- [ ] 78-02-PLAN.md — D-03 delete the value oracle (fixture query/parse + engine value-chain machinery + `PassFailEngineValueChainFacts.cs`), keep the ExpectedHopOffset scaffold [wave 2]
+- [x] 78-02-PLAN.md — D-03 delete the value oracle (fixture query/parse + engine value-chain machinery + `PassFailEngineValueChainFacts.cs`), keep the ExpectedHopOffset scaffold [wave 2] — COMPLETE (`4dfefdb`/`9a2b696`; value axis dark from fixture + engine, ValueChainOk/ValueChainDetail removed, ANL-03 sole non-binding path, ExpectedHopOffset retained; PassFailEngineFacts 29/29 green; 0-warning Debug+Release)
 - [ ] 78-03-PLAN.md — D-03 Hazard C atomic: delete ExpectedHopOffset residue + migrate the ~6 label-fallback facts to the stepId path, then the hermetic green gate [wave 3]
 - [ ] 78-04-PLAN.md — D-04 live gate: SourceHash reseed + 7-scenario sweep + HEAD-baseline reproduction (operator-gated) [wave 4]
 
