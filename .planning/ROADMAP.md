@@ -676,7 +676,7 @@ Phases execute in numeric order: 25 → 26 → 27 → 28 → 29 → 30 → 31 �
 **Goal:** [To be planned]
 **Requirements**: TBD
 **Depends on:** Phase 68
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
 - [ ] TBD (run /gsd-plan-phase 69 to break down)
@@ -762,7 +762,7 @@ Plans:
 ### Phase 76: Framework-emitted per-hop execution logs keyed by stepId — decouple the resilience verdict from the concrete processor
 
 **Goal:** Move the resilience verdict's evidence base from author-written logs onto framework-emitted structural telemetry, so the sweep proves recovery for **any** processor rather than only `Processor.Sample`. Today the binding half of the verdict (`missing == 0`, `dupFail`, `valueChainOk`) is derived entirely from one `LogInformation` call the author wrote in `SampleProcessor.ProcessAsync` (`src/Processor.Sample/SampleProcessor.cs:89`), whose `Step_*` label is a *config-payload string* the analyzer then set-compares against a hardcoded `HopLabels` list (`PassFailEngine.cs:65`). The framework emits **no happy-path per-hop log at all** (`BaseProcessor.Core/Processing/` carries only fault-path warnings) — so "did this step execute" depends on an author remembering to log it. Two layers result: **(a) Framework** — `ProcessorPipeline` emits ONE per-hop log keyed by `StepId` + `ExecutionId` + `CorrelationId` + `EntryId`/`MessageId` + outcome, identities only, reusing the existing `ExecutionLogScope.StepId` → `attributes.StepId` bridge (every id is already in hand at the `ProcessAsync` call site: `d.StepId`/`d.WorkflowId`/`d.ProcessorId`/`d.ExecutionId`/`d.EntryId`). The analyzer's completeness check re-keys onto `stepId` — the real graph identity — and `HopLabels` is DELETED, ending the naming-convention-as-identity coupling. **(b) Sample** — KEEPS its `received/produced` line as the domain value oracle: the framework sees `validatedData`/`dr.Data` as opaque JSON and cannot log `Received=105 Produced=106` semantically, and that oracle is what the committed TELEMETRY-GAP reconciliation (`6e90216`) uses to prove a trace-incomplete run completed (terminal `Step_G == seed + 6`). Stretch: an orchestrator per-dispatch log makes *expected* = stepIds dispatched and *actual* = stepIds completed, **both read from ES** — closing the TEST-08 blind spot (untouched work is currently invisible) while preserving the v8.0.0 "truth = Prometheus + ES only" constraint (resolving the expected set from Postgres would violate it).
-**Requirements**: TBD (run /gsd-spec-phase 76 or /gsd-discuss-phase 76 to lock)
+**Requirements**: FW-01, FW-02, FW-03, FW-04, ANL-01, ANL-02, ANL-03, ANL-04, ANL-05, SMP-01 (locked via 76-SPEC.md)
 **Depends on:** Phase 75
 
 **Constraints (locked in discussion 2026-07-16):**
@@ -778,10 +778,14 @@ Plans:
 4. Verify liveness keys (`skp:proc:*:*`, ~10s) → `docker compose restart orchestrator` → `POST /api/v1/orchestration/start` must return **204**. The 204 IS the proof of SourceHash currency (container hash == seeder host-build hash); a 422 means the hash still diverged.
 5. Only then run `scripts/phase-68-sweep.ps1`.
 
-**Plans:** 0 plans
+**Plans:** 5 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 76 to break down)
+- [ ] 76-01-PLAN.md — Processor per-hop framework log (FW-01/03/04) + OutputTail resolved-outcome (D-18)
+- [ ] 76-02-PLAN.md — Orchestrator fan-out + terminal-reached records (FW-02, D-11 Option C/D-12/D-13)
+- [ ] 76-03-PLAN.md — Analyzer structural re-key to stepId + ES expected-set + framework-redundancy reconciliation (ANL-01/02/03, SMP-01)
+- [ ] 76-04-PLAN.md — Three-class verdict + metric-gate inversion + exit-2 harness/sweep plumbing (ANL-04/05)
+- [ ] 76-05-PLAN.md — Live gate: mandatory SourceHash reseed → 204 → 7-scenario sweep, classify every non-PASS (autonomous:false)
 
 ---
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
