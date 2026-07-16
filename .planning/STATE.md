@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: Not started
-status: completed
-stopped_at: Phase 78 context gathered
-last_updated: "2026-07-16T19:59:26.036Z"
+current_plan: 1
+status: executing
+stopped_at: Completed 78-01-PLAN.md
+last_updated: "2026-07-16T20:10:47.240Z"
 last_activity: 2026-07-16
 progress:
   total_phases: 4
@@ -21,7 +21,7 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase 77 — consistent-framework-logging-model-scope-carried-execution-i
+**Current focus:** Phase 78 — rework-the-resilience-sweep-to-verify-purely-from-the-new-fr
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 77
-Current Plan: Not started
+Phase: 78 (rework-the-resilience-sweep-to-verify-purely-from-the-new-fr) — EXECUTING
+Current Plan: 1
 Total Plans: 5
-Plan: 6 of 6
-Status: Milestone complete
+Plan: 2 of 4
+Status: Ready to execute
 Last activity: 2026-07-16
 
 > Phase 75 Plan 04 — ✅ COMPLETE 2026-07-15 (Wave 2: the D75-4 LIVE join — the analyzer ES-queries the keeper reinject drop/success logs and feeds the per-`(corr,exec)` outcome into the classifier). **1 atomic feat commit** (`2aa63e5`): (1) `EsIndexNames.ReinjectOutcomeFieldPath = "attributes.ReinjectOutcome"` — DIRECT-path const (no `.keyword` trap), the Plan-02 keeper drop/reinject discriminator; (2) `BuildKeeperOutcomeSearchBody(windowStart, snapshot)` — a static raw-string `_search` (`size 2000`, sort asc) filtering `exists attributes.ReinjectOutcome` + the SAME `[windowStart, snapshot]` range as `BuildStepSearchBody` (only validated window timestamps interpolated — no injection surface, T-75-07); (3) `BuildKeeperOutcomeMap(hits)` — the defensive per-`(corr,exec)` map (`TryGetProperty` + `ValueKind==String`, skip odd-shaped `continue`, never throw — T-66-09) keyed `"corr|exec"` → `"drop"`/`"reinject"`, with **`"reinject"` winning any tie** (a recovered execution is never mistaken for a clean drop); (4) `TraceCohort` gained `KeeperOutcomeByExecution`, populated by reading keeper hits via `es.SearchAllHits(BuildKeeperOutcomeSearchBody(...))` over the same window (no new drain — keeper docs ride the same OTLP pipeline, `DrainMs=60_000` + poll-to-stable already covers the ~60s skew) and threaded through `BuildRunTraces` (kept IO-free); (5) `keeperOutcomeByExecution: cohort.KeeperOutcomeByExecution` wired into the `PassFailEngine().Analyze(...)` call — closing the D75-4 loop end-to-end on the RealStack path. Requirement **D75-4** (live-join half). **ES-read-only preserved** — the join comes SOLELY from keeper LOGS in ES; no `IDatabase`/`redis`/`StringLength` CALL (grep-verified — those tokens appear only in disclaiming doc-comments). **No deviations** — plan executed exactly as written. Verification: **Debug + Release 0-warning**; `*PassFailEngineFacts` + `*PassFailEngineValueChainFacts` + `*ReinjectConsumerFacts` **34/34 GREEN** (Plan 01 already proves the classifier semantics with synthetic keeper maps; Plan 02 proves the keeper emits the join fields). Full hermetic filter shows 272 pre-existing broker/Postgres/Redis/ES-connection failures (Docker-less sandbox, identical baseline to plans 01/02/03; 0 analyzer/keeper facts among them). **`AnalyzerE2ETests` is `Category=RealStack` (hermetic-excluded), so the fixture change is a build+compile gate here; the LIVE keeper ES-join surfacing (checkpoint:human-verify, gate=blocking) is DEFERRED-AUTOMATED** — Docker unavailable (precedent phases 68/73/74, 75-03/75-05); exact close steps (Open-Question-1 level-filter probe → `phase-65-up` rebuild → `phase-68-sweep` → recoverable-but-lost FAIL vs clean-drop tolerated) recorded in `deferred-items.md` under "DEFERRED: 75-04 live keeper ES-join verify". Summary: `.planning/phases/75-recovery-verdict-per-execution-drop-tunable-constants/75-04-SUMMARY.md` (Self-Check PASSED). **Phase 75 = 5/5 plans COMPLETE — ready for verification.**
@@ -1073,6 +1073,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 77 P04 | 13min | 2 tasks | 4 files |
 | Phase 77 P05 | 5min | 3 tasks | 3 files |
 | Phase 77 P06 | 15min | 3 tasks | 4 files |
+| Phase 78 P01 | 5min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1579,6 +1580,8 @@ Recent decisions affecting current work:
 - 77-05: IKeeperRecoverable : ICorrelated with CorrelationId re-declared new — keeper correlation body-sourced/envelope-stamped while GetProperties() 4-tuple preserved (D-12)
 - Both keeper reinject consumers open the 5-id execution scope via logger.BeginScope(ExecutionLogScope.BuildState(...)); Tier-1 join keys stripped from strings -> only {MessageId}+{ReinjectOutcome} remain (D2/LOG-02, D1/LOG-01, D6)
 - OrchestratorReinjectConsumer gains a NEW symmetric sent record on the confirmed-send path (after CountSent, never on drop) completing send-carries-{MessageId} pattern
+- 78-01: Deleted the analyzer entry-marker predicate (D-01) — exists attributes.ExecutionId ES filter is now the sole exclusion
+- 78-01: Keeper reinject records excluded from the structural cohort via must_not exists attributes.ReinjectOutcome (D-02), scoped to BuildStepSearchBody only
 
 ### Roadmap Milestone Log
 
@@ -1687,9 +1690,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: --stopped-at
-Stopped at: Phase 78 context gathered
-Resume file: --resume-file
+Last session: 2026-07-16T20:10:47.226Z
+Stopped at: Completed 78-01-PLAN.md
+Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
 **Phase 29 (Structured Execution-Scope Logging):** 5/5 plans complete — close gate GATE_EXIT=0 (405 Passed ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held; live scopeProof passes on a `processor-sample` Completed log); LOG-01..06 all complete. Awaiting orchestrator phase verification + `phase.complete`. Milestone v3.5.0 = 17/17 plans across phases 25-29.
