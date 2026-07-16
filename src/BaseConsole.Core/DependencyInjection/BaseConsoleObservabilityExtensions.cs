@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using OpenTelemetry;
 using OpenTelemetry.Logs;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -56,7 +57,11 @@ public static class BaseConsoleObservabilityExtensions
             o.SetResourceBuilder(ResourceBuilder.CreateDefault()
                 .AddService(serviceName: serviceName, serviceVersion: serviceVersion)
                 .AddAttributes(instanceAttrs));   // Phase 30 METRIC-01 — every log carries service.instance.id
-            o.AddOtlpExporter();
+            // Phase 76 (FW-04/T-76-02): declare the batch/drop export posture EXPLICITLY. A per-hop record now
+            // fires on EVERY executed hop at real volume; the log export must never apply backpressure into the
+            // consume path. Batch = a bounded queue with a background export + drop-on-full — a stalled/throwing
+            // exporter can never block or delay the hop (belt-and-braces with the ProcessorPipeline swallow-guard).
+            o.AddOtlpExporter(exp => exp.ExportProcessorType = ExportProcessorType.Batch);
         });
 
         // OTel METRICS. No tracer provider (CONSOLE-02).
