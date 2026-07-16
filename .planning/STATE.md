@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 76-01-PLAN.md
-last_updated: "2026-07-16T09:28:34.181Z"
+stopped_at: Completed 76-02-PLAN.md
+last_updated: "2026-07-16T09:39:36.306Z"
 last_activity: 2026-07-16
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove per
 Phase: 76 (framework-emitted-per-hop-execution-logs-keyed-by-stepid-dec) — EXECUTING
 Current Plan: 1
 Total Plans: 5
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-07-16
 
@@ -1061,6 +1061,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 74 P04 | 19 | 3 tasks | 12 files |
 | Phase 75 P02 | 43min | 2 tasks | 2 files |
 | Phase 76 P01 | 25min | 3 tasks | 9 files |
+| Phase 76 P02 | 5min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1550,6 +1551,8 @@ Recent decisions affecting current work:
 - 76-01: OutputTail.RunAsync returns (bool proceed, StepOutcome resolved) — D-18 resolves the output-schema Completed→Failed downgrade for the per-hop record
 - 76-01: ProcessorPipeline emits one guarded placeholder-only Information per-hop record at the 5 executed branches (zero on clean-absent/reinject/Processing); Mode-2 entry marker carries an explicit all-zeros ExecutionId (D-09)
 - 76-01: logs OTLP exporter declares ExportProcessorType.Batch explicitly (FW-04 non-blocking, structurally asserted)
+- 76-02: fan-out edge record uses D-11 Option C (no outbound MessageId); Phase-72 no-override Send left intact
+- 76-02: guarded the pre-existing completed-terminal log alongside the new terminal-reached record so the terminal ack survives a throwing logger (FW-04/T-76-05)
 
 ### Roadmap Milestone Log
 
@@ -1658,8 +1661,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-16T09:28:24.851Z
-Stopped at: Completed 76-01-PLAN.md
+Last session: 2026-07-16T09:39:36.291Z
+Stopped at: Completed 76-02-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
