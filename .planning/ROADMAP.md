@@ -789,13 +789,18 @@ Plans:
 
 ### Phase 77: Consistent framework logging model — scope-carried execution ids, messageId on send/consume, keeper symmetric, drop concrete-processor logs
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** One uniform framework logging model — Tier-1 execution ids arrive from the ambient consume scope (attributes.*), Tier-2 {MessageId} rides send/consume records, Tier-3 domain extras ({Outcome}/{NextStepId}/{ReinjectOutcome}) stay in the string; no id is ever restated in a string the scope already carries, the keeper opens the scope symmetrically, and concrete-processor logs are dropped so the verdict never depends on them.
+**Requirements**: LOG-01 (strip Tier-1 placeholders), LOG-02 (keeper opens the execution scope), LOG-03 (MessageId on send/consume incl. outbound-id capture), LOG-04 (remove concrete-processor logs), LOG-05 (operator freedom preserved), LOG-06 (keep outcome-shaped records)
 **Depends on:** Phase 76
-**Plans:** 0 plans
+**Plans:** 6 plans (hermetic-only verification)
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 77 to break down)
+- [ ] 77-01-PLAN.md — Strip Tier-1 from the processor per-hop record (ProcessorPipeline.LogHopExecuted) [wave 1]
+- [ ] 77-02-PLAN.md — Capture+log the outbound MessageId on the processor result send (OutputTail, D3) [wave 1]
+- [ ] 77-03-PLAN.md — Strip Tier-1 from the orchestrator execution records + fan-out outbound MessageId capture [wave 1]
+- [ ] 77-04-PLAN.md — Delete concrete-processor author logs (SampleProcessor, D4) + preserve operator freedom (D5) [wave 1]
+- [ ] 77-05-PLAN.md — Scope foundation: ExecutionLogScope loose-id overload + IKeeperRecoverable : ICorrelated [wave 1]
+- [ ] 77-06-PLAN.md — Keeper reinject consumers open the execution scope + strip Tier-1 (D2, depends on 05) [wave 2]
 
 ### Phase 78: Rework the resilience sweep to verify purely from the new framework ES logs — adapt the analyzer to the consistent-logging model (entry-marker = absent ExecutionId not Guid.Empty; discriminate keeper reinject records via attributes.ReinjectOutcome; drop the concrete value oracle), keep Prometheus as the secondary collector-blind axis, then re-run the reseed + 7-scenario live gate and confirm the verdict reconstructs from framework logs alone
 
