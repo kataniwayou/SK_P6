@@ -154,12 +154,20 @@ public sealed class PassFailEngine
         var lastHop  = lastHopUtcByExecution  ?? new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
         var keeperOutcome = keeperOutcomeByExecution ?? new Dictionary<string, string>(StringComparer.Ordinal);
 
+        // TELEMETRY-GAP RECONCILIATION gate (trace-export hardening): only reclassify trace-incomplete runs as
+        // provably-complete when a trusted seed oracle is supplied (the live fixture / value-chain facts) —
+        // mirrors the WR-02 oracle gate. Legacy completeness-only callers (no oracle) keep the strict
+        // all-9-labels behaviour byte-for-byte.
+        var valueOracleSupplied = seedsByExecution is not null;
+
         var incomplete = runs.Where(r => !IsComplete(r)).ToList();
         var inFlightLoss = 0;
         var bindingMissing = 0;
+        var telemetryGap = 0;
         var inFlightLossDetail = new List<string>();
         var unrecoverableLossDetail = new List<string>();
         var missingDetail = new List<string>();
+        var telemetryGapDetail = new List<string>();
         // Keys of runs classified as TOLERATED (non-binding) losses — keeper-confirmed clean-absent DROP (D75-3)
         // OR redis-wipe in-flight-at-wipe (D75-5). A tolerated run has, by definition, a PARTIAL trace (some hops
         // never landed in ES) — its value chain is expected to be incomplete/unanchored, so the binding value-
@@ -173,6 +181,33 @@ public sealed class PassFailEngine
         foreach (var r in incomplete)
         {
             var key = $"{r.CorrelationId}|{r.ExecutionId}";
+
+            // ── TELEMETRY-GAP RECONCILIATION (checked FIRST — strongest evidence) ──
+            // A trace-incomplete run whose SURFACED values still form a valid deterministic chain culminating
+            // in the terminal Step_G == seed+6 has PROVABLY completed: the terminal value (and every present
+            // downstream value) is unreachable unless every missing-LABEL hop actually ran, so the absent
+            // labels are dropped OTLP trace records, NOT lost work. Treat as a NON-binding telemetry gap, not a
+            // miss. Gated on a supplied value oracle so the seed is trusted (not a defaulted 0) and so legacy
+            // completeness-only callers are unaffected. A terminal-only survivor with a WRONG seed fails the
+            // Step_G==seed+6 check and drops through to the normal loss classification below.
+            var reconSeed = ResolveSeed(r, seedsByExecution);
+            if (valueOracleSupplied
+                && r.Values.TryGetValue("Step_G", out var terminalVal)
+                && terminalVal == reconSeed + ExpectedHopOffset["Step_G"]
+                && CheckValueChain(r, reconSeed, out _))
+            {
+                telemetryGap++;
+                var present = r.DistinctLabels
+                    .Where(l => !l.Equals("Step_A", StringComparison.Ordinal))
+                    .ToHashSet(StringComparer.Ordinal);
+                var missingLabels = HopLabels.Where(l => !present.Contains(l)).OrderBy(l => l, StringComparer.Ordinal);
+                telemetryGapDetail.Add(
+                    $"[{key}] trace-incomplete (missing {string.Join(",", missingLabels)}) but terminal " +
+                    $"Step_G=={reconSeed + ExpectedHopOffset["Step_G"]} with intact value chain — dropped " +
+                    "hop-LOG(s) under load, not lost work (telemetry gap, non-binding).");
+                continue;
+            }
+
             var startedAfterRecovery = recoveryUtc is { } rec
                 && firstHop.TryGetValue(key, out var fh) && fh > rec;
             var stalledBeforeRecovery = recoveryUtc is { } rec2
@@ -243,7 +278,7 @@ public sealed class PassFailEngine
         // the empty-map run is genuinely not value-chain-checked and the run continues as before (no behaviour
         // change). When an oracle IS supplied (the live fixture, the value-chain facts), a COMPLETE run that
         // surfaced ZERO Produced values is treated as UNVERIFIED (fail), NOT a vacuous pass.
-        var valueOracleSupplied = seedsByExecution is not null;
+        // valueOracleSupplied is defined above (before the classification loop) and reused here.
         var completeRunsWithValues = 0;
 
         foreach (var run in runs)
@@ -352,11 +387,13 @@ public sealed class PassFailEngine
             Traces = runs,
             ValueChainOk = valueChainOk,
             ValueChainDetail = valueChainDetail,
+            TelemetryGap = telemetryGap,
+            TelemetryGapDetail = telemetryGapDetail,
             TripDurationMsByExecution = tripByExec,
             TripDurationMsByCorrelation = tripByCorr,
             HumanSummary = BuildSummary(
                 scenarioId, verdict, startedRuns, complete.Count, missing, dupFail, valueChainOk,
-                metricGateOk, recon, corroborationDetail),
+                metricGateOk, recon, corroborationDetail, telemetryGap),
             MetricGate = metricGate,
         };
     }
@@ -443,13 +480,15 @@ public sealed class PassFailEngine
     private static string BuildSummary(string scenarioId, Verdict verdict, int startedRuns,
         int completeRuns, int missing, bool dupFail, bool valueChainOk, bool metricGateOk,
         ReconciliationOutcome recon,
-        IReadOnlyList<string> corroborationDetail)
+        IReadOnlyList<string> corroborationDetail, int telemetryGap = 0)
     {
         var reasons = new List<string>();
         if (missing > 0) reasons.Add($"{missing} started-but-incomplete");
         if (dupFail) reasons.Add("illegitimate duplicate (fail-closed)");
         if (!valueChainOk) reasons.Add("value-chain mismatch (seed + hop-count / Step_G terminal anchor)");
         if (!metricGateOk) reasons.Add("metric gate (MG-1/2/3)");
+        // Non-binding note: value-chain-proven-complete runs missing only hop-LOGS (dropped OTLP records).
+        var gapNote = telemetryGap > 0 ? $" [{telemetryGap} telemetry-gap: dropped hop-logs, value-chain-proven complete]" : "";
 
         var driver = verdict == Verdict.Pass
             ? "every started run complete, no illegitimate duplicate, value-chain intact, metric gate holds"
@@ -460,6 +499,6 @@ public sealed class PassFailEngine
             ? "metric gate clean"
             : $"metric gate [{corroborationDetail.Count} detail(s)]";
 
-        return $"[{scenarioId}] {verdict}: {completeRuns}/{startedRuns} started runs complete — {driver}; {corroboration}.";
+        return $"[{scenarioId}] {verdict}: {completeRuns}/{startedRuns} started runs complete — {driver}; {corroboration}.{gapNote}";
     }
 }

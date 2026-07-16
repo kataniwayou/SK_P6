@@ -182,6 +182,23 @@ public sealed record AnalyzerReport
     public required IReadOnlyList<string> ValueChainDetail { get; init; }
 
     /// <summary>
+    /// TELEMETRY-GAP reconciliation (trace-export hardening): the count of STARTED runs that are
+    /// trace-incomplete (missing one or more hop-LOGS) but whose surfaced values still form a valid
+    /// deterministic chain culminating in the terminal <c>Step_G == seed + 6</c> — PROVABLY completed, since
+    /// the terminal value is unreachable unless every missing-label hop actually ran. The absent labels are
+    /// therefore dropped OTLP trace records, not lost work. NON-binding: these are excluded from
+    /// <see cref="Missing"/> and do NOT fail the verdict. A non-zero count is a signal to harden trace export
+    /// (the observability pipeline dropped records under load), NOT a data-loss failure. Only populated when a
+    /// value oracle (<c>seedsByExecution</c>) is supplied, so legacy completeness-only callers are unaffected.
+    /// Default 0 keeps existing constructors compiling.
+    /// </summary>
+    public int TelemetryGap { get; init; }
+
+    /// <summary>Per-run evidence for each <see cref="TelemetryGap"/> run: the missing labels + the proving
+    /// terminal value. Default empty keeps existing constructors compiling.</summary>
+    public IReadOnlyList<string> TelemetryGapDetail { get; init; } = Array.Empty<string>();
+
+    /// <summary>
     /// Per-<c>(corr, exec)</c> trip duration in milliseconds (73, D-12), keyed by <c>"correlationId|executionId"</c>:
     /// the first-step → <c>Step_G</c>-terminal ES <c>@timestamp</c> delta (min→max span of the run's hits). The
     /// engine does NOT read ES timestamps; the live fixture (Plan 04) computes + passes this map, the hermetic

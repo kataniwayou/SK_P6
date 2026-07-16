@@ -130,6 +130,56 @@ public sealed class PassFailEngineValueChainFacts
     }
 
     [Fact]
+    public void Pass_MissingHopLogs_ValidTerminalChain_WithOracle_Reconciled_As_TelemetryGap()
+    {
+        // TRACE-EXPORT HARDENING (Layer B) — the TEST-10 live case. Under load the OTLP pipeline can DROP an
+        // intermediate hop's LOG even though the hop RAN. Here Step_E1 AND Step_E2 logs are absent, but every
+        // surfaced value forms a valid chain culminating in Step_G == seed+6 (206) — unreachable unless E
+        // actually ran (F=205 ⇒ E produced 204). With a value ORACLE supplied (the live fixture always does),
+        // the run is reconciled as a NON-binding telemetry gap, NOT a recoverable-but-lost miss.
+        var labels = NonTerminalLabels.Where(l => l != "Step_E1" && l != "Step_E2")
+            .Concat(new[] { "Step_G", "Step_G" }).ToArray();
+        var values = ChainValues(SeedB);
+        values.Remove("Step_E1");
+        values.Remove("Step_E2");
+        var run = RunTrace.FromLabels("corr-1", "exec-b", labels, values);
+        var snap = CleanSnapshot();
+        var seedOracle = new Dictionary<string, int>(StringComparer.Ordinal) { ["corr-1|exec-b"] = SeedB };
+
+        var report = new PassFailEngine().Analyze(
+            new[] { run }, snap, "unit-value-chain", seedsByExecution: seedOracle);
+
+        Assert.Equal(0, report.Missing);              // NOT a recoverable-but-lost binding miss
+        Assert.Equal(1, report.TelemetryGap);         // reclassified as a dropped-log telemetry gap
+        Assert.True(report.ValueChainOk);             // surfaced chain intact (E not surfaced → not checked)
+        Assert.Equal(Verdict.Pass, report.Verdict);   // work provably completed (terminal 206)
+        Assert.Contains(report.TelemetryGapDetail, d => d.Contains("Step_E1") && d.Contains("Step_E2"));
+    }
+
+    [Fact]
+    public void Fail_MissingHopLog_WrongTerminal_WithOracle_StillBindingMiss()
+    {
+        // GUARD: the reconciliation must NEVER rescue a run whose terminal is WRONG (or absent) — that is a real
+        // loss, not a dropped log. Missing Step_E1 AND a tampered Step_G (205 != seed+6=206) ⇒ the terminal
+        // anchor check fails ⇒ NOT reconciled ⇒ still a binding miss (and value-chain fail) ⇒ Fail.
+        var labels = NonTerminalLabels.Where(l => l != "Step_E1")
+            .Concat(new[] { "Step_G", "Step_G" }).ToArray();
+        var values = ChainValues(SeedB);
+        values.Remove("Step_E1");
+        values["Step_G"] = 205; // wrong terminal — should be 206
+        var run = RunTrace.FromLabels("corr-1", "exec-b", labels, values);
+        var snap = CleanSnapshot();
+        var seedOracle = new Dictionary<string, int>(StringComparer.Ordinal) { ["corr-1|exec-b"] = SeedB };
+
+        var report = new PassFailEngine().Analyze(
+            new[] { run }, snap, "unit-value-chain", seedsByExecution: seedOracle);
+
+        Assert.Equal(0, report.TelemetryGap);         // NOT reconciled (terminal wrong)
+        Assert.True(report.Missing > 0);              // genuine binding miss
+        Assert.Equal(Verdict.Fail, report.Verdict);
+    }
+
+    [Fact]
     public void Fail_StepGCountOne_MissingArrival_Yields_Fail()
     {
         // Step_G appears ONCE (one arrival) → HasIllegitimateDuplicate (count != 2) → Fail.
