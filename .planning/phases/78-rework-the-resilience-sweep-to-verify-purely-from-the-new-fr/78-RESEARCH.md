@@ -355,16 +355,13 @@ Every scenario must reproduce its **verdict** (all PASS) from `analyzer-reports/
 | A3 | The parse-level `hasMessageId` guard alone does NOT exclude keeper records (they carry `MessageId`), so the query `must_not` is the real fix | ES Query Change | If keeper reinject records somehow lack `MessageId` live, the parse guard would suffice — but D-02 mandates the query clause regardless (belt-and-suspenders) |
 | A4 | net8.0 xUnit host; run exe directly (`dotnet test` hangs on Windows MTP) | Validation Architecture | Stated in CONTEXT + memory; if the host changed, the run command changes but not the logic |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Hazard C resolution — retain vs migrate (`ExpectedHopOffset`).**
-   - What we know: D-03 lists `ExpectedHopOffset`/`ResolveSeed` for deletion; ~6 surviving facts depend on `ExpectedHopOffset` via `valueOracleHopSet`.
-   - What's unclear: whether the user wants the literal D-03 delete (⇒ migrate the facts) or accepts retaining the completeness scaffold.
-   - Recommendation: default to **Option A (retain)** for lowest risk; surface A1 to discuss-phase for a one-line confirmation. Either way it is one atomic task.
+1. **Hazard C resolution — retain vs migrate (`ExpectedHopOffset`). → RESOLVED: Option B (delete + migrate).**
+   - Resolved 2026-07-16 via the CONTEXT.md D-03 AMENDMENT. The user chose **Option B**: delete `ExpectedHopOffset` and migrate the ~6 label-fallback facts to the explicit `expectedStepIdsByExecution` (stepId) path — because the label-fallback branch is dead in production once the value oracle is gone, so retaining it would leave facts exercising a never-live branch (the vacuous-coverage trap D-03 exists to kill). Delete + fact-migration is ONE atomic task (Plan 78-03).
 
-2. **`ValueChainOk`/`ValueChainDetail`/`TelemetryGap` report fields — remove vs null.**
-   - What we know: the sweep wrapper never reads them (`phase-68-sweep.ps1:104-115`).
-   - Recommendation: keep the fields but hardcode `ValueChainOk = true` (report-shape stability for any ad-hoc JSON consumer); this is Claude's discretion per D-03 scope.
+2. **`ValueChainOk`/`ValueChainDetail`/`TelemetryGap` report fields — remove vs null. → RESOLVED: remove.**
+   - Resolved 2026-07-16 (CONTEXT.md discretion note + plan-checker follow-up). The fields are REMOVED from `AnalyzerReport.cs` and the `Analyze` initializer, consistent with the delete-not-dormant posture. The surviving KEEP fact that asserted on `ValueChainOk` is itself moot once the oracle is gone and is deleted with the fields (Plan 78-02). `scripts/phase-73-sweep.ps1:136` reads `.ValueChainOk` but is null-guarded and out of the D-04 runbook — degrades to `$null` harmlessly.
 
 ## Environment Availability
 
