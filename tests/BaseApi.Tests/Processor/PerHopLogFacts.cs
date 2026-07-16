@@ -10,18 +10,21 @@ using BaseProcessorBase = BaseProcessor.Core.Processing.BaseProcessor;
 namespace BaseApi.Tests.Processor;
 
 /// <summary>
-/// Phase 76 (FW-01 / D-05/D-06/D-08/D-09/D-10, + D-18 consumer) — the framework-emitted per-hop execution
-/// record from <see cref="ProcessorPipeline"/>. One structured <see cref="LogLevel.Information"/> record per
-/// EXECUTED hop, for every terminal outcome (Completed/Failed/Cancelled), carrying the six ids + outcome
-/// ONLY, on the 5 executed-hop branches — and NOTHING on the non-execution branches (clean-absent, reinject,
-/// Processing). Facts:
+/// Phase 76/77 (FW-01 / D-05/D-06/D-08/D-10 + D-18 consumer; Phase-77 D1/LOG-01 strip) — the framework-emitted
+/// per-hop execution record from <see cref="ProcessorPipeline"/>. One structured
+/// <see cref="LogLevel.Information"/> record per EXECUTED hop, for every terminal outcome
+/// (Completed/Failed/Cancelled), whose EXPLICIT template state carries ONLY the Tier-2 MessageId + the Tier-3
+/// Outcome on the 5 executed-hop branches — and NOTHING on the non-execution branches (clean-absent, reinject,
+/// Processing). The four Tier-1 ids (StepId/ExecutionId/CorrelationId/EntryId) moved to the ambient
+/// InboundExecutionScopeConsumeFilter scope (attributes.* in ES) and are ABSENT from the NullScope-captured
+/// explicit state here. Facts:
 /// <list type="bullet">
-///   <item>A Completed hop yields exactly ONE Information record with all six keys (StepId, ExecutionId,
-///   CorrelationId, EntryId, MessageId, Outcome="Completed").</item>
+///   <item>A Completed hop yields exactly ONE Information record carrying MessageId + Outcome="Completed" and
+///   NOT StepId/ExecutionId/CorrelationId/EntryId in explicit state.</item>
 ///   <item>A Failed hop (input-schema fail) → Outcome="Failed"; a Cancelled seam → Outcome="Cancelled".</item>
 ///   <item>A processor that writes NO author log still yields exactly one framework record.</item>
-///   <item>The Mode-2 entry step (d.ExecutionId == Guid.Empty) yields one record whose ExecutionId is the
-///   all-zeros marker (D-09, explicit).</item>
+///   <item>The Mode-2 entry step (d.ExecutionId == Guid.Empty) yields one record — ExecutionId is no longer an
+///   explicit arg, so it is ABSENT (Phase-78 moves the live entry-marker check to "attribute absent").</item>
 ///   <item>D-18: a normal hop whose output blob fails the output schema logs Outcome="Failed".</item>
 ///   <item>Clean-absent / gate-fault reinject / Processing branches yield ZERO per-hop records.</item>
 /// </list>
@@ -77,15 +80,19 @@ public sealed class PerHopLogFacts
             .Where(e => e.Level == LogLevel.Information && e.State.Any(kv => kv.Key == "Outcome"))
             .ToList();
 
-    private static void AssertSixFields(
-        CapturingLogger<ProcessorPipeline>.Entry entry, EntryStepDispatch d, Guid messageId, string outcome)
+    /// <summary>D1/LOG-01: after the strip, the per-hop record's EXPLICIT template state carries ONLY the
+    /// Tier-2 <c>MessageId</c> + the Tier-3 <c>Outcome</c>. The four Tier-1 ids
+    /// (StepId/ExecutionId/CorrelationId/EntryId) moved to the ambient scope, which the NullScope
+    /// <see cref="CapturingLogger{T}"/> deliberately does NOT capture — so they are ABSENT from State here.</summary>
+    private static void AssertHopRecord(
+        CapturingLogger<ProcessorPipeline>.Entry entry, Guid messageId, string outcome)
     {
-        Assert.Contains(new KeyValuePair<string, object?>("StepId", d.StepId), entry.State);
-        Assert.Contains(new KeyValuePair<string, object?>("ExecutionId", d.ExecutionId), entry.State);
-        Assert.Contains(new KeyValuePair<string, object?>("CorrelationId", d.CorrelationId), entry.State);
-        Assert.Contains(new KeyValuePair<string, object?>("EntryId", d.EntryId), entry.State);
         Assert.Contains(new KeyValuePair<string, object?>("MessageId", messageId), entry.State);
         Assert.Contains(new KeyValuePair<string, object?>("Outcome", outcome), entry.State);
+        Assert.DoesNotContain(entry.State, kv => kv.Key == "StepId");
+        Assert.DoesNotContain(entry.State, kv => kv.Key == "ExecutionId");
+        Assert.DoesNotContain(entry.State, kv => kv.Key == "CorrelationId");
+        Assert.DoesNotContain(entry.State, kv => kv.Key == "EntryId");
     }
 
     // ---- the 5 executed-hop branches ----
@@ -106,7 +113,7 @@ public sealed class PerHopLogFacts
         await Build(redis, Ctx(), processor, send, log).RunAsync(d, messageId, ct);
 
         var rec = Assert.Single(HopRecords(log));
-        AssertSixFields(rec, d, messageId, "Completed");
+        AssertHopRecord(rec, messageId, "Completed");
     }
 
     [Fact]
@@ -127,7 +134,7 @@ public sealed class PerHopLogFacts
         await Build(redis, context, processor, send, log).RunAsync(d, messageId, ct);
 
         var rec = Assert.Single(HopRecords(log));
-        AssertSixFields(rec, d, messageId, "Failed");
+        AssertHopRecord(rec, messageId, "Failed");
     }
 
     [Fact]
@@ -146,7 +153,7 @@ public sealed class PerHopLogFacts
         await Build(redis, Ctx(), processor, send, log).RunAsync(d, messageId, ct);
 
         var rec = Assert.Single(HopRecords(log));
-        AssertSixFields(rec, d, messageId, "Cancelled");
+        AssertHopRecord(rec, messageId, "Cancelled");
     }
 
     [Fact]
@@ -165,7 +172,7 @@ public sealed class PerHopLogFacts
         await Build(redis, Ctx(), processor, send, log).RunAsync(d, messageId, ct);
 
         var rec = Assert.Single(HopRecords(log));
-        AssertSixFields(rec, d, messageId, "Failed");
+        AssertHopRecord(rec, messageId, "Failed");
     }
 
     [Fact]
@@ -189,7 +196,7 @@ public sealed class PerHopLogFacts
     }
 
     [Fact]
-    public async Task Mode2EntryMarker_LogsCompleted_WithEmptyExecutionId()
+    public async Task Mode2EntryMarker_LogsCompleted_NoExplicitExecutionId()
     {
         var ct = TestContext.Current.CancellationToken;
         var entryId = Guid.NewGuid();
@@ -206,9 +213,11 @@ public sealed class PerHopLogFacts
         await Build(redis, Ctx(), processor, send, log).RunAsync(d, messageId, ct);
 
         var rec = Assert.Single(HopRecords(log));
-        AssertSixFields(rec, d, messageId, "Completed");
-        // D-09: the all-zeros ExecutionId is carried EXPLICITLY (not omitted), so the marker surfaces in ES.
-        Assert.Contains(new KeyValuePair<string, object?>("ExecutionId", Guid.Empty), rec.State);
+        AssertHopRecord(rec, messageId, "Completed");
+        // Phase-77 (D1/LOG-01): ExecutionId is no longer an explicit template arg, so the all-zeros marker is
+        // ABSENT from the record here — in production it surfaces as an ABSENT attributes.ExecutionId (BuildState
+        // skips Guid.Empty), NOT an all-zeros value. The live analyzer entry-marker check moves to
+        // "attribute absent" in Phase 78 (Category=RealStack).
     }
 
     [Fact]
@@ -230,7 +239,7 @@ public sealed class PerHopLogFacts
         await Build(redis, context, processor, send, log).RunAsync(d, messageId, ct);
 
         var rec = Assert.Single(HopRecords(log));
-        AssertSixFields(rec, d, messageId, "Failed");               // D-18: NOT "Completed"
+        AssertHopRecord(rec, messageId, "Failed");               // D-18: NOT "Completed"
     }
 
     // ---- non-execution branches: ZERO per-hop records ----
