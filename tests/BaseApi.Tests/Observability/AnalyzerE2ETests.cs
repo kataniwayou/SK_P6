@@ -182,15 +182,15 @@ public sealed class AnalyzerE2ETests
         var keeperOutcomeByExecution = BuildKeeperOutcomeMap(keeperHits);
 
         // Phase 76 ANL-02/ANL-03: the FW-02 orchestrator dispatch records (attributes.NextStepId) supply the
-        // ES-derived expected set + the redundancy edge; the SEPARATE value-oracle query (attributes.StepLabel)
-        // fills the D-16 value chain. Both ride the same OTLP pipeline as the structural StepId records, so the
-        // DrainMs + poll-to-stable above already tolerated the ~60 s export skew — no new drain needed.
+        // ES-derived expected set + the redundancy edge. They ride the same OTLP pipeline as the structural
+        // StepId records, so the DrainMs + poll-to-stable above already tolerated the ~60 s export skew — no
+        // new drain needed. (D-03/Phase 78: the SEPARATE value-oracle query is deleted — the sample author
+        // logs are gone post-Phase-77, so the verdict stands on structural completeness + ANL-03 + the metric
+        // gate alone; no StepLabel/Produced value evidence is fetched.)
         var dispatchHits = await es.SearchAllHits(
             BuildDispatchSearchBody(windowStartUtc, snapshotUtc), ct: ct);
-        var valueHits = await es.SearchAllHits(
-            BuildValueOracleSearchBody(windowStartUtc, snapshotUtc), ct: ct);
 
-        var cohort = BuildRunTraces(stepHits, dispatchHits, valueHits, keeperOutcomeByExecution);
+        var cohort = BuildRunTraces(stepHits, dispatchHits, keeperOutcomeByExecution);
         var traces = cohort.Traces;
 
         // ── 5. PROM SNAPSHOTS + WINDOWED DELTAS (OBS-03) ─────────────────────────────────────────────
@@ -221,11 +221,10 @@ public sealed class AnalyzerE2ETests
             $"AND zero ES Step_* traces (started runs={traces.Count}); the precondition is not satisfied.");
 
         // ── 7. RUN THE ENGINE (pure — no IO) ─────────────────────────────────────────────────────────
-        // VALUE-CHAIN + TRIP-DURATION FEED (73, D-11/D-12): pass the per-label Produced values (already on
-        // each RunTrace via FromLabels), the @timestamp trip-duration maps, and the per-execution seed oracle
-        // into the extended engine. The value-chain check (incl. the Step_G-at-seed+6 terminal-anchor proxy)
-        // then folds into the binding verdict; the trip-duration maps land in the report. NO metric-counter
-        // assertion is added; NO Redis skp:out: blob is read (ES-read-only, D-11).
+        // TRIP-DURATION FEED (73, D-12): pass the @timestamp trip-duration maps into the engine; they land in
+        // the report. (D-03/Phase 78: the concrete value oracle is deleted — no per-execution seed map / value
+        // chain is fed; the verdict stands on structural stepId completeness + ANL-03 redundancy + the metric
+        // gate.) NO metric-counter assertion is added; NO Redis skp:out: blob is read (ES-read-only, D-11).
         // B-CRITERION FEED (Plan 3): parse the harness RECOVERY_UTC seam (the all-tiers-healthy instant). A
         // null/empty/malformed value (no-fault baseline TEST-01) yields false ⇒ pass recoveryUtc:null, so the
         // engine treats every started-but-incomplete run as a binding miss (correct — a no-fault run has none).
@@ -240,7 +239,6 @@ public sealed class AnalyzerE2ETests
             traces, promSnapshot, scenarioId,
             tripDurationMsByExecution: cohort.TripDurationMsByExecution,
             tripDurationMsByCorrelation: cohort.TripDurationMsByCorrelation,
-            seedsByExecution: cohort.SeedsByExecution,
             expectsKeeperActivity: ExpectsKeeperActivity.GetValueOrDefault(scenarioId, false),
             mg1Binding: Mg1Binding.GetValueOrDefault(scenarioId, true),
             recoveryUtc: recoveryUtc,
@@ -315,32 +313,6 @@ public sealed class AnalyzerE2ETests
           "bool": {
             "filter": [
               { "exists": { "field": "{{EsIndexNames.NextStepIdFieldPath}}" } },
-              { "exists": { "field": "{{EsIndexNames.ExecutionIdFieldPath}}" } },
-              { "range": { "{{EsIndexNames.WindowTimestampFieldPath}}": {
-                  "gte": "{{windowStart:o}}", "lte": "{{snapshot:o}}" } } }
-            ]
-          }
-        },
-        "sort": [ { "{{EsIndexNames.WindowTimestampFieldPath}}": "asc" } ]
-      }
-      """;
-
-    /// <summary>
-    /// Build the window-bounded VALUE-ORACLE <c>_search</c> body (Phase 76, D-16 / SMP-01): the SEPARATE,
-    /// degradable value-correctness layer. It keeps the Phase-73 <see cref="EsIndexNames.StepLabelFieldPath"/>
-    /// (<c>attributes.StepLabel</c>) filter — the sample processor's own <c>received/produced</c> logs — so the
-    /// value chain reads <c>attributes.Produced</c> keyed by <c>StepLabel</c> INDEPENDENTLY of the stepId-keyed
-    /// structural completeness. When the sample logs no author values (a processor with zero author logs), this
-    /// query returns nothing ⇒ the value chain degrades to not-applicable (SMP-01), never FAIL. NO
-    /// <c>.keyword</c> (Pitfall 2). Size-bounded to 2000, sorted ascending on the window timestamp field.
-    /// </summary>
-    private static string BuildValueOracleSearchBody(DateTimeOffset windowStart, DateTimeOffset snapshot) => $$"""
-      {
-        "size": 2000,
-        "query": {
-          "bool": {
-            "filter": [
-              { "exists": { "field": "{{EsIndexNames.StepLabelFieldPath}}" } },
               { "exists": { "field": "{{EsIndexNames.ExecutionIdFieldPath}}" } },
               { "range": { "{{EsIndexNames.WindowTimestampFieldPath}}": {
                   "gte": "{{windowStart:o}}", "lte": "{{snapshot:o}}" } } }
@@ -483,7 +455,6 @@ public sealed class AnalyzerE2ETests
         public required IReadOnlyList<RunTrace> Traces { get; init; }
         public required IReadOnlyDictionary<string, double> TripDurationMsByExecution { get; init; } // keyed "corr|exec"
         public required IReadOnlyDictionary<string, double> TripDurationMsByCorrelation { get; init; } // keyed "corr"
-        public required IReadOnlyDictionary<string, int> SeedsByExecution { get; init; }               // keyed "corr|exec"
 
         // B-criterion (Plan 3): per-(corr,exec) first/last hop ES @timestamp, keyed "corr|exec" — the MIN and
         // MAX of the same trip-duration span. The engine uses these vs RECOVERY_UTC to classify a started-but-
@@ -520,16 +491,15 @@ public sealed class AnalyzerE2ETests
     /// "did-run" records, discriminated by the presence of <c>attributes.MessageId</c>). The co-located
     /// orchestrator terminal-reached records (<c>attributes.StepId</c> + <c>attributes.WorkflowId</c>, NO
     /// MessageId) are NOT counted as observed hops — they feed the ANL-03 orchestrator-redundancy proven set and
-    /// supply the convergent terminal stepId. D-09: a record with <c>ExecutionId == Guid.Empty</c> is an ENTRY
-    /// MARKER — counted as entry-ran, EXCLUDED from every <c>(corr, exec)</c> run (it belongs to neither
-    /// execution). The FW-02 <paramref name="dispatchHits"/> supply the ES-derived expected set (ANL-02) + the
-    /// inbound-EntryId redundancy edge (ANL-03). The SEPARATE value oracle (<paramref name="valueHits"/>, D-16)
-    /// fills each run's <c>attributes.Produced</c> value map keyed by <c>StepLabel</c> — absent ⇒ value chain
-    /// N/A (SMP-01). Trip-duration/first/last-hop spans come from the structural hits' <c>@timestamp</c>. Every
-    /// read is defensive (T-66-09 — odd-shaped JSON is dropped, never thrown).
+    /// supply the convergent terminal stepId. The FW-02 <paramref name="dispatchHits"/> supply the ES-derived
+    /// expected set (ANL-02) + the inbound-EntryId redundancy edge (ANL-03). (D-03/Phase 78: the concrete value
+    /// oracle is deleted — no <c>StepLabel</c>/<c>Produced</c> value axis is built; <c>RunTrace.FromStepIds</c>
+    /// defaults the value/label maps empty, so the value chain is permanently N/A.) Trip-duration/first/last-hop
+    /// spans come from the structural hits' <c>@timestamp</c>. Every read is defensive (T-66-09 — odd-shaped
+    /// JSON is dropped, never thrown).
     /// </summary>
     private static TraceCohort BuildRunTraces(
-        List<JsonElement> structuralHits, List<JsonElement> dispatchHits, List<JsonElement> valueHits,
+        List<JsonElement> structuralHits, List<JsonElement> dispatchHits,
         IReadOnlyDictionary<string, string> keeperOutcomeByExecution)
     {
         // ── STRUCTURAL: observed processor stepIds + terminal-reached redundancy, keyed (corr, exec) ──
@@ -626,29 +596,12 @@ public sealed class AnalyzerE2ETests
             }
         }
 
-        // ── VALUE ORACLE (D-16 / SMP-01): per-(corr,exec) StepLabel→Produced value map, SEPARATE from structural ──
-        var valuesByInstance = new Dictionary<(string Corr, string Exec), Dictionary<string, int>>();
-        foreach (var hit in valueHits)
-        {
-            if (!hit.TryGetProperty("_source", out var source)) continue;
-            if (!source.TryGetProperty("attributes", out var attrs)) continue;
-            if (!attrs.TryGetProperty("CorrelationId", out var corrEl) || corrEl.ValueKind != JsonValueKind.String) continue;
-            if (!attrs.TryGetProperty("ExecutionId", out var execEl) || execEl.ValueKind != JsonValueKind.String) continue;
-            if (!attrs.TryGetProperty("StepLabel", out var labelEl) || labelEl.ValueKind != JsonValueKind.String) continue;
-
-            var key = (corrEl.GetString()!, execEl.GetString()!);
-            _ = TryReadSum(attrs, out _);
-            if (TryReadProduced(attrs, out var produced))
-            {
-                (valuesByInstance.TryGetValue(key, out var vmap) ? vmap : valuesByInstance[key] = new(StringComparer.Ordinal))[labelEl.GetString()!] = produced;
-            }
-        }
-
-        // ── Build the per-instance RunTraces (structural stepIds + optional value-oracle axis) ──
+        // ── Build the per-instance RunTraces (structural stepIds only) ──
+        // D-03/Phase 78: the value-oracle axis is deleted — no StepLabel→Produced value map is built. Each
+        // RunTrace carries only its structural stepIds; RunTrace.FromStepIds defaults its value/label maps
+        // empty, so the value chain is permanently not-applicable.
         var traces = stepIdsByInstance.Select(kv =>
         {
-            var values = valuesByInstance.TryGetValue(kv.Key, out var v) ? v : null;
-            var labels = values is null ? null : values.Keys.ToList();
             // Convergent fan-in terminal = the unique NextStepId dispatched-to more than once for this
             // (corr,exec) (the ×2 per-arrival fan-in target, e.g. Step_G reached from both Step_F1 and Step_F2).
             // This equals the processor's per-arrival ×2 stepId, so RunTrace.FromStepIds exempts exactly that
@@ -659,7 +612,7 @@ public sealed class AnalyzerE2ETests
                 var fanIn = targetCounts.Where(t => t.Value > 1).Select(t => t.Key).ToList();
                 convergent = fanIn.Count == 1 ? fanIn[0] : null;
             }
-            return RunTrace.FromStepIds(kv.Key.Corr, kv.Key.Exec, kv.Value, values, labels, convergent);
+            return RunTrace.FromStepIds(kv.Key.Corr, kv.Key.Exec, kv.Value, convergentStepId: convergent);
         }).ToList();
 
         var tripByExec = spanByInstance.ToDictionary(
@@ -671,23 +624,11 @@ public sealed class AnalyzerE2ETests
         var lastHopByExec = spanByInstance.ToDictionary(
             kv => $"{kv.Key.Corr}|{kv.Key.Exec}", kv => kv.Value.Max, StringComparer.Ordinal);
 
-        // Value-oracle seed map (D-16): seed = Produced[Step_B] - 1. A run that surfaced no Step_B value has no
-        // seed entry → the value chain degrades to not-applicable for it (SMP-01), never FAIL.
-        var seedsByExec = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var (key, values) in valuesByInstance)
-        {
-            if (values.TryGetValue("Step_B", out var b))
-            {
-                seedsByExec[$"{key.Corr}|{key.Exec}"] = b - 1;
-            }
-        }
-
         return new TraceCohort
         {
             Traces = traces,
             TripDurationMsByExecution = tripByExec,
             TripDurationMsByCorrelation = tripByCorr,
-            SeedsByExecution = seedsByExec,
             FirstHopUtcByExecution = firstHopByExec,
             LastHopUtcByExecution = lastHopByExec,
             KeeperOutcomeByExecution = keeperOutcomeByExecution,
@@ -696,42 +637,6 @@ public sealed class AnalyzerE2ETests
             OrchestratorConsumedStepIdsByExecution = proven.ToDictionary(
                 kv => kv.Key, kv => (IReadOnlySet<string>)kv.Value, StringComparer.Ordinal),
         };
-    }
-
-    /// <summary>
-    /// Defensive <c>attributes.Sum</c> read (A1): the field surfaces numeric (<c>long</c>) once Step_*
-    /// docs land, but the Wave-0 probe found it unmapped, so read it tolerantly — <c>TryGetInt32</c>
-    /// then <c>GetString</c>+parse — and never throw (Sum is informational, not a gate).
-    /// </summary>
-    private static bool TryReadSum(JsonElement attrs, out int sum)
-    {
-        sum = 0;
-        if (!attrs.TryGetProperty("Sum", out var sumEl)) return false;
-        if (sumEl.ValueKind == JsonValueKind.Number && sumEl.TryGetInt32(out sum)) return true;
-        if (sumEl.ValueKind == JsonValueKind.String
-            && int.TryParse(sumEl.GetString(), out sum)) return true;
-        return false;
-    }
-
-    /// <summary>
-    /// Defensive <c>attributes.Produced</c> read (73, D-11; T-73-07) — mirrors <see cref="TryReadSum"/>
-    /// verbatim. <c>Produced</c> is the per-step ACCUMULATED output value the Mode-1 processor surfaces
-    /// (<c>"{StepLabel} received {Received} produced {Produced}"</c> → ES <c>attributes.Produced</c>, the
-    /// 73-01 contract). It is the value AT that label: for the convergent <c>Step_G</c> the
-    /// <c>completed-terminal</c> log carries <c>seed+6</c> (106 for exec_a/seed 100, 206 for exec_b/seed
-    /// 200) — this ES-log terminal value IS the LIVE terminal-anchor proxy (D-11). The fixture is
-    /// ES-READ-ONLY: it does NOT read the Redis <c>skp:out:</c> blob (that durable-blob proof is owned by the
-    /// hermetic harness, Plan 02). Read tolerantly — <c>TryGetInt32</c> then <c>GetString</c>+parse — and
-    /// never throw on an odd-shaped or missing attribute (T-73-07: dropped, not fatal).
-    /// </summary>
-    private static bool TryReadProduced(JsonElement attrs, out int produced)
-    {
-        produced = 0;
-        if (!attrs.TryGetProperty("Produced", out var producedEl)) return false;
-        if (producedEl.ValueKind == JsonValueKind.Number && producedEl.TryGetInt32(out produced)) return true;
-        if (producedEl.ValueKind == JsonValueKind.String
-            && int.TryParse(producedEl.GetString(), out produced)) return true;
-        return false;
     }
 
     /// <summary>
