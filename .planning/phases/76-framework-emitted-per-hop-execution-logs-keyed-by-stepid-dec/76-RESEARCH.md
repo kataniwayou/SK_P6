@@ -372,18 +372,15 @@ catch { }
 | A3 | Emitting `ExecutionId = Guid.Empty` as an explicit placeholder yields `attributes.ExecutionId` = all-zeros string in ES (not omitted) | §5 / D-09 | MEDIUM — scope omits empty GUIDs (`ExecutionLogScope.cs:31`), but explicit template args are not subject to that skip; confirm in the ANL-01 live probe |
 | A4 | The harness can read `Verdict == Inconclusive` from the JSON artifact and exit 2 | §7 | LOW — artifact is written before the assert (`AnalyzerE2ETests.cs:245-246`); mechanism exists |
 
-## Open Questions
+## Open Questions (RESOLVED 2026-07-16)
 
-1. **Which FW-02 outbound-MessageId option (A/B/C)?**
+1. **Which FW-02 outbound-MessageId option (A/B/C)?** — **RESOLVED → Option C** (user-confirmed 2026-07-16; recorded in CONTEXT.md D-11 "⚠ RESOLVED" tag + SPEC.md FW-02 "⚠ AMENDED"). The fan-out edge record carries five fields `(CorrelationId, ExecutionId, WorkflowId, inbound EntryId, next StepId)` — outbound MessageId omitted; Phase-72 D-11's "no override" stays intact.
    - Known: inbound `EntryId` (M_N) + next `StepId` are in hand at the Pre loop; outbound M_{N+1} is not.
-   - Unclear: whether the SPEC's 6th fan-out field (outbound MessageId) is worth reopening Phase-72 D-11 (Option A) or a `NextStepHandoff` field (Option B).
-   - Recommendation: default to **Option C** (drop the forward link, keep ANL-02/03 fully satisfied) unless the discuss step wants the full forward chain, then **Option A**.
 
-2. **Does `OutputTail` return the resolved outcome (Design Point B)?**
+2. **Does `OutputTail` return the resolved outcome (Design Point B)?** — **RESOLVED → Yes** (user-confirmed 2026-07-16; recorded in CONTEXT.md D-18). `OutputTail.RunAsync` changes from `bool` to a shape carrying the resolved `StepOutcome`; both callers (`ProcessorPipeline.cs:163` + `PostProcessConsumer`) update, so the pipeline logs the true terminal outcome.
    - Known: output-schema downgrade happens inside `OutputTail.cs:57-59`.
-   - Recommendation: small return-shape change (`bool` → a `(bool proceed, StepOutcome resolved)` or an `out`) so the pipeline logs the true terminal outcome; else document the pre-validation-outcome caveat.
 
-3. **`RunTrace` structural model shape** — add a `DistinctStepIds` set, or a parallel `FrameworkRecord` model? (Claude's discretion under D-15, but affects fact ergonomics.)
+3. **`RunTrace` structural model shape** — add a `DistinctStepIds` set, or a parallel `FrameworkRecord` model? **Left to Claude's Discretion under D-15** (affects fact ergonomics, not correctness); the planner decides at implementation time.
 
 ## Environment Availability
 
