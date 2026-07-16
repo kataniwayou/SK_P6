@@ -107,6 +107,48 @@ public static class EsIndexNames
     public const string ExecutionIdFieldPath = "attributes.ExecutionId";
 
     /// <summary>
+    /// The OTLP field path for the framework per-hop execution record's <c>StepId</c> attribute (Phase 76 /
+    /// FW-01, D-17), expressed as a dot-separated path suitable for ES <c>exists</c>/<c>term</c> queries. The
+    /// framework emits ONE record per hop at completion (76-01, <c>ProcessorPipeline.LogHopExecuted</c>)
+    /// carrying <c>attributes.StepId</c> + the outcome (placeholder form, no payload — D-10). Grouping by
+    /// <see cref="CorrelationIdFieldPath"/> + <see cref="ExecutionIdFieldPath"/> and collecting the distinct
+    /// <c>StepId</c>s reconstructs each run's STRUCTURAL completeness set (ANL-01) — the single stepId-keyed
+    /// source of truth that replaces the deleted <c>StepLabel</c>-keyed completeness (D-15). The value oracle
+    /// keeps <see cref="StepLabelFieldPath"/>/<c>Received</c>/<c>Produced</c> as a SEPARATE degradable layer
+    /// (D-16).
+    ///
+    /// <para>
+    /// <b>DIRECT path — NO <c>.keyword</c> sub-field.</b> Same rationale pinned on
+    /// <see cref="CorrelationIdFieldPath"/>/<see cref="ExecutionIdFieldPath"/>: the OTel-managed
+    /// <c>logs-generic.otel-default</c> data stream's x-pack ECS index template maps every string attribute
+    /// DIRECTLY to <c>keyword</c> (no <c>fields.keyword</c> sub-field), so <c>attributes.StepId.keyword</c>
+    /// returns ZERO hits — the trap that broke 4 log-readback facts at Phase 11 UAT (commit 9370e89, reverted).
+    /// Always query <c>attributes.StepId</c> directly.
+    /// </para>
+    /// </summary>
+    public const string StepIdFieldPath = "attributes.StepId";
+
+    /// <summary>
+    /// The OTLP field path for the orchestrator FW-02 fan-out edge record's <c>NextStepId</c> attribute
+    /// (Phase 76 / FW-02, D-11/D-17), expressed as a dot-separated path suitable for ES
+    /// <c>exists</c>/<c>term</c> queries. The orchestrator Pre-pipeline emits ONE record per fan-out EDGE
+    /// (76-02, <c>OrchestratorPrePipeline</c>) carrying <c>(CorrelationId, ExecutionId, WorkflowId, inbound
+    /// EntryId, NextStepId)</c> — no outbound MessageId (D-11 Option C). The set of <c>NextStepId</c>s per
+    /// <c>(corr, exec)</c> is the ES-derived EXPECTED set (ANL-02): a stepId dispatched but never executed
+    /// (absent from the <see cref="StepIdFieldPath"/> processor records) is a binding miss. The inbound
+    /// <c>EntryId</c> (= M_N) is the framework-redundancy evidence (ANL-03): it proves hop N produced its
+    /// output and therefore ran, reconciling a dropped processor record as a non-binding telemetry gap with
+    /// NO seed oracle.
+    ///
+    /// <para>
+    /// <b>DIRECT path — NO <c>.keyword</c> sub-field</b>, identical rationale to
+    /// <see cref="StepIdFieldPath"/>: <c>attributes.NextStepId.keyword</c> returns ZERO hits. Query
+    /// <c>attributes.NextStepId</c> directly.
+    /// </para>
+    /// </summary>
+    public const string NextStepIdFieldPath = "attributes.NextStepId";
+
+    /// <summary>
     /// The OTLP field path for the keeper REINJECT outcome discriminator attribute (Phase 75 / D75-4),
     /// expressed as a dot-separated path suitable for ES <c>exists</c>/<c>term</c> queries. Plan 02 widened
     /// the keeper <see cref="Keeper.Recovery.ReinjectConsumer"/> drop log and added a symmetric reinject-success

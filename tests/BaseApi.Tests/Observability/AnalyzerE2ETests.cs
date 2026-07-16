@@ -181,7 +181,16 @@ public sealed class AnalyzerE2ETests
             BuildKeeperOutcomeSearchBody(windowStartUtc, snapshotUtc), ct: ct);
         var keeperOutcomeByExecution = BuildKeeperOutcomeMap(keeperHits);
 
-        var cohort = BuildRunTraces(stepHits, keeperOutcomeByExecution);
+        // Phase 76 ANL-02/ANL-03: the FW-02 orchestrator dispatch records (attributes.NextStepId) supply the
+        // ES-derived expected set + the redundancy edge; the SEPARATE value-oracle query (attributes.StepLabel)
+        // fills the D-16 value chain. Both ride the same OTLP pipeline as the structural StepId records, so the
+        // DrainMs + poll-to-stable above already tolerated the ~60 s export skew — no new drain needed.
+        var dispatchHits = await es.SearchAllHits(
+            BuildDispatchSearchBody(windowStartUtc, snapshotUtc), ct: ct);
+        var valueHits = await es.SearchAllHits(
+            BuildValueOracleSearchBody(windowStartUtc, snapshotUtc), ct: ct);
+
+        var cohort = BuildRunTraces(stepHits, dispatchHits, valueHits, keeperOutcomeByExecution);
         var traces = cohort.Traces;
 
         // ── 5. PROM SNAPSHOTS + WINDOWED DELTAS (OBS-03) ─────────────────────────────────────────────
@@ -253,12 +262,69 @@ public sealed class AnalyzerE2ETests
     // ── ES → RunTrace grouping (OBS-01) ──────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Build the window-bounded <c>Step_*</c>-family <c>_search</c> body: a STATIC raw-string template
-    /// (T-66-08) with only the Wave-0-verified field paths (from <see cref="EsIndexNames"/> consts — NEVER
-    /// a <c>.keyword</c> sub-field) and the validated window timestamps interpolated. Size-bounded to 2000
-    /// (~10 runs × 9 steps ≪ 2000), sorted ascending on the window timestamp field.
+    /// Build the window-bounded STRUCTURAL <c>_search</c> body (Phase 76, ANL-01/D-15): a STATIC raw-string
+    /// template (T-66-08) filtering on the framework per-hop record's <see cref="EsIndexNames.StepIdFieldPath"/>
+    /// (<c>attributes.StepId</c>) — the single stepId-keyed source of structural completeness that REPLACES the
+    /// deleted <c>StepLabel</c> set-comparison. NO <c>Step_*</c> literal, NO <c>.keyword</c> sub-field (Pitfall
+    /// 2). The query also returns the orchestrator terminal-reached records (they carry <c>attributes.StepId</c>
+    /// too); <see cref="BuildRunTraces"/> discriminates the processor "did-run" record (has
+    /// <c>attributes.MessageId</c>) from the terminal-reached redundancy record (has <c>attributes.WorkflowId</c>,
+    /// no MessageId). Size-bounded to 2000, sorted ascending on the window timestamp field.
     /// </summary>
     private static string BuildStepSearchBody(DateTimeOffset windowStart, DateTimeOffset snapshot) => $$"""
+      {
+        "size": 2000,
+        "query": {
+          "bool": {
+            "filter": [
+              { "exists": { "field": "{{EsIndexNames.StepIdFieldPath}}" } },
+              { "exists": { "field": "{{EsIndexNames.ExecutionIdFieldPath}}" } },
+              { "range": { "{{EsIndexNames.WindowTimestampFieldPath}}": {
+                  "gte": "{{windowStart:o}}", "lte": "{{snapshot:o}}" } } }
+            ]
+          }
+        },
+        "sort": [ { "{{EsIndexNames.WindowTimestampFieldPath}}": "asc" } ]
+      }
+      """;
+
+    /// <summary>
+    /// Build the window-bounded FW-02 DISPATCH <c>_search</c> body (Phase 76, ANL-02/ANL-03): a STATIC
+    /// raw-string template filtering on the orchestrator fan-out edge record's
+    /// <see cref="EsIndexNames.NextStepIdFieldPath"/> (<c>attributes.NextStepId</c>) PLUS
+    /// <c>exists attributes.ExecutionId</c> — the latter excludes the "Dangling next-step id" diagnostic log
+    /// (which carries <c>{NextStepId}</c> but no <c>{ExecutionId}</c>/<c>{CorrelationId}</c>). The set of
+    /// <c>NextStepId</c>s per <c>(corr, exec)</c> is the ES-derived EXPECTED set (ANL-02); each record's inbound
+    /// <c>attributes.EntryId</c> (= M_N) is the ANL-03 framework-redundancy evidence. NO <c>.keyword</c>
+    /// (Pitfall 2). Size-bounded to 2000, sorted ascending on the window timestamp field.
+    /// </summary>
+    private static string BuildDispatchSearchBody(DateTimeOffset windowStart, DateTimeOffset snapshot) => $$"""
+      {
+        "size": 2000,
+        "query": {
+          "bool": {
+            "filter": [
+              { "exists": { "field": "{{EsIndexNames.NextStepIdFieldPath}}" } },
+              { "exists": { "field": "{{EsIndexNames.ExecutionIdFieldPath}}" } },
+              { "range": { "{{EsIndexNames.WindowTimestampFieldPath}}": {
+                  "gte": "{{windowStart:o}}", "lte": "{{snapshot:o}}" } } }
+            ]
+          }
+        },
+        "sort": [ { "{{EsIndexNames.WindowTimestampFieldPath}}": "asc" } ]
+      }
+      """;
+
+    /// <summary>
+    /// Build the window-bounded VALUE-ORACLE <c>_search</c> body (Phase 76, D-16 / SMP-01): the SEPARATE,
+    /// degradable value-correctness layer. It keeps the Phase-73 <see cref="EsIndexNames.StepLabelFieldPath"/>
+    /// (<c>attributes.StepLabel</c>) filter — the sample processor's own <c>received/produced</c> logs — so the
+    /// value chain reads <c>attributes.Produced</c> keyed by <c>StepLabel</c> INDEPENDENTLY of the stepId-keyed
+    /// structural completeness. When the sample logs no author values (a processor with zero author logs), this
+    /// query returns nothing ⇒ the value chain degrades to not-applicable (SMP-01), never FAIL. NO
+    /// <c>.keyword</c> (Pitfall 2). Size-bounded to 2000, sorted ascending on the window timestamp field.
+    /// </summary>
+    private static string BuildValueOracleSearchBody(DateTimeOffset windowStart, DateTimeOffset snapshot) => $$"""
       {
         "size": 2000,
         "query": {
@@ -422,120 +488,167 @@ public sealed class AnalyzerE2ETests
         // absent DROP is tolerated (provably-unrecoverable) and a recoverable-but-lost execution is a
         // binding FAIL. "reinject" wins any tie (see BuildKeeperOutcomeMap).
         public required IReadOnlyDictionary<string, string> KeeperOutcomeByExecution { get; init; } // keyed "corr|exec"
+
+        // Phase 76 ANL-02: the ES-derived EXPECTED stepId set per (corr,exec), keyed "corr|exec" — the set of
+        // orchestrator FW-02 fan-out NextStepIds dispatched for the execution. A dispatched stepId absent from
+        // the observed processor records (DistinctStepIds) is a binding miss (dispatched-but-never-executed,
+        // TEST-08). Derived from ES FW-02 records ONLY — no Postgres/graph read (T-76-07).
+        public required IReadOnlyDictionary<string, IReadOnlySet<string>> ExpectedStepIdsByExecution { get; init; }
+
+        // Phase 76 ANL-03: the stepIds proven-to-have-run by orchestrator redundancy per (corr,exec), keyed
+        // "corr|exec" — a missing processor record is reconciled as a NON-binding telemetry gap (no seed oracle)
+        // when the hop is in this set. Populated from the terminal-reached records (which name the terminal
+        // StepId directly) plus the fan-out records whose inbound EntryId (M_N) resolves to a producer stepId via
+        // the present processor records' MessageId→StepId map. Derived from ES framework records ONLY.
+        public required IReadOnlyDictionary<string, IReadOnlySet<string>> OrchestratorConsumedStepIdsByExecution { get; init; }
     }
 
     /// <summary>
-    /// Group raw ES hits by the <c>(_source.attributes.CorrelationId, _source.attributes.ExecutionId)</c>
-    /// composite into per-INSTANCE <see cref="RunTrace"/>s (each spawned execution is its own run),
-    /// collecting the <c>attributes.StepLabel</c> list (duplicates RETAINED so the engine's fail-closed
-    /// duplicate signal fires WITHIN an instance) AND the per-label <c>attributes.Produced</c> value (73,
-    /// D-11 — threaded into the extended <see cref="RunTrace.FromLabels"/>; the convergent <c>Step_G</c>
-    /// terminal value is the LIVE terminal-anchor proxy at <c>seed+6</c>, NO Redis <c>skp:out:</c> read).
-    /// Also computes per-<c>(corr,exec)</c> + per-<c>corr</c> trip duration (ms) from the <c>@timestamp</c>
-    /// min→max span over the SAME hits (73, D-12 — no new ES query). Hits missing any of the three
-    /// attributes are skipped defensively (T-66-09 / T-73-07 — odd-shaped JSON is dropped, never thrown).
+    /// Re-keyed onto the framework <c>attributes.StepId</c> records (Phase 76, ANL-01/D-15). Groups the
+    /// STRUCTURAL hits by the <c>(CorrelationId, ExecutionId)</c> composite into per-INSTANCE
+    /// <see cref="RunTrace"/>s whose completeness set is <see cref="RunTrace.DistinctStepIds"/> (the processor
+    /// "did-run" records, discriminated by the presence of <c>attributes.MessageId</c>). The co-located
+    /// orchestrator terminal-reached records (<c>attributes.StepId</c> + <c>attributes.WorkflowId</c>, NO
+    /// MessageId) are NOT counted as observed hops — they feed the ANL-03 orchestrator-redundancy proven set and
+    /// supply the convergent terminal stepId. D-09: a record with <c>ExecutionId == Guid.Empty</c> is an ENTRY
+    /// MARKER — counted as entry-ran, EXCLUDED from every <c>(corr, exec)</c> run (it belongs to neither
+    /// execution). The FW-02 <paramref name="dispatchHits"/> supply the ES-derived expected set (ANL-02) + the
+    /// inbound-EntryId redundancy edge (ANL-03). The SEPARATE value oracle (<paramref name="valueHits"/>, D-16)
+    /// fills each run's <c>attributes.Produced</c> value map keyed by <c>StepLabel</c> — absent ⇒ value chain
+    /// N/A (SMP-01). Trip-duration/first/last-hop spans come from the structural hits' <c>@timestamp</c>. Every
+    /// read is defensive (T-66-09 — odd-shaped JSON is dropped, never thrown).
     /// </summary>
     private static TraceCohort BuildRunTraces(
-        List<JsonElement> hits, IReadOnlyDictionary<string, string> keeperOutcomeByExecution)
+        List<JsonElement> structuralHits, List<JsonElement> dispatchHits, List<JsonElement> valueHits,
+        IReadOnlyDictionary<string, string> keeperOutcomeByExecution)
     {
-        // Keyed by the (correlationId, executionId) value-tuple — one RunTrace per execution instance.
-        var byInstance = new Dictionary<(string Corr, string Exec), List<string>>();
-        // Per-instance label→Produced value map (73, D-11). Step_G's two arrivals carry the same terminal
-        // value, so a last-write of the shared seed+6 is correct (both equal).
-        var valuesByInstance = new Dictionary<(string Corr, string Exec), Dictionary<string, int>>();
-        // Per-instance and per-correlation @timestamp spans (73, D-12). Hits are sorted asc on @timestamp,
-        // but min/max-tracking is order-independent and tolerant of any out-of-band hit.
+        // ── STRUCTURAL: observed processor stepIds + terminal-reached redundancy, keyed (corr, exec) ──
+        var stepIdsByInstance = new Dictionary<(string Corr, string Exec), List<string>>();
         var spanByInstance = new Dictionary<(string Corr, string Exec), (DateTimeOffset Min, DateTimeOffset Max)>();
         var spanByCorrelation = new Dictionary<string, (DateTimeOffset Min, DateTimeOffset Max)>();
+        // MessageId (M_N) → producer StepId, from PRESENT processor records — the ANL-03 EntryId→stepId resolver.
+        var stepIdByMessageId = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Orchestrator-proven "did run" stepIds per (corr,exec): terminal-reached records name the StepId directly.
+        var proven = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        // The convergent terminal stepId(s) per (corr,exec) — from terminal-reached records (Step_G fans in ×2).
+        var terminalStepIds = new Dictionary<(string Corr, string Exec), HashSet<string>>();
+        var entryMarkerCorrelations = new HashSet<string>(StringComparer.Ordinal);
 
-        foreach (var hit in hits)
+        foreach (var hit in structuralHits)
         {
             if (!hit.TryGetProperty("_source", out var source)) continue;
             if (!source.TryGetProperty("attributes", out var attrs)) continue;
-
-            if (!attrs.TryGetProperty("CorrelationId", out var corrEl)
-                || corrEl.ValueKind != JsonValueKind.String) continue;
-            if (!attrs.TryGetProperty("ExecutionId", out var execEl)
-                || execEl.ValueKind != JsonValueKind.String) continue;
-            if (!attrs.TryGetProperty("StepLabel", out var labelEl)
-                || labelEl.ValueKind != JsonValueKind.String) continue;
+            if (!attrs.TryGetProperty("CorrelationId", out var corrEl) || corrEl.ValueKind != JsonValueKind.String) continue;
+            if (!attrs.TryGetProperty("ExecutionId", out var execEl) || execEl.ValueKind != JsonValueKind.String) continue;
+            if (!attrs.TryGetProperty("StepId", out var stepEl) || stepEl.ValueKind != JsonValueKind.String) continue;
 
             var correlationId = corrEl.GetString()!;
             var executionId = execEl.GetString()!;
-            var label = labelEl.GetString()!;
+            var stepId = stepEl.GetString()!;
+
+            // Discriminate the two co-located StepId shapes: the processor per-hop "did-run" record carries
+            // attributes.MessageId; the orchestrator terminal-reached record carries attributes.WorkflowId (no
+            // MessageId). Only the former is an OBSERVED hop; the latter is orchestrator redundancy evidence.
+            var hasMessageId = attrs.TryGetProperty("MessageId", out var msgEl) && msgEl.ValueKind == JsonValueKind.String;
+
+            if (!hasMessageId)
+            {
+                // Terminal-reached record (D-12): the named StepId provably reached/ran → ANL-03 redundancy.
+                if (!IsEntryMarkerExecution(executionId))
+                {
+                    var pkey = $"{correlationId}|{executionId}";
+                    (proven.TryGetValue(pkey, out var pset) ? pset : proven[pkey] = new(StringComparer.Ordinal)).Add(stepId);
+                    var tkey = (correlationId, executionId);
+                    (terminalStepIds.TryGetValue(tkey, out var tset) ? tset : terminalStepIds[tkey] = new(StringComparer.Ordinal)).Add(stepId);
+                }
+                continue;
+            }
+
+            // D-09: the Mode-2 entry marker (ExecutionId == all-zeros) is counted as entry-ran but excluded from
+            // any (corr,exec) run's expected/complete set.
+            if (IsEntryMarkerExecution(executionId))
+            {
+                entryMarkerCorrelations.Add(correlationId);
+                continue;
+            }
 
             var key = (correlationId, executionId);
-            if (!byInstance.TryGetValue(key, out var labels))
-            {
-                labels = new List<string>();
-                byInstance[key] = labels;
-                valuesByInstance[key] = new Dictionary<string, int>(StringComparer.Ordinal);
-            }
-            labels.Add(label);
+            (stepIdsByInstance.TryGetValue(key, out var steps) ? steps : stepIdsByInstance[key] = new()).Add(stepId);
+            stepIdByMessageId[msgEl.GetString()!] = stepId;
 
-            // Read Sum defensively (A1) — informational only, never a completeness gate; not thrown on.
-            // Retained as the documented tolerant-numeric-attribute template TryReadProduced mirrors.
-            _ = TryReadSum(attrs, out _);
-
-            // Read the per-step surfaced value defensively (73, D-11) — attributes.Produced (73-01 contract).
-            // Drop-on-odd-shape (T-73-07): a missing/odd Produced just omits that label from the value map,
-            // never throws. The engine skips a run with an empty value map (legacy behaviour) and value-chain-
-            // checks any run that surfaced ≥1 value.
-            if (TryReadProduced(attrs, out var produced))
-            {
-                valuesByInstance[key][label] = produced;
-            }
-
-            // Trip-duration span (73, D-12): track @timestamp min→max per instance AND per correlationId,
-            // reusing the SAME hits (no new ES query). Defensive: an unparseable @timestamp is skipped.
             if (TryReadTimestamp(source, out var ts))
             {
                 spanByInstance[key] = spanByInstance.TryGetValue(key, out var s)
-                    ? (s.Min < ts ? s.Min : ts, s.Max > ts ? s.Max : ts)
-                    : (ts, ts);
+                    ? (s.Min < ts ? s.Min : ts, s.Max > ts ? s.Max : ts) : (ts, ts);
                 spanByCorrelation[correlationId] = spanByCorrelation.TryGetValue(correlationId, out var c)
-                    ? (c.Min < ts ? c.Min : ts, c.Max > ts ? c.Max : ts)
-                    : (ts, ts);
+                    ? (c.Min < ts ? c.Min : ts, c.Max > ts ? c.Max : ts) : (ts, ts);
             }
         }
 
-        var traces = byInstance
-            .Select(kv => RunTrace.FromLabels(
-                kv.Key.Corr, kv.Key.Exec, kv.Value, valuesByInstance[kv.Key]))
-            .ToList();
+        // ── FW-02 DISPATCH: expected set (NextStepId) + orchestrator-redundancy edge (inbound EntryId → stepId) ──
+        var expectedByExec = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        foreach (var hit in dispatchHits)
+        {
+            if (!hit.TryGetProperty("_source", out var source)) continue;
+            if (!source.TryGetProperty("attributes", out var attrs)) continue;
+            if (!attrs.TryGetProperty("CorrelationId", out var corrEl) || corrEl.ValueKind != JsonValueKind.String) continue;
+            if (!attrs.TryGetProperty("ExecutionId", out var execEl) || execEl.ValueKind != JsonValueKind.String) continue;
+            if (!attrs.TryGetProperty("NextStepId", out var nextEl) || nextEl.ValueKind != JsonValueKind.String) continue;
+            if (IsEntryMarkerExecution(execEl.GetString()!)) continue;
 
-        // Materialize the trip-duration maps (ms) from the min→max spans (73, D-12).
+            var key = $"{corrEl.GetString()!}|{execEl.GetString()!}";
+            // ANL-02: the dispatched next step is EXPECTED to run.
+            (expectedByExec.TryGetValue(key, out var eset) ? eset : expectedByExec[key] = new(StringComparer.Ordinal)).Add(nextEl.GetString()!);
+
+            // ANL-03: the inbound EntryId (M_N) proves the PRODUCER hop ran. Resolve M_N → producer stepId via
+            // the present processor records' MessageId→StepId map (best-effort — a fully-dropped producer whose
+            // MessageId never surfaced cannot be resolved here; that hop stays a binding miss, which is correct).
+            if (attrs.TryGetProperty("EntryId", out var entryEl) && entryEl.ValueKind == JsonValueKind.String
+                && stepIdByMessageId.TryGetValue(entryEl.GetString()!, out var producerStep))
+            {
+                (proven.TryGetValue(key, out var pset) ? pset : proven[key] = new(StringComparer.Ordinal)).Add(producerStep);
+            }
+        }
+
+        // ── VALUE ORACLE (D-16 / SMP-01): per-(corr,exec) StepLabel→Produced value map, SEPARATE from structural ──
+        var valuesByInstance = new Dictionary<(string Corr, string Exec), Dictionary<string, int>>();
+        foreach (var hit in valueHits)
+        {
+            if (!hit.TryGetProperty("_source", out var source)) continue;
+            if (!source.TryGetProperty("attributes", out var attrs)) continue;
+            if (!attrs.TryGetProperty("CorrelationId", out var corrEl) || corrEl.ValueKind != JsonValueKind.String) continue;
+            if (!attrs.TryGetProperty("ExecutionId", out var execEl) || execEl.ValueKind != JsonValueKind.String) continue;
+            if (!attrs.TryGetProperty("StepLabel", out var labelEl) || labelEl.ValueKind != JsonValueKind.String) continue;
+            if (IsEntryMarkerExecution(execEl.GetString()!)) continue;
+
+            var key = (corrEl.GetString()!, execEl.GetString()!);
+            _ = TryReadSum(attrs, out _);
+            if (TryReadProduced(attrs, out var produced))
+            {
+                (valuesByInstance.TryGetValue(key, out var vmap) ? vmap : valuesByInstance[key] = new(StringComparer.Ordinal))[labelEl.GetString()!] = produced;
+            }
+        }
+
+        // ── Build the per-instance RunTraces (structural stepIds + optional value-oracle axis) ──
+        var traces = stepIdsByInstance.Select(kv =>
+        {
+            var values = valuesByInstance.TryGetValue(kv.Key, out var v) ? v : null;
+            var labels = values is null ? null : values.Keys.ToList();
+            var convergent = terminalStepIds.TryGetValue(kv.Key, out var tset) && tset.Count == 1 ? tset.First() : null;
+            return RunTrace.FromStepIds(kv.Key.Corr, kv.Key.Exec, kv.Value, values, labels, convergent);
+        }).ToList();
+
         var tripByExec = spanByInstance.ToDictionary(
-            kv => $"{kv.Key.Corr}|{kv.Key.Exec}",
-            kv => (kv.Value.Max - kv.Value.Min).TotalMilliseconds,
-            StringComparer.Ordinal);
+            kv => $"{kv.Key.Corr}|{kv.Key.Exec}", kv => (kv.Value.Max - kv.Value.Min).TotalMilliseconds, StringComparer.Ordinal);
         var tripByCorr = spanByCorrelation.ToDictionary(
-            kv => kv.Key,
-            kv => (kv.Value.Max - kv.Value.Min).TotalMilliseconds,
-            StringComparer.Ordinal);
-
-        // B-criterion (Plan 3): per-(corr,exec) first/last hop = the MIN/MAX of the same @timestamp span,
-        // keyed "corr|exec" — mirrors TripDurationMsByExecution's key shape. The engine compares last hop vs
-        // RECOVERY_UTC to classify a tolerated in-flight-at-wipe loss vs a binding post-recovery miss.
+            kv => kv.Key, kv => (kv.Value.Max - kv.Value.Min).TotalMilliseconds, StringComparer.Ordinal);
         var firstHopByExec = spanByInstance.ToDictionary(
             kv => $"{kv.Key.Corr}|{kv.Key.Exec}", kv => kv.Value.Min, StringComparer.Ordinal);
         var lastHopByExec = spanByInstance.ToDictionary(
             kv => $"{kv.Key.Corr}|{kv.Key.Exec}", kv => kv.Value.Max, StringComparer.Ordinal);
 
-        // Per-execution seed map (73, D-11): recover seed = Produced[Step_B] - 1 (the +1-per-hop chain).
-        //
-        // WR-01 — what this LIVE seed actually anchors. The seed here is DERIVED from the chain it then
-        // validates (Step_B - 1), NOT an independent absolute oracle. A live fixture-level absolute oracle
-        // (100→exec_a, 200→exec_b) is NOT cleanly feasible: the live executionId is a framework-generated GUID
-        // with no independent executionId→seed mapping available to this ES-read-only auditor (Mode-2 Step_A
-        // logs only "seeded the following numbers" with no Produced attribute, so Step_A never enters Values).
-        // Consequently the live value-chain check pins the inter-hop +1 DELTAS (B→C→…→G each +1, and the
-        // Step_G ×2 arrivals agreeing at the shared terminal) — it does NOT independently pin the ABSOLUTE base
-        // value. Step_B's own assertion is therefore a tautology (b == (b-1)+1), and a uniform constant shift of
-        // the whole chain would still pass the live gate. The ABSOLUTE-value proof (101..106 / 201..206 against
-        // the fixed 100/200 seeds) is owned by the hermetic harness (FanInHermeticHarnessFacts, Plan 02), which
-        // reads the durable L2 blob — not claimed here. The engine also recovers this internally when absent
-        // (ResolveSeed), so this is the explicit oracle — a run that never surfaced Step_B is simply omitted.
+        // Value-oracle seed map (D-16): seed = Produced[Step_B] - 1. A run that surfaced no Step_B value has no
+        // seed entry → the value chain degrades to not-applicable for it (SMP-01), never FAIL.
         var seedsByExec = new Dictionary<string, int>(StringComparer.Ordinal);
         foreach (var (key, values) in valuesByInstance)
         {
@@ -554,8 +667,17 @@ public sealed class AnalyzerE2ETests
             FirstHopUtcByExecution = firstHopByExec,
             LastHopUtcByExecution = lastHopByExec,
             KeeperOutcomeByExecution = keeperOutcomeByExecution,
+            ExpectedStepIdsByExecution = expectedByExec.ToDictionary(
+                kv => kv.Key, kv => (IReadOnlySet<string>)kv.Value, StringComparer.Ordinal),
+            OrchestratorConsumedStepIdsByExecution = proven.ToDictionary(
+                kv => kv.Key, kv => (IReadOnlySet<string>)kv.Value, StringComparer.Ordinal),
         };
     }
+
+    /// <summary>D-09: true iff the executionId is the all-zeros sentinel (the Mode-2 entry marker) — counted
+    /// as entry-ran but excluded from any spawned <c>(corr, exec)</c> run.</summary>
+    private static bool IsEntryMarkerExecution(string executionId)
+        => Guid.TryParse(executionId, out var g) && g == Guid.Empty;
 
     /// <summary>
     /// Defensive <c>attributes.Sum</c> read (A1): the field surfaces numeric (<c>long</c>) once Step_*

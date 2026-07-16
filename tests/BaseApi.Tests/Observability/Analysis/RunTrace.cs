@@ -72,8 +72,29 @@ public sealed record RunTrace
     /// </summary>
     public required IReadOnlyList<string> Labels { get; init; }
 
-    /// <summary>The distinct StepLabel set for this correlationId (Ordinal). Drives COMPLETE (OBS-01).</summary>
+    /// <summary>The distinct StepLabel set for this correlationId (Ordinal). VALUE-ORACLE axis only (D-16) — it
+    /// no longer drives structural completeness (that moved to <see cref="DistinctStepIds"/>, ANL-01/D-15).</summary>
     public required HashSet<string> DistinctLabels { get; init; }
+
+    /// <summary>
+    /// Every framework <c>attributes.StepId</c> that emitted a per-hop execution record for this
+    /// <c>(correlationId, executionId)</c> — duplicates RETAINED (the convergent terminal fans in twice, and a
+    /// same-entryId redelivery repeats). The STRUCTURAL evidence the re-keyed completeness / duplicate arithmetic
+    /// derives (Phase 76, ANL-01/D-15). Empty for a legacy value-oracle-only run built via
+    /// <see cref="FromLabels"/> that carried no framework record set (those runs fall back to the value-oracle
+    /// completeness shape — see <c>PassFailEngine</c>).
+    /// </summary>
+    public required IReadOnlyList<string> StepIds { get; init; }
+
+    /// <summary>
+    /// The distinct framework <c>StepId</c> set for this <c>(correlationId, executionId)</c> (Ordinal). Drives
+    /// STRUCTURAL COMPLETE (ANL-01, D-15): a run is complete when this set covers the ES-derived expected set
+    /// (from FW-02 dispatch records). This is the single stepId-keyed source of truth that replaces the deleted
+    /// <c>HopLabels</c> <c>StepLabel</c>-keyed set-comparison. For a legacy <see cref="FromLabels"/> run this is
+    /// populated from the distinct labels so the value-oracle facts keep computing completeness against the
+    /// KEPT <c>ExpectedHopOffset</c> hop set (no second structural constant is introduced — D-15).
+    /// </summary>
+    public required HashSet<string> DistinctStepIds { get; init; }
 
     /// <summary>
     /// True iff any StepLabel appears more than once for this correlationId
@@ -143,12 +164,76 @@ public sealed record RunTrace
             ExecutionId = executionId,
             Labels = labels,
             DistinctLabels = distinct,
+            // VALUE-ORACLE run: the structural stepId axis mirrors the distinct labels so the KEPT
+            // ExpectedHopOffset hop set (PassFailEngine) still gates completeness for the label-keyed
+            // value-oracle facts (D-16). A framework-record run uses FromStepIds instead (real StepIds).
+            StepIds = labels,
+            DistinctStepIds = new HashSet<string>(labels, StringComparer.Ordinal),
             // Legacy "any raw repeat" — retained for report-shape stability; NOT the binding signal anymore.
             HasAnyDuplicateLabel = labels.Count != distinct.Count,
             // BINDING convergent-aware signal (73, D-10).
             HasIllegitimateDuplicate = illegitimate.Count > 0,
             // Sort deterministically (Ordinal) so report diffs and any future snapshot comparisons
             // are stable across runs — HashSet enumeration order is unspecified. (IN-01 fix.)
+            DuplicateLabels = illegitimate.OrderBy(s => s, StringComparer.Ordinal).ToList(),
+            Values = values ?? new Dictionary<string, int>(StringComparer.Ordinal),
+        };
+    }
+
+    /// <summary>
+    /// Build a <see cref="RunTrace"/> from a <c>(correlationId, executionId)</c> instance + its raw
+    /// (duplicate-retaining) framework <c>StepId</c> list (Phase 76, ANL-01/D-15) — the STRUCTURAL half. Both
+    /// the live fixture (from <c>attributes.StepId</c> framework records) and the hermetic engine facts build
+    /// stepId-keyed traces identically through this factory, so the completeness / duplicate arithmetic is
+    /// proven once and shared. The optional value-oracle axis (<paramref name="labels"/> +
+    /// <paramref name="values"/>, D-16) is a SEPARATE degradable layer: absent ⇒ empty label/value maps ⇒ the
+    /// value chain degrades to not-applicable (SMP-01), never fails.
+    /// <para>
+    /// <paramref name="convergentStepId"/> mirrors <see cref="ConvergentLabel"/> for the stepId axis: the shared
+    /// per-arrival fan-in terminal stepId legitimately appears <see cref="ConvergentExpectedMultiplicity"/> times;
+    /// null ⇒ any repeated stepId is an illegitimate duplicate (fail-closed).
+    /// </para>
+    /// </summary>
+    public static RunTrace FromStepIds(string correlationId, string executionId,
+                                       IReadOnlyList<string> stepIds,
+                                       IReadOnlyDictionary<string, int>? values = null,
+                                       IReadOnlyList<string>? labels = null,
+                                       string? convergentStepId = null)
+    {
+        var distinctSteps = new HashSet<string>(stepIds, StringComparer.Ordinal);
+
+        // Count occurrences per stepId (Ordinal) so the convergent-multiplicity rule applies exactly.
+        var counts = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var s in stepIds)
+        {
+            counts[s] = counts.TryGetValue(s, out var c) ? c + 1 : 1;
+        }
+
+        var illegitimate = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var (s, count) in counts)
+        {
+            var isConvergent = convergentStepId is not null
+                && string.Equals(s, convergentStepId, StringComparison.Ordinal);
+            var bad = isConvergent ? count != ConvergentExpectedMultiplicity : count > 1;
+            if (bad)
+            {
+                illegitimate.Add(s);
+            }
+        }
+
+        var labelList = labels ?? Array.Empty<string>();
+
+        return new RunTrace
+        {
+            CorrelationId = correlationId,
+            ExecutionId = executionId,
+            StepIds = stepIds,
+            DistinctStepIds = distinctSteps,
+            // VALUE-ORACLE axis (D-16) — optional, separate from the structural stepId completeness above.
+            Labels = labelList,
+            DistinctLabels = new HashSet<string>(labelList, StringComparer.Ordinal),
+            HasAnyDuplicateLabel = stepIds.Count != distinctSteps.Count,
+            HasIllegitimateDuplicate = illegitimate.Count > 0,
             DuplicateLabels = illegitimate.OrderBy(s => s, StringComparer.Ordinal).ToList(),
             Values = values ?? new Dictionary<string, int>(StringComparer.Ordinal),
         };
