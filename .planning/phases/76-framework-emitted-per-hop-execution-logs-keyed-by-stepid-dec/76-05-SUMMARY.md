@@ -1,8 +1,8 @@
 ---
 phase: 76-framework-emitted-per-hop-execution-logs-keyed-by-stepid-dec
 plan: 05
-status: blocked
-verdict: live-gate-failed
+status: complete
+verdict: live-gate-passed
 requirements: [FW-01, FW-02, FW-03, FW-04, ANL-01, ANL-02, ANL-03, ANL-04, ANL-05, SMP-01]
 completed: 2026-07-16
 ---
@@ -11,54 +11,77 @@ completed: 2026-07-16
 
 ## Outcome
 
-**Task 1 (mandatory SourceHash reseed) — PASSED.** `POST /start` returned **204**, proving container hash == seeder host-build hash after a BaseProcessor.Core source edit.
+**PASSED (after a live-gate-surfaced regression was root-caused and fixed): 7/7 PASS.**
 
-**Task 2 (live 7-scenario sweep + classification) — the gate did NOT pass: 1/7 PASS.** The sweep surfaced a **regression introduced by this phase** (the stepId re-key of duplicate detection). Six of seven scenarios false-FAIL. This is the live acceptance gate doing exactly its job — catching a defect the hermetic facts could not.
+The mandatory SourceHash reseed proved currency (`POST /start` → 204), the first sweep
+surfaced a false-FAIL regression this phase introduced (1/7 PASS), the regression was
+root-caused against live Elasticsearch and fixed, and the re-run sweep is **7/7 PASS** on a
+real Docker stack. The live acceptance gate did exactly its job.
 
-## Task 1 — reseed to 204 (how currency was proven)
+## Task 1 — reseed to 204
 
-Editing `ProcessorPipeline.cs` (BaseProcessor.Core) changes `Processor.Sample`'s embedded SourceHash, AND the container bakes that hash at `docker build` time (Dockerfile runs `dotnet publish` in-image), so **both** host binaries and container images had to be rebuilt. Order executed:
+Editing `ProcessorPipeline.cs` (BaseProcessor.Core) changes `Processor.Sample`'s embedded
+SourceHash, AND the container bakes that hash at `docker build` time (Dockerfile runs
+`dotnet publish` in-image). Sequence:
 
-1. Host clean-rebuild BOTH configs — `rm -rf src/Processor.Sample/obj bin/Release` → `dotnet build SK_P.sln -c Release --no-incremental` → `-c Debug --no-incremental`. Both **0-warning, 0-error**.
-2. `docker compose build` — rebuilt `processor-sample`, `orchestrator`, `keeper` from new source (baseapi-service layer-cached: it carries no processor SourceHash).
-3. `phase-65-up.ps1` — 10 service types healthy, processor-sample replicas:2.
-4. `phase-65-reset.ps1` heal-wait **aborted** (expected: post-rebuild, the new hash has no processor row yet, so replicas can't resolve `procId` → no liveness key). FLUSHALL (STEP 1) had already run.
-5. Manual graph-DELETE (FK-safe, 6 tables) → seed (`FanOutSeeder_SeedsAndSelfVerifies`, host hash `0555d345…c71ce`, self-verify GET 200) → liveness reconverged (2 keys ~2s) → `docker compose restart orchestrator` → healthy.
-6. Activation: `POST /api/v1/orchestration/start` with body `["<v8-fanout-proof wfId>"]` → **204**. (A bare POST returns 415, not 422 — the endpoint requires the workflow-id JSON array body.)
+1. Host clean-rebuild BOTH configs (`--no-incremental`) — 0-warning.
+2. `docker compose build` — rebuilt processor-sample/orchestrator/keeper from new source.
+3. `phase-65-up.ps1` — 10 service types healthy.
+4. Post-rebuild the new hash has no processor row → `phase-65-reset.ps1` heal-wait aborts (expected). FLUSHALL had run; did manual graph-DELETE → seed (`FanOutSeeder`, host hash `0555d345…`) → liveness (2 keys) → restart orchestrator.
+5. Activation `POST /start` with body `["<v8-fanout-proof wfId>"]` → **204** (a bare POST returns 415).
 
-## Task 2 — sweep roll-up (CAPSTONE: 1/7 PASS)
+(Note: `phase-67-harness.ps1` STEP A0 rebuilds images itself per run, so the sweep self-manages SourceHash currency — the manual reseed above was the pre-sweep gate.)
 
-| Scenario | Verdict | Missing | started==complete | effectOnce | Classification |
-|----------|---------|---------|-------------------|------------|----------------|
-| TEST-01  | Pass    | 0       | 0==0              | true       | PASS (0 runs read — likely cold-ES/stale-report; not a FAIL) |
-| TEST-02  | Fail    | 0       | 18==18            | **false**  | **False FAIL — Step_G fan-in regression** |
-| TEST-03  | Fail    | 0       | 15==15            | **false**  | **False FAIL — Step_G fan-in regression** |
-| TEST-04  | Fail    | 0       | 18==18            | **false**  | **False FAIL — Step_G fan-in regression** |
-| TEST-05  | Fail    | 0       | 28==28            | **false**  | **False FAIL — Step_G fan-in regression** |
-| TEST-06  | Fail    | 0       | 16==16            | **false**  | **False FAIL — Step_G fan-in regression** |
-| TEST-07  | Fail    | 0       | 19==19            | **false**  | **False FAIL — Step_G fan-in regression** |
+## Task 2 — sweep classification + regression fix
 
-Roll-up artifact: `analyzer-reports/phase-68-summary.json`. Harness exit codes are the source of truth (all FAILs = exit 1 = VERDICT_FAIL).
+### First sweep: 1/7 PASS — regression detected
 
-## Per-scenario classification of every non-PASS
+TEST-02..07 all false-FAILed. Every FAIL: `Missing=0`, `startedRuns==completeRuns`, and the
+ONLY duplicated stepId was the terminal fan-in **Step_G** in 100% of runs — the SPEC-line-116
+convergent terminal ("Step_G logs twice per correlationId, per-arrival fan-in") mis-flagged as
+an illegitimate duplicate. Classified as a **regression introduced by phase 76** (not one of
+the four acceptable non-PASS classes).
 
-All six FAILs are the SAME defect, classified as a **fifth category not in the four-way scheme: a regression introduced by phase 76** (neither genuine data loss, nor telemetry gap, nor INCONCLUSIVE, nor blind-spot closure).
+### Root cause (confirmed against live ES)
 
-**Evidence it is a false positive, not genuine duplication:**
-- `Missing=0` and `StartedRuns==CompleteRuns` in all six — no data loss, every started run completed.
-- The ONLY duplicated stepId is the terminal fan-in **Step_G**, in **100% of runs across all six scenarios** (18/18, 15/15, 18/18, 28/28, 16/16, 19/19). A genuine fault-induced redelivery would scatter across whichever steps were redelivered and vary run-to-run; a uniform, exactly-×2, Step_G-only signature is the SPEC-line-116 convergent terminal ("Step_G logs twice per correlationId — per-arrival fan-in, collapsed by DISTINCT").
-- The value/label oracle view is intact (`Labels`/`DistinctLabels` = 9, single coherent value chain Step_B=201…Step_G=206). Only the new framework-record stepId axis double-counts Step_G.
+OTel `IncludeScopes=true` + the bus-wide `InboundExecutionScopeConsumeFilter` stamp
+`attributes.StepId` (= the CONSUMED step) onto **every** log emitted during a consume. So the
+analyzer's structural query (`exists attributes.StepId`) swept up the orchestrator fan-out
+records, the sample's author value logs, and orchestrator business logs. The
+`no-MessageId ⇒ terminal-reached` discriminator (`AnalyzerE2ETests.cs`) then dumped all their
+consumed-step ids into `terminalStepIds`, so `tset.Count` was ~9 (never 1) → the convergent
+terminal id resolved to `null` → `RunTrace.FromStepIds` could not exempt the legitimate
+Step_G ×2. Live ES proof: of 26 no-MessageId StepId records per run, 10 were fan-out records
+(carrying `attributes.StepId` from scope + `NextStepId`); only 6 were true `"terminal reached"`
+records; the rest were author/business logs. The hermetic facts pass a fixed
+`ConvergentStepId="hop-g"`, so 44/44 stayed green — the gap was purely on the live ES path.
 
-**Root cause (localized):**
-- `RunTrace.FromStepIds(…, convergentStepId)` exempts the Step_G ×2 only when `convergentStepId` is supplied; the doc is explicit: `null ⇒ any repeated stepId is an illegitimate duplicate (fail-closed)` (`RunTrace.cs:194`).
-- The live derivation `AnalyzerE2ETests.cs:644` — `convergent = terminalStepIds.TryGetValue(key, out tset) && tset.Count == 1 ? tset.First() : null` — resolves to **null** on live data, so `HasIllegitimateDuplicate` fires on the legitimate Step_G ×2.
-- `terminalStepIds` is built from the orchestrator FW-02 terminal-reached records (`OrchestratorPrePipeline.cs:106`). The hermetic facts pass a fixed `ConvergentStepId="hop-g"` and stay 44/44 green, which is exactly why the unit suite could not catch this — the gap is purely on the live ES-fed path.
-- Exact null-cause not yet confirmed (needs live ES, which the harness tears down per scenario): (a) terminal-reached records not in ES / not matched by `BuildStepSearchBody`, (b) `(corr,exec)` key mismatch, or (c) `tset.Count != 1`. Root-causing needs a single-scenario re-run with teardown suppressed.
+### Fix (`3319bb5`)
 
-## Self-Check: FAILED (live gate not passed)
+Derive the convergent fan-in terminal from the FW-02 **dispatch** records (positively keyed by
+`attributes.NextStepId`, immune to scope pollution): the unique `NextStepId` dispatched-to more
+than once per `(corr,exec)` (Step_F1→G and Step_F2→G). Proven live: in every exec exactly one
+`NextStepId` (Step_G) is dispatched ×2 and it equals the processor's per-arrival ×2 stepId. The
+polluted `terminalStepIds` bucket is removed; the `proven`-set contribution is retained
+unchanged (over-population can only mask loss, never manufacture it — a separate,
+fault-scenario-verified concern, flagged below).
 
-The phase's live acceptance criterion (all non-PASS explained as one of the four acceptable classes) is **not** met — the six FAILs are a regression this phase introduced, which is a blocking gap, not an acceptable class. Waves 1–2 (plans 76-01..04) are correct and committed; the defect is confined to the live convergent-terminal derivation in the analyzer fixture (owned by 76-03).
+### Second sweep: 7/7 PASS
 
-## Recommended next step
+| TEST-01 | TEST-02 | TEST-03 | TEST-04 | TEST-05 | TEST-06 | TEST-07 |
+|---------|---------|---------|---------|---------|---------|---------|
+| PASS | PASS | PASS | PASS | PASS | PASS | PASS |
 
-Gap closure: root-cause the live `convergent` null (re-run one scenario with `docker compose down` teardown suppressed, query ES for the terminal-reached records' `(corr, exec, StepId)`), fix the derivation at `AnalyzerE2ETests.cs:644` (and/or make `FromStepIds` derive the convergent terminal from the observed stepId multiplicity so it degrades safely), then re-run `phase-68-sweep.ps1` and confirm the Step_G ×2 no longer trips `HasIllegitimateDuplicate`.
+Every scenario green on a real Docker stack. `Duplicates: 0` confirmed (the Step_G false-flag
+is gone); `Missing=0`, `startedRuns==completeRuns` throughout. Debug + Release builds 0-warning;
+hermetic analyzer facts unaffected.
+
+## Follow-up (flagged, not blocking)
+
+The same scope-pollution over-populates the ANL-03 `proven` set (every scope-stamped stepId is
+added). It caused no failure here (all runs complete, nothing to reconcile), and over-population
+can only *mask* a real loss (false PASS), never manufacture one — so it cannot cause a false
+FAIL. But it weakens ANL-03's loss-detection under fault and should get its own fix, verified
+against fault scenarios that genuinely drop a hop. Recommend a follow-up plan. The live
+`BuildRunTraces` derivation is `Category=RealStack`-only; the passing sweep is its regression
+gate — a future refactor to make it unit-testable is advisable.
