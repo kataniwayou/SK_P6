@@ -38,9 +38,10 @@ Both are the same defect: **the verdict treats evidence as truth.** Neither is a
    - Acceptance: hermetic fact with a capturing logger asserts exactly one record per consume with all six fields present as structured state, across Completed / Failed / Cancelled; a processor whose `ProcessAsync` writes **no** log of its own still produces the record
 
 2. **FW-02 — Orchestrator per-fan-out log**: the orchestrator emits a structured record per next-step fan-out, carrying the causal edge.
-   - Current: no per-dispatch record links the inbound `entryId` to the outbound per-next-step `messageId`; the fresh envelope id minted at `RelocateTail.cs:23,44` breaks the chain
-   - Target: one record per fan-out carrying `CorrelationId`, `ExecutionId`, `WorkflowId`, the inbound `EntryId` consumed, the next `StepId`, and the outbound `MessageId` dispatched for that step
-   - Acceptance: hermetic fact asserts one record per next-step; a 2-way fan-out (C→D1,D2) emits exactly 2 records with distinct outbound `MessageId`s and correct next-`StepId`s
+   - Current: no per-dispatch record links the inbound `entryId` to the next step; the fresh envelope id minted downstream at `RelocateTail.cs` breaks the chain
+   - Target: one record per fan-out carrying `CorrelationId`, `ExecutionId`, `WorkflowId`, the inbound `EntryId` consumed, and the next `StepId`
+   - **⚠ AMENDED 2026-07-16 (research Discrepancy 1 — Option C):** the original target's sixth field, "outbound `MessageId` dispatched for that step," is DROPPED — the outbound MassTransit envelope id is not in hand at the fan-out loop (`OrchestratorPrePipeline.cs` sends with no id override; the id concretizes only downstream at `RelocateTail`). The inbound `EntryId` (= M_N) satisfies ANL-03's proof-of-execution edge and the next `StepId` satisfies ANL-02's expected set, so the goal is unaffected. See CONTEXT D-11 resolution.
+   - Acceptance: hermetic fact asserts one record per next-step; a 2-way fan-out (C→D1,D2) emits exactly 2 records with **distinct next-`StepId`s** (each carrying the correct inbound `EntryId`)
 
 3. **FW-03 — Framework logs carry identities only, never payload**: no blob content in platform telemetry.
    - Current: the sample logs values, safe only because they are synthetic (D-03, "no real/sensitive payload is logged"); the framework logs nothing
@@ -125,7 +126,7 @@ Both are the same defect: **the verdict treats evidence as truth.** Neither is a
 
 - [ ] `ProcessorPipeline` emits one per-hop record carrying `StepId`+`ExecutionId`+`CorrelationId`+`EntryId`+`MessageId`+outcome, for Completed/Failed/Cancelled (FW-01)
 - [ ] A processor with **no** author-written log still yields a complete structural trace (FW-01, SMP-01)
-- [ ] The orchestrator emits one fan-out record per next step carrying inbound `EntryId` → outbound `MessageId` + next `StepId`; a 2-way fan-out emits exactly 2 with distinct outbound ids (FW-02)
+- [ ] The orchestrator emits one fan-out record per next step carrying inbound `EntryId` + next `StepId` (outbound `MessageId` dropped per Discrepancy-1 Option C); a 2-way fan-out emits exactly 2 with distinct next `StepId`s (FW-02)
 - [ ] No framework log template or argument references `validatedData`, `dr.Data`, or `d.Payload` (grep-clean) (FW-03)
 - [ ] A throwing/blocking `ILogger` neither fails nor delays a hop (FW-04)
 - [ ] `HopLabels` is deleted from `PassFailEngine`; completeness verdicts are produced from stepId-keyed records with zero `Step_*` labels present (ANL-01)
