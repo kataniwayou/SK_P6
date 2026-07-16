@@ -537,8 +537,9 @@ public sealed class AnalyzerE2ETests
         var stepIdByMessageId = new Dictionary<string, string>(StringComparer.Ordinal);
         // Orchestrator-proven "did run" stepIds per (corr,exec): terminal-reached records name the StepId directly.
         var proven = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-        // The convergent terminal stepId(s) per (corr,exec) — from terminal-reached records (Step_G fans in ×2).
-        var terminalStepIds = new Dictionary<(string Corr, string Exec), HashSet<string>>();
+        // The convergent terminal stepId is derived from the FW-02 DISPATCH edges below (dispatch in-degree),
+        // NOT from a terminal-reached structural bucket — see BuildRunTraces' convergent derivation and the
+        // note in the no-MessageId branch for why the structural bucket cannot be a clean terminal-reached set.
         var entryMarkerCorrelations = new HashSet<string>(StringComparer.Ordinal);
 
         foreach (var hit in structuralHits)
@@ -561,12 +562,20 @@ public sealed class AnalyzerE2ETests
             if (!hasMessageId)
             {
                 // Terminal-reached record (D-12): the named StepId provably reached/ran → ANL-03 redundancy.
+                // NOTE (Phase 76 live-gate fix): OTel IncludeScopes stamps attributes.StepId (the CONSUMED step,
+                // from the InboundExecutionScopeConsumeFilter) onto EVERY log emitted during a consume — so this
+                // no-MessageId bucket is NOT a clean terminal-reached set: it also contains the orchestrator
+                // fan-out records (which additionally carry NextStepId), the sample's author value logs
+                // ("Step_X received/produced", which carry StepLabel), and orchestrator business logs
+                // ("Trip ended ..."). The convergent-terminal derivation therefore no longer reads this bucket
+                // (it uses the dispatch in-degree below). The proven-set contribution is retained UNCHANGED:
+                // over-population of `proven` can only reconcile a would-be-missing hop as non-binding — it can
+                // mask loss (a separate, fault-scenario-verified concern), never manufacture it, so it cannot
+                // produce the false FAIL this fix targets.
                 if (!IsEntryMarkerExecution(executionId))
                 {
                     var pkey = $"{correlationId}|{executionId}";
                     (proven.TryGetValue(pkey, out var pset) ? pset : proven[pkey] = new(StringComparer.Ordinal)).Add(stepId);
-                    var tkey = (correlationId, executionId);
-                    (terminalStepIds.TryGetValue(tkey, out var tset) ? tset : terminalStepIds[tkey] = new(StringComparer.Ordinal)).Add(stepId);
                 }
                 continue;
             }
@@ -594,6 +603,10 @@ public sealed class AnalyzerE2ETests
 
         // ── FW-02 DISPATCH: expected set (NextStepId) + orchestrator-redundancy edge (inbound EntryId → stepId) ──
         var expectedByExec = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        // Phase 76 live-gate fix: per-(corr,exec) dispatch in-degree per NextStepId. The convergent fan-in
+        // terminal is the unique NextStepId dispatched-to more than once (F1→G and F2→G), derived from these
+        // positively-keyed fan-out records instead of the scope-polluted terminal-reached structural bucket.
+        var nextTargetCountByInstance = new Dictionary<(string Corr, string Exec), Dictionary<string, int>>();
         foreach (var hit in dispatchHits)
         {
             if (!hit.TryGetProperty("_source", out var source)) continue;
@@ -606,6 +619,12 @@ public sealed class AnalyzerE2ETests
             var key = $"{corrEl.GetString()!}|{execEl.GetString()!}";
             // ANL-02: the dispatched next step is EXPECTED to run.
             (expectedByExec.TryGetValue(key, out var eset) ? eset : expectedByExec[key] = new(StringComparer.Ordinal)).Add(nextEl.GetString()!);
+
+            // Convergent-terminal in-degree: count how many fan-out edges TARGET each NextStepId per (corr,exec).
+            var ikey = (corrEl.GetString()!, execEl.GetString()!);
+            var next = nextEl.GetString()!;
+            var counts = nextTargetCountByInstance.TryGetValue(ikey, out var cm) ? cm : (nextTargetCountByInstance[ikey] = new(StringComparer.Ordinal));
+            counts[next] = counts.TryGetValue(next, out var cc) ? cc + 1 : 1;
 
             // ANL-03: the inbound EntryId (M_N) proves the PRODUCER hop ran. Resolve M_N → producer stepId via
             // the present processor records' MessageId→StepId map (best-effort — a fully-dropped producer whose
@@ -641,7 +660,16 @@ public sealed class AnalyzerE2ETests
         {
             var values = valuesByInstance.TryGetValue(kv.Key, out var v) ? v : null;
             var labels = values is null ? null : values.Keys.ToList();
-            var convergent = terminalStepIds.TryGetValue(kv.Key, out var tset) && tset.Count == 1 ? tset.First() : null;
+            // Convergent fan-in terminal = the unique NextStepId dispatched-to more than once for this
+            // (corr,exec) (the ×2 per-arrival fan-in target, e.g. Step_G reached from both Step_F1 and Step_F2).
+            // This equals the processor's per-arrival ×2 stepId, so RunTrace.FromStepIds exempts exactly that
+            // stepId at ConvergentExpectedMultiplicity. Not exactly one such target ⇒ null (fail-closed).
+            string? convergent = null;
+            if (nextTargetCountByInstance.TryGetValue(kv.Key, out var targetCounts))
+            {
+                var fanIn = targetCounts.Where(t => t.Value > 1).Select(t => t.Key).ToList();
+                convergent = fanIn.Count == 1 ? fanIn[0] : null;
+            }
             return RunTrace.FromStepIds(kv.Key.Corr, kv.Key.Exec, kv.Value, values, labels, convergent);
         }).ToList();
 
