@@ -1,18 +1,18 @@
 ---
 gsd_state_version: 1.0
-milestone: v9.0.0
-milestone_name: Canonical Two-Consumer Recovery & L2 Delivery Proof
+milestone: v7.0.0
+milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 76-04-PLAN.md
-last_updated: "2026-07-16T15:48:51.595Z"
+stopped_at: Completed 77-01-PLAN.md
+last_updated: "2026-07-16T16:14:31.095Z"
 last_activity: 2026-07-16
 progress:
-  total_phases: 24
-  completed_phases: 7
-  total_plans: 35
-  completed_plans: 29
-  percent: 83
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -21,7 +21,7 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase 76 — framework-emitted-per-hop-execution-logs-keyed-by-stepid-dec
+**Current focus:** Phase 77 — consistent-framework-logging-model-scope-carried-execution-i
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
@@ -29,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 76 (framework-emitted-per-hop-execution-logs-keyed-by-stepid-dec) — EXECUTING
+Phase: 77 (consistent-framework-logging-model-scope-carried-execution-i) — EXECUTING
 Current Plan: 1
 Total Plans: 5
-Plan: 5 of 5
+Plan: 2 of 6
 Status: Ready to execute
 Last activity: 2026-07-16
 
@@ -1066,6 +1066,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 76 P02 | 5min | 3 tasks | 3 files |
 | Phase 76 P03 | 45min | 3 tasks | 5 files |
 | Phase 76 P04 | 23min | 2 tasks | 6 files |
+| Phase 77 P01 | 20min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1562,6 +1563,7 @@ Recent decisions affecting current work:
 - 76-03: value-oracle completeness fallback derives from the KEPT ExpectedHopOffset (not a new constant) so PassFailEngineValueChainFacts stay green unchanged; SMP-01 gated on non-empty seed map
 - 76-04: Verdict gained a third class Inconclusive; the verdict splits on evidence sufficiency (trace-dark + self-consistent conservation → Inconclusive regardless of metricGateOk) not severity
 - 76-04: exit-code resolution factored into dot-sourceable scripts/lib/exit-code-resolution.ps1 (Inconclusive→2, sweep-fatal, no auto-retry) proven hermetically before the live gate
+- Phase 77-01: strip Tier-1 execution ids from processor per-hop template — ids arrive via ambient InboundExecutionScopeConsumeFilter scope, string keeps only {MessageId}+{Outcome} (D1/LOG-01, D6/LOG-06)
 
 ### Roadmap Milestone Log
 
@@ -1670,8 +1672,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-16T10:51:55.284Z
-Stopped at: Completed 76-04-PLAN.md
+Last session: 2026-07-16T16:14:20.448Z
+Stopped at: Completed 77-01-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.

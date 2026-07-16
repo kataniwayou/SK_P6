@@ -795,7 +795,7 @@ Plans:
 **Plans:** 6 plans (hermetic-only verification)
 
 Plans:
-- [ ] 77-01-PLAN.md — Strip Tier-1 from the processor per-hop record (ProcessorPipeline.LogHopExecuted) [wave 1]
+- [x] 77-01-PLAN.md — Strip Tier-1 from the processor per-hop record (ProcessorPipeline.LogHopExecuted) [wave 1] ✅ 2026-07-16 (a7e9131, 83d061f) — LOG-01, LOG-06; template now `hop executed {MessageId} {Outcome}`, five Tier-1 ids via ambient scope only; PerHop facts 10/10 green, Debug+Release 0-warning
 - [ ] 77-02-PLAN.md — Capture+log the outbound MessageId on the processor result send (OutputTail, D3) [wave 1]
 - [ ] 77-03-PLAN.md — Strip Tier-1 from the orchestrator execution records + fan-out outbound MessageId capture [wave 1]
 - [ ] 77-04-PLAN.md — Delete concrete-processor author logs (SampleProcessor, D4) + preserve operator freedom (D5) [wave 1]
