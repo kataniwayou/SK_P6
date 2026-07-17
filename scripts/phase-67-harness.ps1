@@ -338,13 +338,13 @@ try {
     # -----------------------------------------------------------------------
     if ($scenario.faultType -eq 'inject-recovery-loss') {
         # ARM the processor reinject-trigger seam FIRST (immediately at window-open, BEFORE the ~15s of docker
-        # scaling) by SETting the Redis slot the seam claims. Early arming guarantees a post-window Step_B hop is
+        # scaling) by SETting the Redis slot the seam claims. Early arming guarantees a post-window Step_C hop is
         # still available to claim (the observation window closes fast on K=1). Because the arm is set just after
         # windowStart (== RECOVERY_UTC) and baseline fire count is 0, the victim execution necessarily STARTED
         # AFTER RECOVERY_UTC (in the analyzer cohort). The seam's atomic KeyDelete claims it exactly once.
         docker exec sk-redis redis-cli SET skp:test:defeat-read-arm 1 | Out-Null
         if ($LASTEXITCODE -ne 0) { Write-Phase "failed to arm processor reinject-trigger seam (redis SET)." 'Red'; exit 60 }
-        Write-Phase "  processor reinject-trigger seam ARMED (skp:test:defeat-read-arm set); first post-window Step_B hop becomes the recoverable-but-lost victim." 'Yellow'
+        Write-Phase "  processor reinject-trigger seam ARMED (skp:test:defeat-read-arm set); first post-window Step_C hop becomes the recoverable-but-lost victim." 'Yellow'
         # NEGATIVE CONTROL (gate-teeth): NO container crash. The loss is manufactured entirely by the keeper
         # KEEPER_DEFEAT_REINJECT seam exported above. Reduce the keeper to a SINGLE replica so the static
         # one-shot latch is process-global (compose default is deploy.replicas: 2 → a per-process latch could

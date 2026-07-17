@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 2
-status: executing
+status: milestone_complete
 stopped_at: Completed 79-04-PLAN.md
 last_updated: "2026-07-17T10:09:32.326Z"
 last_activity: 2026-07-17
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 0
   completed_plans: 0
-  percent: 0
+  percent: 25
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 79 (falsification-harness-for-the-resilience-sweep-negative-cont) — EXECUTING
-Current Plan: 5
+Phase: 79
+Current Plan: Not started
 Total Plans: 5
 Plan: 5 of 5
-Status: Ready to execute
+Status: Milestone complete
 Last activity: 2026-07-17
 
 > Phase 79 Plan 01 — ✅ COMPLETE 2026-07-17 (Wave 1: the product-source fault seam that manufactures a True-Positive recoverable-but-lost strand for the gate-teeth negative control). **2 atomic feat commits** (`7ec9169` ReinjectConsumer: static `_defeatedOnce` Interlocked one-shot latch + gate the `ep.Send` redispatch behind `int.TryParse(Environment.GetEnvironmentVariable("KEEPER_DEFEAT_REINJECT"),out d) && d>0 && Interlocked.CompareExchange(ref _defeatedOnce,1,0)==0` — `if(!defeatReinject){ep.Send}` else a TEST-ONLY defeat warning; `CountSent` + the `"reinject"` LogInformation stay UNCHANGED after the gate so `attributes.ReinjectOutcome=="reinject"` reaches the analyzer and WR-01 vetoes → binding miss, byte-identical to a real loss (D-01); `4a9f692` compose.yaml keeper `environment:` gains `KEEPER_DEFEAT_REINJECT: "${KEEPER_DEFEAT_REINJECT:-0}"` after OTEL endpoint, `deploy.replicas` untouched). Decisions D-01/D-02/D-06 honoured; env-var `KEEPER_DEFEAT_REINJECT` (discretion). **Inertness proven:** short-circuit means the Interlocked call never runs when unset ⇒ `*ReinjectConsumerFacts` **8/8 GREEN** (redispatch runs, latch never consumed); `*PassFailEngineFacts` **29/29 GREEN**; `docker compose config` resolves the var to `"0"` default-off. **No deviations** — plan executed exactly as written. Verification: Keeper + test project both build **0-warning/0-error**. Full `--filter-not-trait Category=RealStack` shows 282/853 failures — ALL the documented Docker-less-sandbox infra baseline (RabbitMQ `No such host is known`, Postgres/Redis refused; 0 analyzer/keeper LOGIC facts among them), logged to `deferred-items.md`; full-suite exit 0 is Plan 79-05's live-gate concern. This plan did NOT run the live stack (compile + hermetic-logic green only). Summary: `.planning/phases/79-falsification-harness-for-the-resilience-sweep-negative-cont/79-01-SUMMARY.md` (Self-Check PASSED). Plan 02 next.
@@ -764,7 +764,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 
 **Velocity:**
 
-- Total plans completed: 261
+- Total plans completed: 266
 - Average duration: —
 - Total execution time: —
 
@@ -844,6 +844,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | 75 | 5 | - | - |
 | 77 | 6 | - | - |
 | 78 | 6 | - | - |
+| 79 | 5 | - | - |
 
 **Recent Trend:**
 

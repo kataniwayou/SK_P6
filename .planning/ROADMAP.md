@@ -822,14 +822,14 @@ Plans:
 **Goal:** Prove the resilience-sweep pass/fail gate has TEETH — a default-off, env-gated keeper suppress-send seam manufactures exactly one byte-identical recoverable-but-lost strand (keeper logs "reinject" but suppresses the redispatch), and a standalone driver asserts the sweep flips that scenario to VERDICT_FAIL for the recoverable-but-lost binding-miss reason (True Positive fires, no silent-green False Negative), while the seam stays provably inert (7/7 capstone unaffected).
 **Requirements**: n/a (no REQUIREMENTS.md for this milestone; tracked via ROADMAP + 79-CONTEXT.md D-01..D-06)
 **Depends on:** Phase 78
-**Plans:** 5 plans
+**Plans:** 5/5 plans complete
 
 Plans:
 - [x] 79-01-PLAN.md — Keeper env-gated one-shot suppress-send seam (ReinjectConsumer) + compose plumbing (default-off) (completed 2026-07-17 — commits `7ec9169`/`4a9f692`; static `_defeatedOnce` Interlocked latch gates `ep.Send`, CountSent + "reinject" log unchanged after the gate for byte-identical telemetry (D-01); `${KEEPER_DEFEAT_REINJECT:-0}` compose plumbing; Keeper+tests 0-warning; `*ReinjectConsumerFacts` 8/8 + `*PassFailEngineFacts` 29/29 GREEN; seam provably inert when unset (D-06))
-- [ ] 79-02-PLAN.md — Hermetic pin of the MissingDetail binding-miss string contract the falsify driver depends on
-- [ ] 79-03-PLAN.md — FALSIFY-01 scenario row + inject-recovery-loss harness branch (keeper scaled to 1 replica + K_EXECUTIONS=1)
-- [ ] 79-04-PLAN.md — Standalone phase-79-falsify.ps1 driver with the inverted, fail-closed assertion (D-03 + D-04)
-- [ ] 79-05-PLAN.md — Live gate-teeth run (exit 0) + inertness regression gate (7/7 capstone with the seam unset)
+- [x] 79-02-PLAN.md — Hermetic pin of the MissingDetail binding-miss string contract the falsify driver depends on
+- [x] 79-03-PLAN.md — FALSIFY-01 scenario row + inject-recovery-loss harness branch (keeper scaled to 1 replica + K_EXECUTIONS=1)
+- [x] 79-04-PLAN.md — Standalone phase-79-falsify.ps1 driver with the inverted, fail-closed assertion (D-03 + D-04)
+- [x] 79-05-PLAN.md — Live gate-teeth run (exit 0) + inertness regression gate (7/7 capstone with the seam unset)
 
 ---
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
