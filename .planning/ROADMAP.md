@@ -831,7 +831,25 @@ Plans:
 - [x] 79-04-PLAN.md — Standalone phase-79-falsify.ps1 driver with the inverted, fail-closed assertion (D-03 + D-04)
 - [x] 79-05-PLAN.md — Live gate-teeth run (exit 0) + inertness regression gate (7/7 capstone with the seam unset)
 
----
+### Phase 80: Deploy full system to local Kubernetes (Docker Desktop) — port compose topology to k8s manifests and prove end-to-end
+
+**Goal:** Port the existing docker-compose topology to Kubernetes manifests and run the full stack healthy on a local Docker Desktop cluster, then prove a workflow executes end-to-end — a k8s deployment-target proof paralleling the compose stack, with NO change to the two-consumer recovery architecture or app source. Replica topology: **orchestrator ×1** (single-owner by design — in-memory L1 pause/resume state + Quartz scheduling is a documented SPOF; keep at 1), **keeper ×2**, **processor-sample ×2**, **baseapi-service (webapi) ×1**, **otel-collector ×1**, **prometheus ×1**, **elasticsearch ×1**, **redis ×1**, **postgres ×1**, **rabbitmq ×1**. App tiers as Deployments; stateful backing services (postgres / redis / elasticsearch / rabbitmq) as StatefulSets with persistence. Preserve: OTLP→collector wiring; Redis/RabbitMQ/Postgres connection strings via k8s Service DNS; compose healthchecks → readiness/liveness probes; the processor SourceHash reseed step (graph-delete → seed → 204); and ALL test-only env seams shipped DISABLED / default-off (`KEEPER_DEFEAT_REINJECT`, `PROCESSOR_DEFEAT_READ`, `KEEPER_REINJECT_DELAY_MS`, `ORCH_OUTPUT_TTL`, `KEEPER_RECOVERY_TTL`, `PROCESSOR_STEP_DELAY_MS`, `K_EXECUTIONS`).
+**Requirements**: n/a (no REQUIREMENTS.md for this milestone). Success = full stack reports Healthy on Docker Desktop k8s AND one workflow round-trips end-to-end, verifiable from the same Prometheus + ES signals as the compose sweep.
+**Depends on:** Phase 79
+**Plans:** 10 plans (4 waves)
+
+Plans:
+- [ ] 80-01-PLAN.md — Wave 1: namespace + dev-only Secret + otel/prometheus ConfigMaps (D-02/06/07)
+- [ ] 80-02-PLAN.md — Wave 1: postgres (SS+1Gi PVC) + redis (SS no-PVC, persistence-off) StatefulSets (D-09/12)
+- [ ] 80-03-PLAN.md — Wave 1: rabbitmq (SS+1Gi PVC) + elasticsearch (SS+2Gi PVC) StatefulSets + startupProbes (D-10/11)
+- [ ] 80-04-PLAN.md — Wave 1: otel-collector + prometheus Deployments + ClusterIP Services + ConfigMap subPath mounts (D-06/13)
+- [ ] 80-05-PLAN.md — Wave 1: baseapi-service (Deploy+Svc 8080, $(VAR) Postgres) + orchestrator (Deploy x1, no Svc, literal 900) (D-04/08)
+- [ ] 80-06-PLAN.md — Wave 1: keeper (Deploy x2) + processor-sample (Deploy x2) — literal 900 TTL, all fault seams omitted, badconfig excluded (D-04/08)
+- [ ] 80-07-PLAN.md — Wave 2: phase-80-build.ps1 (5 :local images) + kustomization.yaml aggregator + whole-stack dry-run gate (D-03/04/05)
+- [ ] 80-08-PLAN.md — Wave 2: phase-80-reset.ps1 — kubectl-exec re-target of the compose reset (Pitfall 1, first half)
+- [ ] 80-09-PLAN.md — Wave 3: phase-80-up.ps1 — apply + rollout status + rollout restart + 8 loopback port-forwards (D-14/15, Pitfalls 2/5)
+- [ ] 80-10-PLAN.md — Wave 4: phase-80-harness.ps1 (STEP B1/D re-target) + live happy-path proof checkpoint (D-16)
+
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
 
 
