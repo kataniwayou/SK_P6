@@ -825,7 +825,7 @@ Plans:
 **Plans:** 5 plans
 
 Plans:
-- [ ] 79-01-PLAN.md — Keeper env-gated one-shot suppress-send seam (ReinjectConsumer) + compose plumbing (default-off)
+- [x] 79-01-PLAN.md — Keeper env-gated one-shot suppress-send seam (ReinjectConsumer) + compose plumbing (default-off) (completed 2026-07-17 — commits `7ec9169`/`4a9f692`; static `_defeatedOnce` Interlocked latch gates `ep.Send`, CountSent + "reinject" log unchanged after the gate for byte-identical telemetry (D-01); `${KEEPER_DEFEAT_REINJECT:-0}` compose plumbing; Keeper+tests 0-warning; `*ReinjectConsumerFacts` 8/8 + `*PassFailEngineFacts` 29/29 GREEN; seam provably inert when unset (D-06))
 - [ ] 79-02-PLAN.md — Hermetic pin of the MissingDetail binding-miss string contract the falsify driver depends on
 - [ ] 79-03-PLAN.md — FALSIFY-01 scenario row + inject-recovery-loss harness branch (keeper scaled to 1 replica + K_EXECUTIONS=1)
 - [ ] 79-04-PLAN.md — Standalone phase-79-falsify.ps1 driver with the inverted, fail-closed assertion (D-03 + D-04)

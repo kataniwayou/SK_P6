@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: Not started
-status: completed
-stopped_at: Phase 79 context gathered
-last_updated: "2026-07-17T08:59:09.460Z"
-last_activity: 2026-07-17
+current_plan: 2
+status: executing
+stopped_at: Completed 79-01-PLAN.md
+last_updated: "2026-07-17T09:55:20.638Z"
+last_activity: 2026-07-17 -- Phase 79 Plan 01 complete (keeper suppress-send seam)
 progress:
-  total_phases: 25
-  completed_phases: 9
-  total_plans: 41
-  completed_plans: 41
-  percent: 100
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -21,7 +21,7 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase 78 — rework-the-resilience-sweep-to-verify-purely-from-the-new-fr
+**Current focus:** Phase --phase=79 — --name=falsification-harness-for-the-resilience-sweep-negative-cont
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
@@ -29,12 +29,14 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 78
-Current Plan: Not started
+Phase: 79 (falsification-harness-for-the-resilience-sweep-negative-cont) — EXECUTING
+Current Plan: 2
 Total Plans: 5
-Plan: 4 of 4
-Status: Milestone complete
-Last activity: 2026-07-17
+Plan: 2 of 5
+Status: Executing Phase 79
+Last activity: 2026-07-17 -- Phase 79 Plan 01 complete (keeper suppress-send seam)
+
+> Phase 79 Plan 01 — ✅ COMPLETE 2026-07-17 (Wave 1: the product-source fault seam that manufactures a True-Positive recoverable-but-lost strand for the gate-teeth negative control). **2 atomic feat commits** (`7ec9169` ReinjectConsumer: static `_defeatedOnce` Interlocked one-shot latch + gate the `ep.Send` redispatch behind `int.TryParse(Environment.GetEnvironmentVariable("KEEPER_DEFEAT_REINJECT"),out d) && d>0 && Interlocked.CompareExchange(ref _defeatedOnce,1,0)==0` — `if(!defeatReinject){ep.Send}` else a TEST-ONLY defeat warning; `CountSent` + the `"reinject"` LogInformation stay UNCHANGED after the gate so `attributes.ReinjectOutcome=="reinject"` reaches the analyzer and WR-01 vetoes → binding miss, byte-identical to a real loss (D-01); `4a9f692` compose.yaml keeper `environment:` gains `KEEPER_DEFEAT_REINJECT: "${KEEPER_DEFEAT_REINJECT:-0}"` after OTEL endpoint, `deploy.replicas` untouched). Decisions D-01/D-02/D-06 honoured; env-var `KEEPER_DEFEAT_REINJECT` (discretion). **Inertness proven:** short-circuit means the Interlocked call never runs when unset ⇒ `*ReinjectConsumerFacts` **8/8 GREEN** (redispatch runs, latch never consumed); `*PassFailEngineFacts` **29/29 GREEN**; `docker compose config` resolves the var to `"0"` default-off. **No deviations** — plan executed exactly as written. Verification: Keeper + test project both build **0-warning/0-error**. Full `--filter-not-trait Category=RealStack` shows 282/853 failures — ALL the documented Docker-less-sandbox infra baseline (RabbitMQ `No such host is known`, Postgres/Redis refused; 0 analyzer/keeper LOGIC facts among them), logged to `deferred-items.md`; full-suite exit 0 is Plan 79-05's live-gate concern. This plan did NOT run the live stack (compile + hermetic-logic green only). Summary: `.planning/phases/79-falsification-harness-for-the-resilience-sweep-negative-cont/79-01-SUMMARY.md` (Self-Check PASSED). Plan 02 next.
 
 > Phase 78 Plan 06 — ✅ COMPLETE 2026-07-17 (Wave 6, gap-closure: the D-04 TERMINAL LIVE RE-GATE after the 78-05 canonical-record fix). Ran the reseed-FIRST runbook ([[rebuild-sourcehash-reseed-order]]) live on Docker then `scripts/phase-68-sweep.ps1` over all 7 scenarios (~2h): **CLEAN 7/7 PASS.** Every scenario reproduces its genuine da91d32 all-PASS baseline (TEST-01 Pass 19/19, TEST-02 17/17, TEST-03 18/18, TEST-04 17/17, TEST-05 23/23, TEST-06 14/14, TEST-07 25/25 — all `Missing==0`, all `Duplicates==0`), value-oracle axis dark. **The 78-04 over-count regression (`Duplicates==StartedRuns`) is GONE on real Phase-77 live data — the no-fault TEST-01 shows `Duplicates==0` (was 19/19).** **BASELINE-ORACLE CORRECTION (T-78-13):** the runbook's `git show HEAD:analyzer-reports/phase-68-summary.json` oracle is the 78-04 FAILED rerun (commit `5096dcd` clobbered the tracked file → 0 Pass/6 Fail+1 INDETERMINATE at HEAD); every verdict was gated against the genuine `git show da91d32:...` = 7/7 PASS, never HEAD. Reseed-first pre-empted the heal-wait trap (first-scenario reset passed cleanly). TEST-07's analyze was killed mid-STEP-H (same trap as 78-04) but its fault window had already completed in ES — re-invoked the analyzer against that exact window (`[07:29:21.70Z,07:36:42.83Z]`, recovery `07:31:12.44Z`) → fresh Pass 25/25 (no stale copy read, no re-baseline). Debug-shadow trap pre-empted (one fresh Release report per scenario, all mtime today, no Debug copy). Regenerated `analyzer-reports/phase-68-summary.json` (7/7 PASS) — restores the tracked baseline to all-PASS, correcting the 5096dcd clobber. **Requirement D-04 CLOSED: the resilience verdict reconstructs PURELY AND CORRECTLY from framework ES logs alone.** No deviations beyond the two Rule-3 blocking unblocks (baseline-oracle correction + TEST-07 completed-window re-analyze). Summary: `.planning/phases/78-rework-the-resilience-sweep-to-verify-purely-from-the-new-fr/78-06-SUMMARY.md` (Self-Check PASSED). **Phase 78 = 6/6 plans COMPLETE — ready for verification.**
 
@@ -1082,6 +1084,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 78 P02 | 16min | 2 tasks | 5 files |
 | Phase 78 P03 | 28min | 2 tasks | 3 files |
 | Phase 78-rework-the-resilience-sweep-to-verify-purely-from-the-new-fr P05 | ~1h | 3 tasks | 3 files |
+| Phase 79 P01 | 17min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1598,6 +1601,9 @@ Recent decisions affecting current work:
 - 78-05: naive (executionId,stepId) de-dup REJECTED — collapse is by record-KIND selection so genuine redelivery duplicates survive and still trip HasIllegitimateDuplicate
 - 78-05: D-04 hermetic half CLOSED (32/32 analyzer facts, 0-warning Debug+Release); live re-gate deferred to 78-06 (operator-gated); D-04 remains OPEN
 - 78-06: D-04 **CLOSED** — live re-gate reproduced the genuine da91d32 all-PASS baseline 7/7 on real Phase-77 data after the 78-05 fix; over-count gone (TEST-01 Duplicates==0), value axis dark. Baseline-oracle correction (T-78-13): gated against `git show da91d32:...` (7/7 PASS), NOT the clobbered HEAD (5096dcd → 0 Pass). Roll-up regenerated to 7/7 PASS, restoring the tracked baseline.
+- 79-01: suppress ONLY ep.Send; CountSent + 'reinject' log stay after the gate → byte-identical recoverable-but-lost telemetry (D-01)
+- 79-01: static Interlocked one-shot latch (per-process) + K_EXECUTIONS=1 + single keeper replica at runtime → exactly one defeat (D-02)
+- 79-01: KEEPER_DEFEAT_REINJECT default-off via short-circuit gate + ${KEEPER_DEFEAT_REINJECT:-0} compose interpolation → provably inert (D-06)
 
 ### Roadmap Milestone Log
 
@@ -1707,13 +1713,13 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: --stopped-at
-Stopped at: Phase 79 context gathered
-Resume file: --resume-file
+Last session: 2026-07-17T09:55:20.622Z
+Stopped at: Completed 79-01-PLAN.md
+Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
 **Phase 29 (Structured Execution-Scope Logging):** 5/5 plans complete — close gate GATE_EXIT=0 (405 Passed ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held; live scopeProof passes on a `processor-sample` Completed log); LOG-01..06 all complete. Awaiting orchestrator phase verification + `phase.complete`. Milestone v3.5.0 = 17/17 plans across phases 25-29.
 
 **Previous Phase:** 11 (migrate-prometheus-and-elastic-containers-from-compose-stack) — 10/10 plans — verified 2026-05-28 (3 consecutive GREEN dotnet test runs at 142/142 facts each; byte-identical psql `\l` SHA-256 `0d98b0de…0aac127`; OBSERV-12 superseded; INFRA-06 amendment locked in)
 
-**Planned Phase:** 78 (rework-the-resilience-sweep-to-verify-purely-from-the-new-fr) — 6 plans — 2026-07-17T06:09:19.323Z
+**Planned Phase:** 79 (Falsification harness for the resilience sweep (negative-control)) — 5 plans — 2026-07-17T09:32:19.045Z
