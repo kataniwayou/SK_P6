@@ -669,27 +669,33 @@ spec:
 | A5 | The seeder + analyzer (host `dotnet test`) connect to Postgres/ES via localhost:5433/9200 (host ports), covered by port-forward | Validation Architecture | MEDIUM — if the seeder hard-codes a different host/port or uses `docker compose exec`, the port-forward assumption breaks. Verify the seeder/analyzer connection config during planning. |
 | A6 | `discovery.type=single-node` skips ES bootstrap checks, so vm.max_map_count needs no tuning on this machine | Pitfall 7 | LOW — confirmed by ES docs + the working compose stack on the same host; fallback documented. |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All four resolved during planning (Phase 80 plans 80-01..80-10) and reflected in concrete plan tasks. Markers added 2026-07-18.
 
 1. **Reset/wf-id/clean-orchestrator mechanism: `kubectl exec` vs host TCP clients (Pitfall 1).**
    - What we know: the current scripts use `docker exec`/`docker compose exec`/`docker compose restart`, which can't address k8s pods; D-14 forwards redis 6380/postgres 5433.
    - What's unclear: whether to (a) re-target to `kubectl exec`/`kubectl rollout restart` (no new host deps, recommended) or (b) add host `psql`/`redis-cli` on forwarded ports (literal D-14 reading).
    - Recommendation: `kubectl exec` sibling reset + rollout-restart for STEP B1 + `kubectl exec` for wf-id. Parameterize or fork; decide before Wave 1.
+   - **RESOLVED:** adopted (a) `kubectl exec` / `kubectl rollout restart`, no new host deps. Owned by plan **80-08** (`phase-80-reset.ps1` reset re-target) and **80-10** (harness STEP B1 rollout-restart + STEP D wf-id via `kubectl exec … psql`).
 
 2. **Does BaseConsole.Core expose a lightweight liveness endpoint (A1)?**
    - What we know: compose only ever probes `/health/ready`.
    - What's unclear: whether a `/health/live` (always-200) exists.
    - Recommendation: grep `src/BaseConsole.Core` for health endpoint routes during planning; default to `tcpSocket` liveness if absent.
+   - **RESOLVED:** `/health/live`, `/health/ready`, `/health/startup` all confirmed present in `BaseConsole.Core/Health/EmbeddedHealthEndpointService.cs` + `BaseApi.Core/DependencyInjection/BaseApiApplicationBuilderExtensions.cs`. Liveness uses `httpGet /health/live` (decoupled from broker readiness) in plans **80-05/80-06** — the tcpSocket fallback is not needed.
 
 3. **Seeder/analyzer host-side connection config (A5).**
    - What we know: analyzer reads ES; seeder writes Postgres; both run as host `dotnet test`.
    - What's unclear: exact host/port each uses (localhost:5433 / :9200 assumed).
    - Recommendation: inspect the test fixtures' connection strings; ensure they resolve to the forwarded ports (or make them env-driven).
+   - **RESOLVED:** the `~FanOutSeeder` in-proc WebApi (`RealStackWebAppFactory`, `SampleRoundTripE2ETests.cs:417-458`) hard-codes **8** host endpoints (not 6) — additionally RabbitMQ AMQP `localhost:5673` + otel `localhost:4317`. Plan **80-09** provisions all 8 port-forwards; a documented completion of D-14's own rationale.
 
 4. **kustomize `configMapGenerator` relative path traversal.**
    - What we know: config files live at `compose/otel-collector-config.yaml` and repo-root `prometheus.yml`, one level up from `k8s/`.
    - What's unclear: whether `files: [../compose/…]` traversal is acceptable in the target kustomize version (some versions restrict `..`).
    - Recommendation: prefer `configMapGenerator` with `../` paths; fallback = copy the two files into `k8s/` or inline `data:`.
+   - **RESOLVED:** sidestepped entirely — plans **80-01/80-07** hand-author inline ConfigMaps (`data:` with the config carried verbatim), so no `..` traversal and no configMapGenerator dependency.
 
 ## Environment Availability
 

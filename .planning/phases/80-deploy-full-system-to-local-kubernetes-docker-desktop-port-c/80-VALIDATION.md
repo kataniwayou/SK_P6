@@ -1,8 +1,8 @@
 ---
 phase: 80
 slug: deploy-full-system-to-local-kubernetes-docker-desktop-port-c
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-07-18
 ---
@@ -73,11 +73,11 @@ created: 2026-07-18
 
 ## Validation Sign-Off
 
-- [ ] All tasks have an `<automated>` verify (dry-run lint or rollout/sweep signal) or a Wave 0 dependency
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references (manifests, build/up scripts, reset re-target)
-- [ ] No watch-mode flags
-- [ ] Feedback latency < ~30s (lint) / < ~8min (full round-trip)
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have an `<automated>` verify (dry-run lint or rollout/sweep signal) or a Wave 0 dependency
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (manifests, build/up scripts, reset re-target)
+- [x] No watch-mode flags
+- [x] Feedback latency < ~30s (lint) / < ~8min (full round-trip)
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-07-18 (plan-checker: 0 blockers)
