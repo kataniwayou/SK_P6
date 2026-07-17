@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 2
 status: executing
-stopped_at: Completed 79-02-PLAN.md
-last_updated: "2026-07-17T09:59:53.416Z"
+stopped_at: Completed 79-03-PLAN.md
+last_updated: "2026-07-17T10:05:05.690Z"
 last_activity: 2026-07-17
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove per
 Phase: 79 (falsification-harness-for-the-resilience-sweep-negative-cont) — EXECUTING
 Current Plan: 2
 Total Plans: 5
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-07-17
 
@@ -1086,6 +1086,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 78-rework-the-resilience-sweep-to-verify-purely-from-the-new-fr P05 | ~1h | 3 tasks | 3 files |
 | Phase 79 P01 | 17min | 2 tasks | 2 files |
 | Phase 79 P02 | 11min | 1 tasks | 1 files |
+| Phase 79 P03 | 12 | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -1606,6 +1607,7 @@ Recent decisions affecting current work:
 - 79-01: static Interlocked one-shot latch (per-process) + K_EXECUTIONS=1 + single keeper replica at runtime → exactly one defeat (D-02)
 - 79-01: KEEPER_DEFEAT_REINJECT default-off via short-circuit gate + ${KEEPER_DEFEAT_REINJECT:-0} compose interpolation → provably inert (D-06)
 - 79-02: pinned D-03 #2 MissingDetail substring contract ('recoverable-but-lost' + 'binding miss') via a hermetic Assert.Contains fact — silent engine-string change now goes RED before it can mask a live False Negative
+- Phase 79-03: FALSIFY-01 wired into phase-67-harness — inject-recovery-loss no-crash branch scales keeper to 1 replica (count-guarded) + arms KEEPER_DEFEAT_REINJECT=1/K_EXECUTIONS=1 before bring-up + pins RECOVERY_UTC at window start + finally teardown; TEST-01..07 byte-unchanged, parses clean (c537164).
 
 ### Roadmap Milestone Log
 
@@ -1715,8 +1717,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-17T09:59:53.402Z
-Stopped at: Completed 79-02-PLAN.md
+Last session: 2026-07-17T10:04:57.363Z
+Stopped at: Completed 79-03-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
