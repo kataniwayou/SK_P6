@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: 2
-status: milestone_complete
-stopped_at: Completed 79-04-PLAN.md
-last_updated: "2026-07-17T10:09:32.326Z"
+current_plan: Not started
+status: completed
+stopped_at: Phase 80 context gathered
+last_updated: "2026-07-17T22:10:12.777Z"
 last_activity: 2026-07-17
 progress:
-  total_phases: 4
-  completed_phases: 1
-  total_plans: 0
-  completed_plans: 0
-  percent: 25
+  total_phases: 26
+  completed_phases: 10
+  total_plans: 46
+  completed_plans: 46
+  percent: 100
 ---
 
 # Project State
@@ -1694,6 +1694,7 @@ Forward-looking notes:
 - Phase 76 added (2026-07-16): Framework-emitted per-hop execution logs keyed by `stepId` — decouple the resilience verdict from the concrete processor. Root cause: the binding half of the verdict (`missing`/`dupFail`/`valueChainOk`) derives ENTIRELY from one author-written `LogInformation` in `SampleProcessor.ProcessAsync:89`, whose `Step_*` label is a config-payload string set-compared against a hardcoded `HopLabels` (`PassFailEngine.cs:65`); the framework emits no happy-path per-hop log (`BaseProcessor.Core/Processing/` has fault-path warnings only). Two layers: (a) `ProcessorPipeline` emits a per-hop log keyed by `StepId`+`ExecutionId`+`CorrelationId`+`EntryId`/`MessageId`+outcome (identities only, no payload — reusing `ExecutionLogScope.StepId`), analyzer re-keys completeness onto `stepId` and DELETES `HopLabels`; (b) the sample KEEPS `received/produced` as the domain value oracle (the framework sees opaque JSON and cannot log values semantically; the oracle is what the committed TELEMETRY-GAP reconciliation `6e90216` uses to prove a trace-incomplete run completed). Stretch: an orchestrator per-dispatch log makes expected=dispatched vs actual=completed BOTH ES-read, closing the TEST-08 blind spot within the Prom+ES-only constraint. **SourceHash reseed MANDATORY before the live sweep** — `SourceHash.targets:82` folds BaseProcessor.Core's own sources into `@(ImplFiles)`, so editing `ProcessorPipeline.cs` changes Processor.Sample's embedded hash → rebuild BOTH configs → graph-delete → seed → 204 → only then `phase-68-sweep`. See [[rebuild-sourcehash-reseed-order]]. Requirements TBD at spec. Numbering verified 76 (see below).
 - **STATE.milestone pointer repaired (2026-07-16):** frontmatter had REGRESSED to `v7.0.0`/"Per-Replica Processor Liveness & Self-Watchdog" (a CLOSED milestone) despite the 2026-06-18 fix, so `extractCurrentMilestone` sliced the v7.0.0 section (phases 59–62) and `phase.add` would have returned **63** — colliding with shipped v8.0.0 phases 63–68, the same silent mis-numbering that hit phases 71/73/74. Reset to `v9.0.0` / "Canonical Two-Consumer Recovery & L2 Delivery Proof" BEFORE adding Phase 76; numbering then simulated against the real SDK logic (slice = v9.0.0 section, phases 69–75 → next = 76) and confirmed by the actual add. Note `milestone_version` in `init.progress` output comes from `getMilestoneInfo`, which does NOT read STATE.md (it scans for a `🚧 **vN.N**` list entry, then falls back to the first non-shipped `##` heading) — it still reports v7.0.0 and is cosmetic; the pointer that governs numbering is `extractCurrentMilestone`, which does read STATE.md.
 - Phase 72 added: Processor always-write to L2 + uniform orchestrator pre-pipeline + unresolved-step metric. Processor writes `DataResult.Data` for EVERY business outcome (output-validation only flips result→Failed, never gates the write at `OutputTail.cs:60`; thrown ExecuteAsync caught into `DataResult{failed}` carrying the read `validatedData` fallback; StepFailed/StepCancelled carry a real EntryId, not `Guid.Empty`). Orchestrator drops the Completed-only `out:` read/delete branches (`OrchestratorPrePipeline.cs:84,114`) → all four TypedResultConsumer<T> shells uniform (exists-gate→read→resolve L1→terminal→fan-out→delete; clean-absent→idempotent skip; ExecutionId threaded D-13). Folds in the Phase-71-deferred trip-end metric: new `orchestrator_step_unresolved` counter (label `workflowId` only) at the two L1-resolution misses (stage-1 `L1[stepId]` miss→return; stage-3 `L1[nextStepId]` miss→continue). NOTE: SDK `phase.add` miscounted as 63 (collides with shipped v8.0.0 phases 63-68); manually corrected to 72 (next integer after 71). Distinct from the imported parallel-project Phase-72 metrics SPEC (uniform two-counter reshape) — that lands separately via /gsd-import (likely renumbered to 73).
+- Phase 80 added (2026-07-18): Deploy full system to local Kubernetes (Docker Desktop) — port the compose topology to k8s manifests (Deployments for app tiers, StatefulSets for postgres/redis/elasticsearch/rabbitmq), run the full stack healthy + prove one workflow end-to-end. Replicas: orchestrator×1 (single-owner SPOF by design), keeper×2, processor-sample×2, baseapi-service×1, prometheus×1, elasticsearch×1, otel-collector×1, redis×1, postgres×1, rabbitmq×1. Deployment-target proof paralleling the compose stack; no app-source change; preserve OTLP→collector wiring, k8s-DNS connection strings, healthcheck→probe mapping, SourceHash reseed, and ALL test-only env seams default-off. NOTE: SDK `phase.add` mis-fired twice — STATE.milestone had regressed to v7.0.0 again (→ mis-numbered 63, restored to v9.0.0); then phase.add also mis-PLACED the block at EOF under the shipped v8.0.0 section despite numbering v9.0.0=79→80 correctly (manually moved to follow Phase 79). See [[gsd-phase-numbering]]. Requirements TBD at spec.
 
 ### Pending Todos
 
@@ -1722,9 +1723,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-17T10:09:23.617Z
-Stopped at: Completed 79-04-PLAN.md
-Resume file: None
+Last session: --stopped-at
+Stopped at: Phase 80 context gathered
+Resume file: --resume-file
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
 **Phase 29 (Structured Execution-Scope Logging):** 5/5 plans complete — close gate GATE_EXIT=0 (405 Passed ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held; live scopeProof passes on a `processor-sample` Completed log); LOG-01..06 all complete. Awaiting orchestrator phase verification + `phase.complete`. Milestone v3.5.0 = 17/17 plans across phases 25-29.
