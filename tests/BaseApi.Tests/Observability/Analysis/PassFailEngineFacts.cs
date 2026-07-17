@@ -382,6 +382,33 @@ public sealed class PassFailEngineFacts
         Assert.NotEmpty(report.MissingDetail);
     }
 
+    [Fact]
+    public void KeeperReinject_BindingMiss_DetailNamesRecoverableButLost()
+    {
+        // Phase 79 (D-03 #2 contract pin): the WR-01-vetoed binding miss MUST emit a MissingDetail string
+        // naming "recoverable-but-lost" and "binding miss" — the EXACT substrings scripts/phase-79-falsify.ps1
+        // asserts on to distinguish a correct True-Positive from an accidental/wrong-reason FAIL. Pins
+        // PassFailEngine.cs:255-256 so a silent detail-string change can never break the live D-03 assertion
+        // undetected. Same synthetic WR-01 veto setup as KeeperReinject_VetoesRedisWipeTolerance_* above.
+        var stalled  = RunTrace.FromStepIds("corr-2", "exec-2", StalledHopStepIds, convergentStepId: ConvergentStepId);
+        var expected = Expect(("corr-2|exec-2", DistinctHopStepIds()));
+        var recovery = DateTimeOffset.Parse("2026-06-18T10:00:30Z");
+        var lastHop  = new Dictionary<string, DateTimeOffset> { ["corr-2|exec-2"] = DateTimeOffset.Parse("2026-06-18T10:00:10Z") };
+        var firstHop = new Dictionary<string, DateTimeOffset> { ["corr-2|exec-2"] = DateTimeOffset.Parse("2026-06-18T10:00:05Z") };
+        var keeperOutcome = new Dictionary<string, string>(StringComparer.Ordinal) { ["corr-2|exec-2"] = "reinject" };
+        var snap = ConservingSnapshot(results: 9);
+
+        var report = new PassFailEngine().Analyze(new[] { stalled }, snap, "TEST-05",
+            recoveryUtc: recovery, firstHopUtcByExecution: firstHop, lastHopUtcByExecution: lastHop,
+            keeperOutcomeByExecution: keeperOutcome, expectedStepIdsByExecution: expected);
+
+        Assert.Equal(1, report.Missing);
+        Assert.Equal(Verdict.Fail, report.Verdict);
+        Assert.Contains(report.MissingDetail, d =>
+            d.Contains("recoverable-but-lost", StringComparison.Ordinal)
+            && d.Contains("binding miss", StringComparison.Ordinal));
+    }
+
     // ── Phase 76 (ANL-01/02/03, SMP-01): the STEPID-KEYED structural path — synthetic stepId sets, ZERO
     //    Step_* labels. These prove the re-keyed completeness / ES-derived expected set / framework-redundancy
     //    reconciliation directly, independent of the value-oracle label facts above. ────────────────────────
