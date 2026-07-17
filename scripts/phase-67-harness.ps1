@@ -104,6 +104,7 @@ try {
         'TEST-08' = @{ targetContainers = @('processor-sample'); faultType = 'stop-only';       injectAfterNFires = 4; dwellSeconds = 0; notes = 'NEGATIVE (blind-spot demo): processor crash, NO recovery — dispatched-but-never-processed work is INVISIBLE (no Step_A) → PASS, proving the verdict cannot see fully-dead loss' }
         'TEST-09' = @{ targetContainers = @('processor-sample'); faultType = 'stop-on-inflight'; injectAfterNFires = 3; dwellSeconds = 0; notes = 'NEGATIVE (RMQ-timed FAIL): with the 3s per-hop delay hook on, kill the processor once its dispatch queue backlog >= 3 (executions visibly mid-flight, no recovery) — strands recoverable-but-lost runs → binding miss → FAIL' }
         'TEST-10' = @{ targetContainers = @('processor-sample'); faultType = 'stopstart-on-inflight'; injectAfterNFires = 3; dwellSeconds = 300; notes = 'OUTAGE-OUTLASTS-WINDOW: 3s delay hook on; kill on in-flight backlog then keep the processor down 300s (> the 300s observation window) and RESTART — does recovery complete within window+drain (PASS) or exceed the budget (FAIL)?' }
+        'FALSIFY-01' = @{ targetContainers = @(); faultType = 'inject-recovery-loss'; injectAfterNFires = 0; dwellSeconds = 0; notes = 'NEGATIVE CONTROL (gate-teeth): keeper env seam KEEPER_DEFEAT_REINJECT defeats exactly one reinject (K_EXECUTIONS=1, keeper scaled to 1 replica) → keeper logs "reinject" but suppresses the redispatch → byte-identical recoverable-but-lost binding miss → the sweep MUST flip this scenario to VERDICT_FAIL. NOT in the default TEST-01..07 capstone.' }
     }
 
     # Validate the requested id against the table BEFORE any docker/psql op (T-67-02).
@@ -123,6 +124,16 @@ try {
     if ($scenario.faultType -in @('stop-on-inflight','stopstart-on-inflight')) {
         $env:PROCESSOR_STEP_DELAY_MS = '3000'
         Write-Phase "  TEST-ONLY hook: PROCESSOR_STEP_DELAY_MS=3000 exported (baked into processor-sample at compose-up)." 'Yellow'
+    }
+
+    # TEST-ONLY (Phase 79 gate-teeth negative control): for FALSIFY-01, export the keeper reinject-defeat seam
+    # + the single-execution observation window BEFORE STEP A so `docker compose up` bakes KEEPER_DEFEAT_REINJECT
+    # into the keeper container (${KEEPER_DEFEAT_REINJECT:-0}). K_EXECUTIONS=1 bounds the window to ONE execution
+    # so the one-shot latch defeats exactly one reinject. Both cleared in the STEP-H finally.
+    if ($scenario.faultType -eq 'inject-recovery-loss') {
+        $env:KEEPER_DEFEAT_REINJECT = '1'
+        $env:K_EXECUTIONS           = '1'
+        Write-Phase "  TEST-ONLY hook: KEEPER_DEFEAT_REINJECT=1 + K_EXECUTIONS=1 exported (FALSIFY-01 negative control; baked into keeper at compose-up)." 'Yellow'
     }
 
     # -----------------------------------------------------------------------
@@ -318,7 +329,25 @@ try {
     # current - baseline >= N (proves the cron is ACTUALLY firing — V6). If the window elapses
     # without reaching N, abort loud (exit 60).
     # -----------------------------------------------------------------------
-    if ($scenario.faultType -ne 'none') {
+    if ($scenario.faultType -eq 'inject-recovery-loss') {
+        # NEGATIVE CONTROL (gate-teeth): NO container crash. The loss is manufactured entirely by the keeper
+        # KEEPER_DEFEAT_REINJECT seam exported above. Reduce the keeper to a SINGLE replica so the static
+        # one-shot latch is process-global (compose default is deploy.replicas: 2 → a per-process latch could
+        # otherwise defeat one reinject PER replica). Combined with K_EXECUTIONS=1 this makes "exactly one lost"
+        # unambiguous. Restored to 2 by the next run's plain `docker compose up` (compose file replicas: 2).
+        Write-Phase "STEP F.2: FALSIFY-01 — scaling keeper to a SINGLE replica (global one-shot latch guarantee)"
+        docker compose up -d --no-recreate --scale keeper=1 keeper | Out-Null
+        if ($LASTEXITCODE -ne 0) { Write-Phase "docker compose --scale keeper=1 failed." 'Red'; exit 60 }
+        # Confirm exactly one keeper instance is running before observing.
+        $keeperCount = @(docker compose ps keeper --format json 2>$null | Where-Object { $_ -match '\S' }).Count
+        if ($keeperCount -ne 1) { Write-Phase "expected exactly 1 keeper replica, saw $keeperCount. Aborting." 'Red'; exit 60 }
+        Write-Phase "  keeper scaled to 1 replica ($keeperCount running). Keeper seam will defeat the first reinject." 'Gray'
+        # Pin RECOVERY_UTC at window start so the defeated reinject is a POST-recovery binding miss (the redis-wipe
+        # in-flight tolerance never applies; nothing was wiped) — mirrors the negative-path idiom at F.3.
+        $recoveryUtc = $windowStart
+        Write-Phase "  RECOVERY_UTC pinned at window start $($recoveryUtc.ToString('o')); no tier crash." 'Yellow'
+    }
+    elseif ($scenario.faultType -ne 'none') {
         # -------------------------------------------------------------------
         # STEP F.2 — TRIGGER. 'stop-start'/'stop-only': wait for N observed fires (proves the cron is
         # firing — V6). 'stop-on-inflight' (ES-timed negative path): poll ES FAST until a started-but-not-
@@ -528,7 +557,7 @@ try {
         dotnet test tests/BaseApi.Tests/BaseApi.Tests.csproj -c Release -- --filter-method "*Analyze_Window_Yields_Pass*" 2>&1 | Out-String | Write-Host
         $analyzerExit = $LASTEXITCODE
     } finally {
-        Remove-Item Env:SCENARIO_ID, Env:WINDOW_START_UTC, Env:WINDOW_END_UTC, Env:RECOVERY_UTC, Env:K_EXECUTIONS, Env:PROCESSOR_STEP_DELAY_MS -ErrorAction SilentlyContinue
+        Remove-Item Env:SCENARIO_ID, Env:WINDOW_START_UTC, Env:WINDOW_END_UTC, Env:RECOVERY_UTC, Env:K_EXECUTIONS, Env:PROCESSOR_STEP_DELAY_MS, Env:KEEPER_DEFEAT_REINJECT -ErrorAction SilentlyContinue
     }
 
     # Locate + echo the analyzer report path (D-04 requires printing it).
