@@ -817,6 +817,16 @@ Plans:
 - [x] 78-05-PLAN.md — GAP (D-04 fix): canonical-record fix — select ONLY the `"hop executed"` processor consume record as the observed did-run hop (via body.text discrimination in a testable StructuralCohort classifier), route `"terminal reached"` → proven, ignore `"result sent"`/`"fan-out"`; + hermetic StructuralCohortFacts reproducing multi-record-per-hop (collapse→Pass; genuine redelivery→Fail); hermetic gate green, 0-warning Debug+Release [wave 5] (gap_closure) — COMPLETE (`a1068ee`/`e470428`; StructuralCohort classifier + 3 regression facts; Analysis 32/32 green; 0-warning Debug+Release)
 - [x] 78-06-PLAN.md — GAP (D-04 re-gate): re-run the reseed-first SourceHash + 7-scenario live sweep after the 78-05 fix [wave 6] (gap_closure) — COMPLETE 2026-07-17: **CLEAN 7/7 PASS — D-04 CLOSED.** Reseed-first live sweep reproduced the genuine da91d32 all-PASS baseline on real Phase-77 data (TEST-01 19/19, 02 17/17, 03 18/18, 04 17/17, 05 23/23, 06 14/14, 07 25/25 — all Missing==0, all Duplicates==0), value axis dark. **The 78-04 over-count (`Duplicates==StartedRuns`) is GONE — no-fault TEST-01 Duplicates==0 (was 19/19).** BASELINE-ORACLE CORRECTION (T-78-13): gated against `git show da91d32:...` (7/7 PASS), NOT the clobbered HEAD (commit `5096dcd` → 0 Pass). TEST-07 analyze re-invoked against its completed ES window (killed mid-STEP-H, same 78-04 trap; no stale copy read). Roll-up regenerated to 7/7 PASS, restoring the tracked baseline. See `78-06-SUMMARY.md`.
 
+### Phase 79: Falsification harness for the resilience sweep — negative-control proving the pass/fail gate has teeth: a toggleable env-gated lossy injection seam (family of SCENARIO_ID/K_EXECUTIONS) that defeats recovery for exactly one {correlationId,executionId} so it registers as recoverable-but-lost (not a clean keeper-drop, not tolerated in-flight-at-wipe), with the ES telemetry shape byte-identical to a real loss; a one-scenario harness (mirroring phase-67-harness.ps1) runs it and asserts phase-68-sweep.ps1 flips that scenario to VERDICT_FAIL, confirming a True Positive fires and ruling out the False Negative (silent-green) risk; start with the recoverable-but-lost binding axis (missing/duplicate axes are follow-on); validates the observer/gate, not the system recovery
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 78
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 79 to break down)
+
 ---
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
 
