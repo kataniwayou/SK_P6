@@ -1,37 +1,24 @@
 ---
 phase: 78-rework-the-resilience-sweep-to-verify-purely-from-the-new-fr
-verified: 2026-07-16T22:51:06Z
-status: gaps_found
-score: 11/12 must-haves verified
+verified: 2026-07-17T12:00:00Z
+status: passed
+score: 12/12 must-haves verified
 overrides_applied: 0
-gaps:
-  - truth: "All 7 live scenarios (TEST-01..07) reproduce their committed-HEAD baseline verdict (all PASS), reconstructed from framework ES logs alone (D-04)"
-    status: failed
-    reason: >
-      The D-04 live gate WAS executed end-to-end (mandatory SourceHash reseed + 7-scenario
-      scripts/phase-68-sweep.ps1 live on Docker, ~3.5h) but did NOT reproduce the HEAD baseline.
-      On fresh Phase-77 live data the reworked analyzer flips EVERY scenario PASS->FAIL, including
-      the no-fault baseline TEST-01, by flagging 100% of executions as effect-once/duplicate
-      violations (Duplicates == StartedRuns == CompleteRuns, Missing == 0, InFlightLoss == 0, value
-      axis fully dark). TEST-07 is INDETERMINATE (analyze killed mid-run; on-disk copy is a stale
-      2026-07-16 report and must not be read as this run's result). This is a genuine verdict SHIFT,
-      correctly surfaced as a finding per the runbook (not silently re-baselined, not forced green).
-    artifacts:
-      - path: "analyzer-reports/phase-68-summary.json"
-        issue: "6 of 7 scenarios verdict=Fail (all with Duplicates==StartedRuns), 1 INDETERMINATE, vs HEAD baseline of 7/7 Pass"
-      - path: "tests/BaseApi.Tests/Observability/AnalyzerE2ETests.cs"
-        issue: "BuildStepSearchBody's structural cohort query does not collapse multiple StepId-scoped framework records per {executionId, stepId} hop into one step execution — Phase 77's uniform execution-scope logging now emits multiple records per hop (dispatch-send, dispatch-consume, result-send, result-consume, keeper recovery-consume), each counted as a distinct step execution by the reworked D-01/D-02/D-03 structural query, tripping the effect-once/duplicate check on every hop of every live run"
-    missing:
-      - "A step-query/cohort de-duplication that collapses multiple execution-scoped framework log records per {executionId, stepId} to a single step execution (e.g. select only the canonical record kind, or de-dup by (executionId, stepId) before counting) — the hermetic RunTrace.FromStepIds facts feed exactly one record per stepId, a shape the live pipeline no longer produces, so this gap is invisible hermetically and only surfaces live"
-      - "Re-run of the SourceHash reseed + 7-scenario live gate after the fix, confirming 7/7 verdict reproduction against the HEAD baseline (git show HEAD:analyzer-reports/phase-68-summary.json)"
+re_verification:
+  previous_status: gaps_found
+  previous_score: 11/12
+  gaps_closed:
+    - "All 7 live scenarios (TEST-01..07) reproduce their committed-HEAD baseline verdict (all PASS), reconstructed from framework ES logs alone (D-04)"
+  gaps_remaining: []
+  regressions: []
 ---
 
 # Phase 78: Rework the resilience sweep to verify purely from the new framework ES logs Verification Report
 
-**Phase Goal:** Adapt the analyzer to the Phase-77 consistent-logging model so the resilience verdict reconstructs PURELY from framework ES logs — D-01 (entry-marker self-exclusion via ABSENT ExecutionId), D-02 (keeper reinject `must_not` discrimination), D-03 (drop the concrete value oracle), D-04 (re-run the SourceHash reseed + 7-scenario live gate and confirm 7/7 by ES logs). Keep Prometheus as the secondary collector-blind axis.
-**Verified:** 2026-07-16T22:51:06Z
-**Status:** gaps_found
-**Re-verification:** No — initial verification
+**Phase Goal:** Adapt the analyzer to the Phase-77 consistent-logging model so the resilience verdict reconstructs PURELY AND CORRECTLY from framework ES logs — D-01 (entry-marker self-exclusion via ABSENT ExecutionId), D-02 (keeper reinject `must_not` discrimination), D-03 (drop the concrete value oracle), D-04 (re-run the SourceHash reseed + 7-scenario live gate and confirm 7/7 by ES logs). Keep Prometheus as the secondary collector-blind axis.
+**Verified:** 2026-07-17T12:00:00Z
+**Status:** passed
+**Re-verification:** Yes — after gap closure (78-05 fix + 78-06 live re-gate)
 
 ## Goal Achievement
 
@@ -39,90 +26,99 @@ gaps:
 
 | # | Truth | Status | Evidence |
 |---|-------|--------|----------|
-| 1 | The entry marker is excluded ONLY by the `exists attributes.ExecutionId` ES query filter — no engine-level `IsEntryMarker` predicate remains (D-01) | ✓ VERIFIED | `grep -c "IsEntryMarker" PassFailEngine.cs` = 0; `var scored = runs.ToList();` present at PassFailEngine.cs:122; `grep -c "IsEntryMarkerExecution\|entryMarkerCorrelations" AnalyzerE2ETests.cs` = 0; commit `1daa8f6` |
-| 2 | Keeper reinject records never enter the structural completeness cohort — structural query forbids `attributes.ReinjectOutcome` (D-02) | ✓ VERIFIED | `AnalyzerE2ETests.cs:290-291` contains `"must_not": [{ "exists": { "field": "{{EsIndexNames.ReinjectOutcomeFieldPath}}" } }]` inside `BuildStepSearchBody`; `BuildKeeperOutcomeSearchBody` keeps the symmetric `exists` requirement (:383); commit `02cd16d` |
-| 3 | The hermetic analyzer facts compile and run green (D09 entry-marker fact removed, not left dangling) | ✓ VERIFIED | `grep -c "EntryMarker_EmptyExecutionId_Excluded" PassFailEngineFacts.cs` = 0; live re-run this session: `Observability.Analysis` namespace 29/29 pass, 0 failed, 309ms |
-| 4 | The value-oracle ES query and value-parse path are gone from the fixture — no StepLabel/Produced evidence fetched or parsed | ✓ VERIFIED | `grep -c "BuildValueOracleSearchBody\|valueHits\|SeedsByExecution\|seedsByExec\|TryReadSum\|TryReadProduced" AnalyzerE2ETests.cs` = 0; `TryReadTimestamp`/`BuildKeeperOutcomeMap`/`BuildKeeperOutcomeSearchBody` retained; commit `4dfefdb` |
-| 5 | The engine's value-CHAIN machinery is gone (CheckValueChain, ResolveSeed, seedsByExecution param, telemetry-gap path #1, WR-02 guard, value-chain loop) | ✓ VERIFIED | `grep -c "CheckValueChain\|ResolveSeed\|seedsByExecution\|valueOracleSupplied\|ValueChainOk\|ValueChainDetail" PassFailEngine.cs` = 0; commit `9a2b696` |
-| 6 | ANL-03 framework-redundancy (telemetry-gap path #2) survives as the SOLE non-binding reconciliation | ✓ VERIFIED | `PassFailEngine.cs:201-218` — "FRAMEWORK-REDUNDANCY RECONCILIATION (ANL-03, NO seed oracle required) — SOLE non-binding path" comment + logic intact and byte-unchanged per SUMMARY |
-| 7 | `PassFailEngineValueChainFacts.cs` is deleted entirely (375 lines) — not skipped | ✓ VERIFIED | `ls tests/BaseApi.Tests/Observability/Analysis/PassFailEngineValueChainFacts.cs` → "No such file or directory" |
-| 8 | The `ValueChainOk`/`ValueChainDetail` required members are removed from `AnalyzerReport.cs`; `TelemetryGap`/`TelemetryGapDetail` are retained | ✓ VERIFIED | `grep -c "ValueChainOk\|ValueChainDetail" AnalyzerReport.cs` = 0; `TelemetryGap` present (path #2 populates it) |
-| 9 | The last value-oracle residue is gone from the engine — no `ExpectedHopOffset`, no `valueOracleHopSet`, no `DistinctLabels` label-fallback branch in `ExpectedFor` | ✓ VERIFIED | `grep -c "ExpectedHopOffset\|valueOracleHopSet" PassFailEngine.cs` = 0; `grep -n "DistinctLabels" RunTrace.cs` = empty (member deleted); commit `5cca3a5` |
-| 10 | The ~6 facts that leaned on the label-fallback now assert the SAME stepId completeness mechanism the live gate uses (explicit `expectedStepIdsByExecution`) | ✓ VERIFIED | `PassFailEngineFacts.cs` contains 13 references to `expectedStepIdsByExecution` and 12 to `RunTrace.FromStepIds`; the 6 named facts (Incomplete_StartedRun_DropsStepF2..., etc.) migrated per SUMMARY, assertions unchanged |
-| 11 | The SourceHash reseed runs FIRST (rebuild both host configs + docker compose build → graph-delete → seed → 204) before the sweep, and all 7 scenarios (TEST-01..07) reproduce their HEAD baseline verdict, reconstructed from framework ES logs ALONE | ✗ FAILED | Reseed WAS executed correctly (78-04-SUMMARY.md: graph-DELETE → seed → 204 confirmed, heal-wait trap hit and resolved). But verdict reproduction FAILED: 6/7 scenarios flip Pass→Fail (`Duplicates==StartedRuns` for all fresh scenarios), TEST-07 INDETERMINATE. See Gaps below. |
+| 1 | The entry marker is excluded ONLY by the `exists attributes.ExecutionId` ES query filter — no engine-level `IsEntryMarker` predicate remains (D-01) | ✓ VERIFIED (regression check) | `grep -n "exists.*ExecutionId\|ExecutionIdFieldPath" AnalyzerE2ETests.cs` still shows the two `exists ExecutionIdFieldPath` clauses at :286/:316, unchanged by the 78-05 fix; `grep -c "IsEntryMarker" PassFailEngine.cs` = 0 (unchanged) |
+| 2 | Keeper reinject records never enter the structural completeness cohort — structural query forbids `attributes.ReinjectOutcome` (D-02) | ✓ VERIFIED (regression check) | `grep -n "must_not\|ReinjectOutcome" AnalyzerE2ETests.cs` shows the `must_not exists ReinjectOutcomeFieldPath` clause intact at :290-291 and the symmetric `BuildKeeperOutcomeSearchBody` clause at :383, unchanged by 78-05 |
+| 3 | The hermetic analyzer facts compile and run green, including new D-04 regression facts (D-01/D-02/D-03 truths + StructuralCohortFacts) | ✓ VERIFIED | Live re-run this session: `BaseApi.Tests.exe --filter-not-trait Category=RealStack --filter-namespace "*Observability.Analysis*"` → total 32, failed 0, succeeded 32 (prior 29 + 3 new `StructuralCohortFacts`), matches 78-05-SUMMARY.md claim exactly |
+| 4 | The value-oracle ES query and value-parse path are gone (D-03) | ✓ VERIFIED (regression check, unchanged since prior verification) | Prior grep evidence still holds; 78-05/78-06 touched only the structural cohort discrimination, not the value-oracle deletion |
+| 5 | The engine's value-CHAIN machinery is gone (D-03) | ✓ VERIFIED (regression check, unchanged) | Unchanged by 78-05/78-06 |
+| 6 | The live structural cohort counts each genuine hop execution exactly ONCE by selecting only the canonical `"hop executed"` processor consume record — multi-record-per-hop framework logs (`result sent`, `fan-out`, `terminal reached`, keeper reinject) no longer inflate the observed stepId list | ✓ VERIFIED | `StructuralCohort.cs` defines `ConsumeRecordPrefix = "hop executed"` (:42) and `TerminalRecordPrefix = "terminal reached"` (:49); `Classify` routes only `"hop executed"` to observed, `"terminal reached"` to proven, everything else ignored; `AnalyzerE2ETests.cs:515` calls `StructuralCohort.Classify(structuralRecords)` |
+| 7 | A no-fault run (each stepId's canonical record fires once) yields zero illegitimate duplicates → PASS | ✓ VERIFIED | `StructuralCohortFacts.NoFault_MultiRecordPerHop_Collapses_ToOneObservedHop_Pass` feeds 30 records (10 stepIds × 3 record kinds) → asserts 10 observed hops, `HasIllegitimateDuplicate == false`, `Verdict.Pass`; ran green live this session |
+| 8 | A genuinely twice-executed step (TWO `"hop executed"` records for one `{executionId, stepId}`) STILL trips Duplicates — the fix does NOT collapse to presence-only | ✓ VERIFIED | `StructuralCohortFacts.GenuineRedelivery_TwoConsumeRecords_ForOneStep_TripsDuplicate` asserts the duplicate survives (`observed.Count(s => s == "hop-c") == 2`), `HasIllegitimateDuplicate == true`, `Verdict.Fail`; ran green live this session; `grep -c "Distinct\|GroupBy"` on `StructuralCohort.cs` = 0 (no naive de-dup on the observed path) |
+| 9 | A hermetic fact reproduces the multi-record-per-hop live shape and pins the collapse — the bug class invisible under the old one-record-per-stepId `RunTrace.FromStepIds` shape is now visible hermetically | ✓ VERIFIED | `StructuralCohortFacts.cs` (172 lines, 3 facts) reproduces the exact 78-04 evidence shape (30 records/10 stepIds/3 per hop) via synthetic `FrameworkLogRecord`s, in the shared `BaseApi.Tests.Observability.Analysis` namespace picked up by the hermetic filter |
+| 10 | The hermetic analyzer suite is green (0 new failures) and the solution builds 0-warning Debug+Release | ✓ VERIFIED | `dotnet build tests/BaseApi.Tests/BaseApi.Tests.csproj -c Debug` this session → Build succeeded, 0 Warning(s), 0 Error(s); analyzer subset 32/32 green |
+| 11 | The SourceHash reseed runs FIRST before the sweep, and all 7 scenarios (TEST-01..07) reproduce their committed-HEAD baseline verdict (all PASS), reconstructed from framework ES logs ALONE (D-04) | ✓ VERIFIED | `78-06-SUMMARY.md`: reseed-first runbook executed (graph-DELETE → seed → 204 confirmed clean, no heal-wait trap this run), live 7-scenario sweep on Docker (~2h), all 7 scenarios Pass with `Missing==0, Duplicates==0` (TEST-01 19/19, TEST-02 17/17, TEST-03 18/18, TEST-04 17/17, TEST-05 23/23, TEST-06 14/14, TEST-07 25/25), gated against the genuine `da91d32` all-PASS baseline (7/7) |
+| 12 | The tracked `analyzer-reports/phase-68-summary.json` at HEAD reflects the 7/7 PASS live re-gate (not the 78-04 clobbered failed-finding state) | ✓ VERIFIED | Read the tracked file directly this session: 7 entries, all `"verdict": "Pass"`, `startedRuns`/`completeRuns` match 78-06-SUMMARY.md's table exactly (19/19, 17/17, 18/18, 17/17, 23/23, 14/14, 25/25); `git status --short analyzer-reports/` clean (no working-tree drift); `git log` shows commit `d8d836b` "docs(78-06): complete D-04 live re-gate — 7/7 PASS, D-04 CLOSED" as the current tip for this file, superseding the `5096dcd` clobber |
 
-**Score:** 10/11 derived truths fully verified (D-01/D-02/D-03 truths 1-10 all VERIFIED); truth 11 (D-04 reseed+reproduction) is PARTIALLY true — reseed mechanics succeeded but baseline reproduction failed, which is the phase's terminal proof and is treated as FAILED for scoring purposes. Combined score: **11/12 must-haves** (counting the reseed-execution half of truth 11 as a separate verified sub-item, and the reproduction half as the single failed item).
+**Score:** 12/12 truths verified.
+
+### Deferred Items
+
+None.
 
 ### Required Artifacts
 
 | Artifact | Expected | Status | Details |
 |----------|----------|--------|---------|
-| `tests/BaseApi.Tests/Observability/Analysis/PassFailEngine.cs` | Pure verdict engine, entry-marker + value-chain + all value-oracle residue deleted | ✓ VERIFIED | All grep acceptance criteria from Plans 01-03 hold; hermetic facts pass |
-| `tests/BaseApi.Tests/Observability/AnalyzerE2ETests.cs` | ES→RunTrace fixture excluding keeper records + no value-oracle fetch/parse | ✓ VERIFIED | `must_not` clause present; value-oracle query/parse gone; structural/dispatch/keeper/trip-duration paths intact |
-| `tests/BaseApi.Tests/Observability/Analysis/PassFailEngineFacts.cs` | Hermetic facts, D09 removed, OracleAbsent fact removed, 6 facts migrated | ✓ VERIFIED | 29/29 pass live re-run this session |
-| `tests/BaseApi.Tests/Observability/Analysis/PassFailEngineValueChainFacts.cs` | Deleted entirely | ✓ VERIFIED | File absent |
-| `tests/BaseApi.Tests/Observability/Analysis/AnalyzerReport.cs` | `ValueChainOk`/`ValueChainDetail` removed, `TelemetryGap` retained | ✓ VERIFIED | grep confirms |
-| `tests/BaseApi.Tests/Observability/Analysis/RunTrace.cs` | `DistinctLabels` removed (no surviving consumer) | ✓ VERIFIED | grep confirms |
-| `analyzer-reports/phase-68-summary.json` | 7-scenario rerun roll-up reproducing HEAD baseline (all Pass) | ✗ FAILED (STUB-EQUIVALENT OUTCOME) | File exists and is a genuine fresh rerun (not stale/stub), but its content is 6× Fail + 1× INDETERMINATE vs the required all-Pass baseline — the artifact is honest and well-formed, but the underlying system behavior it reports does not meet the D-04 acceptance gate |
+| `tests/BaseApi.Tests/Observability/Analysis/StructuralCohort.cs` | Pure canonical-record classifier + `FrameworkLogRecord` type, shared by fixture + hermetic facts | ✓ VERIFIED | Exists (10,129 bytes, mtime 2026-07-17 09:13); `ConsumeRecordPrefix`/`TerminalRecordPrefix` constants present; `Classify` routes correctly; no `Distinct`/`GroupBy` on the observed path |
+| `tests/BaseApi.Tests/Observability/Analysis/StructuralCohortFacts.cs` | Hermetic regression facts pinning collapse→Pass and genuine-redelivery→Fail | ✓ VERIFIED | Exists (9,546 bytes, mtime 2026-07-17 09:16); 3 facts, all reference `HasIllegitimateDuplicate`/`Duplicates`/`Verdict`; ran green (3/3) this session as part of the 32/32 namespace run |
+| `tests/BaseApi.Tests/Observability/AnalyzerE2ETests.cs` | `BuildRunTraces` delegates to `StructuralCohort.Classify`; D-01/D-02 filters unchanged | ✓ VERIFIED | `StructuralCohort.Classify(structuralRecords)` called at :515; `exists ExecutionIdFieldPath` (D-01) and `must_not exists ReinjectOutcomeFieldPath` (D-02) both present and unchanged |
+| `analyzer-reports/phase-68-summary.json` (tracked, HEAD) | 7-scenario roll-up reproducing the all-PASS baseline | ✓ VERIFIED | 7/7 `"verdict": "Pass"`; matches 78-06-SUMMARY.md table; clean git status (no drift) |
 
 ### Key Link Verification
 
 | From | To | Via | Status | Details |
 |------|----|----|--------|---------|
-| `AnalyzerE2ETests.BuildStepSearchBody` | `EsIndexNames.ReinjectOutcomeFieldPath` | `must_not exists` clause | ✓ WIRED | Pattern `must_not[\s\S]*ReinjectOutcomeFieldPath` matches at `AnalyzerE2ETests.cs:290-291` |
-| `PassFailEngine.Analyze` | telemetry-gap path #2 (ANL-03) | framework-redundancy reconciliation | ✓ WIRED | `PassFailEngine.cs:201-218`, comment + logic intact, referenced by surviving facts `PassFailEngine_ReconcileRedundancy_MissingHop`/`_MissingBoth`/`Verdict_NonZeroTelemetryGap_StaysPass_D01` |
-| `PassFailEngine.ExpectedFor` | `expectedStepIdsByExecution` | explicit expected-set resolution (label fallback removed) | ✓ WIRED | `DistinctLabels.Count > 0` branch grep = 0; `expectedStepIdsByExecution` referenced 13× in facts, resolves to `ExpectedFor`'s primary branch |
-| `scripts/phase-68-sweep.ps1` | `scripts/phase-67-harness.ps1` | per-scenario run-all no-fail-fast | ✓ WIRED (mechanically) / ✗ FAILED (outcome) | The sweep DID invoke the harness across all 7 scenarios (mechanical wiring intact — this is how the finding was produced), but the harness's own read was stale-shadowed for TEST-01 (Debug-shadow trap) and the aggregate outcome does not meet the D-04 gate |
+| `AnalyzerE2ETests.BuildRunTraces` | `StructuralCohort.Classify` | shared classifier call | ✓ WIRED | `AnalyzerE2ETests.cs:515` `var cohort = StructuralCohort.Classify(structuralRecords);` |
+| `AnalyzerE2ETests.BuildStepSearchBody` | `EsIndexNames.ReinjectOutcomeFieldPath` | `must_not exists` clause (D-02) | ✓ WIRED (regression-checked) | Unchanged since prior verification, `AnalyzerE2ETests.cs:290-291` |
+| `AnalyzerE2ETests.BuildStepSearchBody` | `EsIndexNames.ExecutionIdFieldPath` | `exists` clause (D-01) | ✓ WIRED (regression-checked) | Unchanged since prior verification, `AnalyzerE2ETests.cs:286` |
+| `StructuralCohort.Classify` | `RunTrace.FromStepIds` | observed `stepIdsByInstance` per `(corr,exec)` | ✓ WIRED | `StructuralCohortFacts.cs` calls `RunTrace.FromStepIds(Corr, Exec, observed)` directly against `Classify`'s output in all 3 facts |
+| `scripts/phase-68-sweep.ps1` | `scripts/phase-67-harness.ps1` | per-scenario run-all no-fail-fast | ✓ WIRED (outcome confirmed) | 78-06-SUMMARY.md: sweep executed across all 7 scenarios, clean 7/7 PASS this time (vs the 78-04 mechanical-only wiring) |
 
 ### Data-Flow Trace (Level 4)
 
 | Artifact | Data Variable | Source | Produces Real Data | Status |
 |----------|---------------|--------|---------------------|--------|
-| `analyzer-reports/{id}.json` (fresh Release reports TEST-01..06) | `Verdict`/`StartedRuns`/`CompleteRuns`/`Duplicates` | Live ES query via `BuildStepSearchBody` against the Docker compose stack | Yes — real, non-fabricated live ES data (mtime 2026-07-17 00:42..01:25, confirmed fresh) | ✓ FLOWING (but the data reveals the D-04 gap, not a hollow artifact) |
-| `analyzer-reports/phase-68-summary.json` | roll-up of the 7 `{id}.json` | `phase-68-sweep.ps1` tabulation | Yes for TEST-01..06; TEST-07 is a stale prior-run copy, correctly flagged INDETERMINATE in the roll-up rather than silently reused | ✓ FLOWING (honest, not hollow) |
+| `analyzer-reports/{id}.json` (fresh Release reports TEST-01..07, 78-06 run) | `Verdict`/`StartedRuns`/`CompleteRuns`/`Duplicates` | Live ES query via `BuildStepSearchBody` → `StructuralCohort.Classify` against the Docker compose stack, post-78-05 fix | Yes — real, non-fabricated live data (78-06-SUMMARY.md: all mtime 2026-07-17 09:45..10:47, one report per scenario, no Debug shadow) | ✓ FLOWING |
+| `analyzer-reports/phase-68-summary.json` (tracked, HEAD) | roll-up of the 7 `{id}.json` | `phase-68-sweep.ps1` tabulation | Yes — 7/7 Pass, verified directly against the file content this session | ✓ FLOWING |
 
 ### Behavioral Spot-Checks
 
 | Behavior | Command | Result | Status |
 |----------|---------|--------|--------|
-| Hermetic analyzer facts (Observability.Analysis namespace) run green | `tests/BaseApi.Tests/bin/Debug/net8.0/BaseApi.Tests.exe --filter-not-trait Category=RealStack --filter-namespace "*Observability.Analysis*"` | total 29, succeeded 29, failed 0, 309ms | ✓ PASS |
-| D-01/D-02/D-03 commits exist in git history | `git show --stat 1daa8f6 / 02cd16d / 5cca3a5` | All 3 commits found with matching diffs (entry-marker delete, keeper must_not, ExpectedHopOffset residue delete) | ✓ PASS |
-| D-04 live sweep produced fresh (non-fabricated) reports | Inspected `78-04-SUMMARY.md` mtime evidence + `analyzer-reports/phase-68-summary.json` content | 6 fresh Release reports + 1 correctly-flagged stale/INDETERMINATE; matches SUMMARY narrative exactly | ✓ PASS (confirms the finding is real, not a reporting artifact) |
+| Hermetic analyzer facts (Observability.Analysis namespace) run green, including new D-04 regression facts | `tests/BaseApi.Tests/bin/Debug/net8.0/BaseApi.Tests.exe --filter-not-trait Category=RealStack --filter-namespace "*Observability.Analysis*"` (run live this session) | total 32, succeeded 32, failed 0, 1s 117ms | ✓ PASS |
+| Debug build 0-warning | `dotnet build tests/BaseApi.Tests/BaseApi.Tests.csproj -c Debug` (run live this session) | Build succeeded, 0 Warning(s), 0 Error(s) | ✓ PASS |
+| Commits for 78-05/78-06 exist and match claimed content | `git show --stat a1068ee / e470428 / d8d836b` | All 3 found; `a1068ee` = StructuralCohort classifier, `e470428` = regression facts, `d8d836b` = D-04 live re-gate + roll-up restore | ✓ PASS |
+| Tracked baseline file is 7/7 Pass at HEAD, no working-tree drift | `cat analyzer-reports/phase-68-summary.json`; `git status --short analyzer-reports/`; `git log --oneline -- analyzer-reports/phase-68-summary.json` | 7/7 `"verdict": "Pass"`; clean status; `d8d836b` is the current tip, correcting the `5096dcd` clobber | ✓ PASS |
+| No `Distinct`/`GroupBy` collapse on the observed did-run path (forbidden naive fix rejected) | `grep -c "Distinct\|GroupBy" StructuralCohort.cs` | exit 1 (no matches) | ✓ PASS |
 
-Step 7b note: the D-04 live re-run itself was NOT re-executed by this verification (per the orchestrator's explicit instruction — it requires ~3.5h + a live Docker stack). The `78-04-SUMMARY.md` and the rerun `analyzer-reports/phase-68-summary.json` are treated as authoritative evidence, and their content was cross-checked for internal consistency (verdict table matches JSON, root-cause narrative matches the `Duplicates == StartedRuns` signature in the JSON).
+Step 7b note: the D-04 live re-run itself was NOT re-executed by this verification (per explicit instruction — ~3.5h + live Docker stack). `78-06-SUMMARY.md` and the tracked `analyzer-reports/phase-68-summary.json` are treated as authoritative live evidence. Both were cross-checked for internal consistency this session: the tracked file's per-scenario `startedRuns`/`completeRuns` values match the SUMMARY's verdict table exactly (19/19, 17/17, 18/18, 17/17, 23/23, 14/14, 25/25), and `git log`/`git status` confirm the file is genuinely at HEAD with no drift — this is not merely trusting prose, it is byte-level cross-verification of the tracked artifact against the narrative.
 
 ### Requirements Coverage
 
 | Requirement | Source Plan | Description | Status | Evidence |
 |-------------|-------------|-------------|--------|----------|
-| D-01 | 78-01-PLAN.md | Entry-marker: delete the detector; `exists attributes.ExecutionId` is the sole exclusion | ✓ SATISFIED | Truths 1, commits `1daa8f6`; hermetic facts green |
-| D-02 | 78-01-PLAN.md | Keeper discrimination: `must_not exists attributes.ReinjectOutcome` on the structural query | ✓ SATISFIED | Truth 2, commit `02cd16d`; symmetric with `BuildKeeperOutcomeSearchBody` |
-| D-03 | 78-02-PLAN.md, 78-03-PLAN.md | Value oracle: full deletion (fixture query/parse, engine value-chain, `PassFailEngineValueChainFacts.cs`, `ExpectedHopOffset` residue, fact migration) | ✓ SATISFIED | Truths 4-10, commits `4dfefdb`/`9a2b696`/`5cca3a5`; hermetic gate green (29/29, 0 new failures vs baseline) |
-| D-04 | 78-04-PLAN.md | Live-gate acceptance: reseed + 7-scenario sweep reproduces HEAD baseline (all 7 PASS) from framework ES logs alone | ✗ BLOCKED | 78-04-SUMMARY.md: reseed executed correctly, but 6/7 scenarios verdict-shifted Pass→Fail and 1/7 is INDETERMINATE. **Requirement D-04 remains OPEN** — root cause identified (structural step query does not collapse multi-record hops per `{executionId, stepId}`), but not yet fixed. |
+| D-01 | 78-01-PLAN.md | Entry-marker: delete the detector; `exists attributes.ExecutionId` is the sole exclusion | ✓ SATISFIED | Unchanged since prior verification; regression-confirmed this session |
+| D-02 | 78-01-PLAN.md | Keeper discrimination: `must_not exists attributes.ReinjectOutcome` on the structural query | ✓ SATISFIED | Unchanged since prior verification; regression-confirmed this session |
+| D-03 | 78-02-PLAN.md, 78-03-PLAN.md | Value oracle: full deletion | ✓ SATISFIED | Unchanged since prior verification |
+| D-04 | 78-04-PLAN.md (finding), 78-05-PLAN.md (fix), 78-06-PLAN.md (re-gate) | Live-gate acceptance: reseed + 7-scenario sweep reproduces the all-PASS baseline from framework ES logs alone | ✓ SATISFIED — CLOSED | 78-05 fixed the structural over-count via `StructuralCohort` canonical-record selection (hermetically proven, 32/32 green); 78-06 re-ran the live gate and confirmed 7/7 PASS on real Phase-77 data, `Duplicates==0` on every scenario including no-fault TEST-01 (was 19/19 in the 78-04 finding); tracked baseline restored to 7/7 at HEAD |
 
 ### Anti-Patterns Found
 
 | File | Line | Pattern | Severity | Impact |
 |------|------|---------|----------|--------|
-| (none) | — | No TODO/FIXME/PLACEHOLDER/stub patterns found in the 5 modified analyzer files | — | Deletions were genuine, not stubbed-out or dormant-disabled |
+| (none) | — | No TODO/FIXME/PLACEHOLDER/stub patterns found in `StructuralCohort.cs`, `StructuralCohortFacts.cs`, or the modified `AnalyzerE2ETests.cs` regions | — | The D-04 fix is a genuine canonical-record selection, not a stub or forced-green shortcut; the explicitly-forbidden naive de-dup was verifiably NOT used (`grep -c "Distinct\|GroupBy"` = 0 on the observed path) |
 
 ### Human Verification Required
 
-None. The D-04 outcome is a fully machine-produced, well-documented finding (fresh ES-backed reports, cross-checked against the HEAD baseline JSON, root cause identified with high confidence). No visual/UX/subjective judgment is needed — this is a clear-cut blocking regression requiring a code fix (step-query de-duplication), not human interpretation.
+None. All D-01/D-02/D-03/D-04 evidence is machine-verifiable: static grep against acceptance criteria, live hermetic test re-run (32/32 green this session), live build re-run (0-warning Debug), git commit/history inspection, and byte-level cross-check of the tracked baseline JSON against the 78-06-SUMMARY.md narrative. No visual/UX/subjective judgment is needed.
 
 ### Gaps Summary
 
-**D-01, D-02, D-03 are fully and correctly implemented** — verified both by static grep/code inspection against every acceptance criterion in Plans 01-03, and by a live hermetic test re-run this session (`Observability.Analysis` namespace: 29/29 pass). All deletions are genuine (no dormant/stubbed-out code, no dangling references, no anti-patterns). The engine now stands purely on structural stepId completeness + ANL-03 framework-redundancy + the Prometheus metric gate, with zero value-oracle residue.
+None. The single gap from the prior verification — D-04's live-gate baseline reproduction — is now CLOSED.
 
-**D-04 is the phase's terminal proof and it FAILED.** The live gate was executed exactly per the runbook (reseed-first, the documented heal-wait trap was hit and correctly resolved via graph-DELETE→seed→204, the 7-scenario sweep ran on live Docker for ~3.5h). The result is a genuine, reproducible-in-principle regression: every fresh scenario (including the no-fault baseline TEST-01) is now scored FAIL because `Duplicates == StartedRuns` — the reworked structural step query is over-counting step executions on live data. This was correctly surfaced as a FINDING (not silently re-baselined, not forced green), which is exactly the behavior the D-04 plan mandated for a verdict SHIFT.
+**Regression check on D-01/D-02/D-03:** the 78-05 fix touched only the structural cohort's record-kind discrimination inside `BuildRunTraces`; it did not modify the D-01 `exists ExecutionId` or D-02 `must_not ReinjectOutcome` query filters, which were re-confirmed unchanged by direct grep this session (line numbers identical to the prior verification report). The value-oracle deletion (D-03) was untouched by 78-05/78-06 (those plans only added the `StructuralCohort`/`StructuralCohortFacts` files and re-ran the live gate).
 
-Root cause (high confidence, documented in `78-04-SUMMARY.md`): Phase 77's uniform execution-scope logging causes each hop to emit multiple `StepId`-scoped framework records (dispatch-send, dispatch-consume, result-send, result-consume, and — for recovered hops — keeper recovery-consume). The Phase-78 structural query (`BuildStepSearchBody`, as reworked by D-01/D-02) counts each such record as a distinct step execution, so the effect-once/duplicate check trips on every hop of every run. The hermetic test suite could not catch this because its `RunTrace.FromStepIds` facts synthesize exactly one record per stepId — a shape the live pipeline no longer produces post-Phase-77.
+**D-04 closure evidence, independently cross-checked (not merely trusted from SUMMARY prose):**
+1. `StructuralCohort.cs` exists, defines the canonical `"hop executed"` prefix as the sole observed-hop discriminator, routes `"terminal reached"` to proven, and contains no `Distinct`/`GroupBy` collapse on the observed path (the explicitly-forbidden naive fix was verifiably rejected).
+2. `StructuralCohortFacts.cs` contains 3 facts that (a) reproduce the exact 78-04 live evidence shape (30 records / 10 stepIds / 3 per hop) and assert collapse→Pass, and (b) assert a genuine second `"hop executed"` record for one step still trips `HasIllegitimateDuplicate`→Fail — proving the fix does not blind duplicate detection.
+3. Live re-run this session: `dotnet build -c Debug` succeeds 0-warning/0-error; the full `*Observability.Analysis*` hermetic subset runs 32/32 green (matching the SUMMARY's claimed count exactly).
+4. `AnalyzerE2ETests.cs:515` genuinely delegates to `StructuralCohort.Classify`, confirming the live fixture and the hermetic facts share the identical code path (the seam the 78-04 gap lacked).
+5. Commits `a1068ee`, `e470428` (78-05) and `d8d836b` (78-06) all exist in git history with content matching their claimed diffs.
+6. The tracked `analyzer-reports/phase-68-summary.json` at HEAD is 7/7 `"verdict": "Pass"` with `startedRuns`/`completeRuns` values matching 78-06-SUMMARY.md's table exactly, and `git status` confirms no working-tree drift — the file genuinely reflects the post-fix live re-gate, correcting the `5096dcd` 78-04-clobbered state.
 
-The fix belongs in the step query/cohort layer: collapse the multiple execution-scoped framework records per `{executionId, stepId}` to a single step execution (e.g., select only the canonical record kind per hop, or de-duplicate by `(executionId, stepId)` before counting). This is scoped, understood, and actionable — a follow-up closure plan for Phase 78 should target exactly this.
-
-Per the phase's own D-04 acceptance language, **"a legitimate verdict SHIFT → STOP, treat as a finding (do not silently re-baseline)"** — this verification agrees with and upholds that call. The phase is NOT complete: D-01/D-02/D-03 shipped correctly, but the phase's actual purpose (proving the resilience verdict reconstructs purely and CORRECTLY from framework ES logs) is not yet achieved, since the reconstruction is currently wrong on live data.
+The phase's terminal proof now holds: D-01/D-02/D-03 shipped correctly and remain regression-clean, and D-04's live re-gate confirms the resilience verdict reconstructs PURELY AND CORRECTLY from framework ES logs alone (structural canonical-record completeness + ANL-03 redundancy + the Prometheus metric gate, value-oracle axis fully dark) on real Phase-77 data.
 
 ---
 
-*Verified: 2026-07-16T22:51:06Z*
+*Verified: 2026-07-17T12:00:00Z*
 *Verifier: Claude (gsd-verifier)*
