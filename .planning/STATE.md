@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
-status: verifying
+status: milestone_complete
 stopped_at: Completed 78-06-PLAN.md (D-04 live re-gate — 7/7 PASS, D-04 CLOSED)
 last_updated: "2026-07-17T07:55:00.000Z"
 last_activity: 2026-07-17
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 0
   completed_plans: 0
-  percent: 0
+  percent: 25
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 78 (rework-the-resilience-sweep-to-verify-purely-from-the-new-fr) — EXECUTING
-Current Plan: 1
+Phase: 78
+Current Plan: Not started
 Total Plans: 5
 Plan: 4 of 4
-Status: Phase complete — ready for verification
+Status: Milestone complete
 Last activity: 2026-07-17
 
 > Phase 78 Plan 06 — ✅ COMPLETE 2026-07-17 (Wave 6, gap-closure: the D-04 TERMINAL LIVE RE-GATE after the 78-05 canonical-record fix). Ran the reseed-FIRST runbook ([[rebuild-sourcehash-reseed-order]]) live on Docker then `scripts/phase-68-sweep.ps1` over all 7 scenarios (~2h): **CLEAN 7/7 PASS.** Every scenario reproduces its genuine da91d32 all-PASS baseline (TEST-01 Pass 19/19, TEST-02 17/17, TEST-03 18/18, TEST-04 17/17, TEST-05 23/23, TEST-06 14/14, TEST-07 25/25 — all `Missing==0`, all `Duplicates==0`), value-oracle axis dark. **The 78-04 over-count regression (`Duplicates==StartedRuns`) is GONE on real Phase-77 live data — the no-fault TEST-01 shows `Duplicates==0` (was 19/19).** **BASELINE-ORACLE CORRECTION (T-78-13):** the runbook's `git show HEAD:analyzer-reports/phase-68-summary.json` oracle is the 78-04 FAILED rerun (commit `5096dcd` clobbered the tracked file → 0 Pass/6 Fail+1 INDETERMINATE at HEAD); every verdict was gated against the genuine `git show da91d32:...` = 7/7 PASS, never HEAD. Reseed-first pre-empted the heal-wait trap (first-scenario reset passed cleanly). TEST-07's analyze was killed mid-STEP-H (same trap as 78-04) but its fault window had already completed in ES — re-invoked the analyzer against that exact window (`[07:29:21.70Z,07:36:42.83Z]`, recovery `07:31:12.44Z`) → fresh Pass 25/25 (no stale copy read, no re-baseline). Debug-shadow trap pre-empted (one fresh Release report per scenario, all mtime today, no Debug copy). Regenerated `analyzer-reports/phase-68-summary.json` (7/7 PASS) — restores the tracked baseline to all-PASS, correcting the 5096dcd clobber. **Requirement D-04 CLOSED: the resilience verdict reconstructs PURELY AND CORRECTLY from framework ES logs alone.** No deviations beyond the two Rule-3 blocking unblocks (baseline-oracle correction + TEST-07 completed-window re-analyze). Summary: `.planning/phases/78-rework-the-resilience-sweep-to-verify-purely-from-the-new-fr/78-06-SUMMARY.md` (Self-Check PASSED). **Phase 78 = 6/6 plans COMPLETE — ready for verification.**
@@ -758,7 +758,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 
 **Velocity:**
 
-- Total plans completed: 255
+- Total plans completed: 261
 - Average duration: —
 - Total execution time: —
 
@@ -837,6 +837,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | 74 | 4 | - | - |
 | 75 | 5 | - | - |
 | 77 | 6 | - | - |
+| 78 | 6 | - | - |
 
 **Recent Trend:**
 
