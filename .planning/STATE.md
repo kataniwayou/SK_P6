@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 2
 status: executing
-stopped_at: Completed 79-03-PLAN.md
-last_updated: "2026-07-17T10:05:05.690Z"
+stopped_at: Completed 79-04-PLAN.md
+last_updated: "2026-07-17T10:09:32.326Z"
 last_activity: 2026-07-17
 progress:
   total_phases: 4
@@ -30,13 +30,15 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
 Phase: 79 (falsification-harness-for-the-resilience-sweep-negative-cont) — EXECUTING
-Current Plan: 2
+Current Plan: 5
 Total Plans: 5
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-07-17
 
 > Phase 79 Plan 01 — ✅ COMPLETE 2026-07-17 (Wave 1: the product-source fault seam that manufactures a True-Positive recoverable-but-lost strand for the gate-teeth negative control). **2 atomic feat commits** (`7ec9169` ReinjectConsumer: static `_defeatedOnce` Interlocked one-shot latch + gate the `ep.Send` redispatch behind `int.TryParse(Environment.GetEnvironmentVariable("KEEPER_DEFEAT_REINJECT"),out d) && d>0 && Interlocked.CompareExchange(ref _defeatedOnce,1,0)==0` — `if(!defeatReinject){ep.Send}` else a TEST-ONLY defeat warning; `CountSent` + the `"reinject"` LogInformation stay UNCHANGED after the gate so `attributes.ReinjectOutcome=="reinject"` reaches the analyzer and WR-01 vetoes → binding miss, byte-identical to a real loss (D-01); `4a9f692` compose.yaml keeper `environment:` gains `KEEPER_DEFEAT_REINJECT: "${KEEPER_DEFEAT_REINJECT:-0}"` after OTEL endpoint, `deploy.replicas` untouched). Decisions D-01/D-02/D-06 honoured; env-var `KEEPER_DEFEAT_REINJECT` (discretion). **Inertness proven:** short-circuit means the Interlocked call never runs when unset ⇒ `*ReinjectConsumerFacts` **8/8 GREEN** (redispatch runs, latch never consumed); `*PassFailEngineFacts` **29/29 GREEN**; `docker compose config` resolves the var to `"0"` default-off. **No deviations** — plan executed exactly as written. Verification: Keeper + test project both build **0-warning/0-error**. Full `--filter-not-trait Category=RealStack` shows 282/853 failures — ALL the documented Docker-less-sandbox infra baseline (RabbitMQ `No such host is known`, Postgres/Redis refused; 0 analyzer/keeper LOGIC facts among them), logged to `deferred-items.md`; full-suite exit 0 is Plan 79-05's live-gate concern. This plan did NOT run the live stack (compile + hermetic-logic green only). Summary: `.planning/phases/79-falsification-harness-for-the-resilience-sweep-negative-cont/79-01-SUMMARY.md` (Self-Check PASSED). Plan 02 next.
+
+> Phase 79 Plan 04 — ✅ COMPLETE 2026-07-17 (Wave 3: the standalone inverted-assertion negative-control driver). **1 atomic feat commit** (`92b94ad`): created `scripts/phase-79-falsify.ps1` mirroring the phase-68-sweep.ps1 skeleton (`$ErrorActionPreference='Stop'`, `Set-StrictMode -Version Latest`, `$repoRoot`/`Push-Location`+`finally{Pop-Location}`, `Write-Phase` re-prefixed `[phase-79-falsify]`, dot-sourced `scripts/lib/exit-code-resolution.ps1`) with the assertion **INVERTED**. Body: (1) invoke `phase-68-sweep.ps1 -ScenarioIds 'FALSIFY-01'` as a child `pwsh -File`, capture `$sweepExit=$LASTEXITCODE` (D-04); (2) read `analyzer-reports/phase-68-summary.json`, pull the FALSIFY-01 row (`harnessExit`/`verdict`/`class`) — NEVER re-scores; (3) INCONCLUSIVE/BAD_ARG/infra passthrough BEFORE the pass/fail decision (`harnessExit==2 → exit 2`, `64 → exit 64`, other non-{0,1} → passthrough) so a 2/infra-abort can never masquerade as a passing control (T-79-10); (4) locate the FRESHEST `FALSIFY-01.json` by `LastWriteTime -Descending` (T-79-09 stale-report guard) and read `Missing`+`MissingDetail`; (5) the fail-closed inverted assertion — success iff `harnessExit -eq 1` EXACTLY **AND** `$sweepExit -ne 0` **AND** `verdict=='Fail'` + `class=='VERDICT_FAIL'` **AND** `Missing>=1` **AND** `MissingDetail` contains both `recoverable-but-lost` + `binding miss` → `exit 0` (gate has teeth), else default `exit 1`. Encodes D-03 (right-reason) + D-04 (dual-level, driven-through-the-sweep) exactly; its OWN exit 0 == "the gate correctly went RED for the recoverable-but-lost reason". **No deviations** — plan executed exactly as written. Verification: PowerShell AST `ParseFile` → **zero errors (`PARSE_OK`)**; combined `<verify>` gate → **`DRIVER_OK`**; all **10 discrete grep acceptance criteria matched**. No live stack run (the live behavioral proof — the driver actually exiting 0 against a real defeated reinject — is Plan 79-05). Post-commit deletion check clean. Summary: `.planning/phases/79-falsification-harness-for-the-resilience-sweep-negative-cont/79-04-SUMMARY.md` (Self-Check PASSED). Plan 05 (live behavioral proof) next.
 
 > Phase 78 Plan 06 — ✅ COMPLETE 2026-07-17 (Wave 6, gap-closure: the D-04 TERMINAL LIVE RE-GATE after the 78-05 canonical-record fix). Ran the reseed-FIRST runbook ([[rebuild-sourcehash-reseed-order]]) live on Docker then `scripts/phase-68-sweep.ps1` over all 7 scenarios (~2h): **CLEAN 7/7 PASS.** Every scenario reproduces its genuine da91d32 all-PASS baseline (TEST-01 Pass 19/19, TEST-02 17/17, TEST-03 18/18, TEST-04 17/17, TEST-05 23/23, TEST-06 14/14, TEST-07 25/25 — all `Missing==0`, all `Duplicates==0`), value-oracle axis dark. **The 78-04 over-count regression (`Duplicates==StartedRuns`) is GONE on real Phase-77 live data — the no-fault TEST-01 shows `Duplicates==0` (was 19/19).** **BASELINE-ORACLE CORRECTION (T-78-13):** the runbook's `git show HEAD:analyzer-reports/phase-68-summary.json` oracle is the 78-04 FAILED rerun (commit `5096dcd` clobbered the tracked file → 0 Pass/6 Fail+1 INDETERMINATE at HEAD); every verdict was gated against the genuine `git show da91d32:...` = 7/7 PASS, never HEAD. Reseed-first pre-empted the heal-wait trap (first-scenario reset passed cleanly). TEST-07's analyze was killed mid-STEP-H (same trap as 78-04) but its fault window had already completed in ES — re-invoked the analyzer against that exact window (`[07:29:21.70Z,07:36:42.83Z]`, recovery `07:31:12.44Z`) → fresh Pass 25/25 (no stale copy read, no re-baseline). Debug-shadow trap pre-empted (one fresh Release report per scenario, all mtime today, no Debug copy). Regenerated `analyzer-reports/phase-68-summary.json` (7/7 PASS) — restores the tracked baseline to all-PASS, correcting the 5096dcd clobber. **Requirement D-04 CLOSED: the resilience verdict reconstructs PURELY AND CORRECTLY from framework ES logs alone.** No deviations beyond the two Rule-3 blocking unblocks (baseline-oracle correction + TEST-07 completed-window re-analyze). Summary: `.planning/phases/78-rework-the-resilience-sweep-to-verify-purely-from-the-new-fr/78-06-SUMMARY.md` (Self-Check PASSED). **Phase 78 = 6/6 plans COMPLETE — ready for verification.**
 
@@ -1087,6 +1089,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 79 P01 | 17min | 2 tasks | 2 files |
 | Phase 79 P02 | 11min | 1 tasks | 1 files |
 | Phase 79 P03 | 12 | 1 tasks | 1 files |
+| Phase 79 P04 | 3min | 1 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -1608,6 +1611,7 @@ Recent decisions affecting current work:
 - 79-01: KEEPER_DEFEAT_REINJECT default-off via short-circuit gate + ${KEEPER_DEFEAT_REINJECT:-0} compose interpolation → provably inert (D-06)
 - 79-02: pinned D-03 #2 MissingDetail substring contract ('recoverable-but-lost' + 'binding miss') via a hermetic Assert.Contains fact — silent engine-string change now goes RED before it can mask a live False Negative
 - Phase 79-03: FALSIFY-01 wired into phase-67-harness — inject-recovery-loss no-crash branch scales keeper to 1 replica (count-guarded) + arms KEEPER_DEFEAT_REINJECT=1/K_EXECUTIONS=1 before bring-up + pins RECOVERY_UTC at window start + finally teardown; TEST-01..07 byte-unchanged, parses clean (c537164).
+- Phase 79-04: phase-79-falsify.ps1 asserts harnessExit==1 EXACTLY (not merely non-zero) so INCONCLUSIVE(2)/infra-abort can never masquerade as a passing negative control; own exit 0 == gate correctly RED for the recoverable-but-lost binding-miss reason
 
 ### Roadmap Milestone Log
 
@@ -1717,8 +1721,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-17T10:04:57.363Z
-Stopped at: Completed 79-03-PLAN.md
+Last session: 2026-07-17T10:09:23.617Z
+Stopped at: Completed 79-04-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
