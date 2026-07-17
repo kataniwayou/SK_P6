@@ -27,6 +27,12 @@ public sealed class ReinjectConsumer(
     KeeperMetrics metrics, ILogger<ReinjectConsumer> logger)
     : RecoveryConsumerBase<KeeperReinject>(redis, sendProvider, retryOptions, metrics)
 {
+    // TEST-ONLY reinject-defeat latch (Phase 79 negative control). 0 = armed, 1 = spent. Static ⇒ per-process;
+    // combined with K_EXECUTIONS=1 AND keeper scaled to a SINGLE replica for the FALSIFY-01 run (harness), so
+    // exactly one execution is ever defeated. Only consumed when KEEPER_DEFEAT_REINJECT>0 (short-circuit below
+    // means the Interlocked call NEVER runs when the seam is unset ⇒ inert).
+    private static int _defeatedOnce;
+
     protected override async Task HandleAsync(KeeperReinject m, CancellationToken ct)
     {
         // Phase 77 (D2/LOG-02): the keeper now OPENS the 5-id execution scope itself. The bus-wide
@@ -75,7 +81,24 @@ public sealed class ReinjectConsumer(
             // req 6 (Phase 70): re-inject with the SAME messageId on the outbound envelope — override
             // SendContext.MessageId to the carried m.MessageId (precedent: OutboundCorrelationSendFilter
             // sets SendContext.CorrelationId). No inbox/dedup on this endpoint, so the reused id is safe.
-            await Guard(() => ep.Send(dispatch, ctx => ctx.MessageId = m.MessageId, CancellationToken.None), ct);
+            // TEST-ONLY reinject-defeat hook (env-gated, DEFAULT OFF — NEVER set in production). Only
+            // scripts/phase-79-falsify.ps1 exports KEEPER_DEFEAT_REINJECT>0 for the FALSIFY-01 negative control
+            // (gate-teeth proof). When gated AND the one-shot latch is still armed, SUPPRESS the redispatch below
+            // for exactly this ONE execution — but STILL CountSent + log "reinject" (unchanged) so the ES telemetry
+            // is byte-identical to a genuine "keeper logged reinject, redispatch lost in transit" recoverable-but-lost
+            // strand (WR-01 veto → binding miss). Unset/empty/0 ⇒ int.TryParse fails or d<=0 ⇒ the Interlocked call is
+            // never reached (short-circuit) ⇒ the redispatch runs normally ⇒ behaviour byte-for-byte unchanged (D-06).
+            var defeatReinject =
+                int.TryParse(Environment.GetEnvironmentVariable("KEEPER_DEFEAT_REINJECT"), out var d) && d > 0
+                && Interlocked.CompareExchange(ref _defeatedOnce, 1, 0) == 0;
+            if (!defeatReinject)
+            {
+                await Guard(() => ep.Send(dispatch, ctx => ctx.MessageId = m.MessageId, CancellationToken.None), ct);
+            }
+            else
+            {
+                logger.LogWarning("REINJECT DEFEATED (TEST-ONLY seam) {MessageId} — redispatch suppressed for the FALSIFY-01 negative control; keeper still logs \"reinject\".", m.MessageId);
+            }
             // REQ-3 / D-09: count keeper_messages_sent AFTER the confirmed send (Guard re-throws on exhaustion, so
             // a failed/exhausted send never reaches here — T-74-06). NEVER on the absent-data drop branch above.
             CountSent(m.WorkflowId, m.ProcessorId);
