@@ -502,65 +502,28 @@ public sealed class AnalyzerE2ETests
         List<JsonElement> structuralHits, List<JsonElement> dispatchHits,
         IReadOnlyDictionary<string, string> keeperOutcomeByExecution)
     {
-        // ── STRUCTURAL: observed processor stepIds + terminal-reached redundancy, keyed (corr, exec) ──
-        var stepIdsByInstance = new Dictionary<(string Corr, string Exec), List<string>>();
-        var spanByInstance = new Dictionary<(string Corr, string Exec), (DateTimeOffset Min, DateTimeOffset Max)>();
-        var spanByCorrelation = new Dictionary<string, (DateTimeOffset Min, DateTimeOffset Max)>();
-        // MessageId (M_N) → producer StepId, from PRESENT processor records — the ANL-03 EntryId→stepId resolver.
-        var stepIdByMessageId = new Dictionary<string, string>(StringComparer.Ordinal);
-        // Orchestrator-proven "did run" stepIds per (corr,exec): terminal-reached records name the StepId directly.
-        var proven = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        // ── STRUCTURAL: parse each hit into a FrameworkLogRecord, then delegate the observed/proven/resolver
+        // classification to the pure StructuralCohort (Phase 78 D-04 gap closure). Post-Phase-77 the
+        // "result sent" (OutputTail.cs:94) and "fan-out" (OrchestratorPrePipeline.cs:170) records ALSO carry
+        // {StepId, ExecutionId, MessageId}, so the old hasMessageId discriminator over-counted every hop 3–4×
+        // (the 78-04 live signature Duplicates == StartedRuns). StructuralCohort selects the ONE canonical
+        // "hop executed" consume record as the sole observed did-run hop — genuine redelivery duplicates are
+        // RETAINED (collapse is by record-KIND selection, never by removing repeats). The classifier lives in
+        // the shared Observability.Analysis namespace so the hermetic StructuralCohortFacts exercise the exact
+        // same discrimination the live path uses — the seam the last gap lacked.
+        var structuralRecords = ParseStructuralRecords(structuralHits);
+        var cohort = StructuralCohort.Classify(structuralRecords);
+        var stepIdsByInstance = cohort.StepIdsByInstance;
+        var spanByInstance = cohort.SpanByInstance;
+        var spanByCorrelation = cohort.SpanByCorrelation;
+        // MessageId (M_N) → producer StepId, from the canonical "hop executed" records — the ANL-03
+        // EntryId→stepId resolver (dispatch.EntryId == the producer's consumed MessageId).
+        var stepIdByMessageId = cohort.StepIdByMessageId;
+        // Orchestrator-proven "did run" stepIds per (corr,exec): terminal-reached records name the StepId directly;
+        // the dispatch loop below augments this with EntryId→producer edges.
+        var proven = cohort.Proven;
         // The convergent terminal stepId is derived from the FW-02 DISPATCH edges below (dispatch in-degree),
-        // NOT from a terminal-reached structural bucket — see BuildRunTraces' convergent derivation and the
-        // note in the no-MessageId branch for why the structural bucket cannot be a clean terminal-reached set.
-
-        foreach (var hit in structuralHits)
-        {
-            if (!hit.TryGetProperty("_source", out var source)) continue;
-            if (!source.TryGetProperty("attributes", out var attrs)) continue;
-            if (!attrs.TryGetProperty("CorrelationId", out var corrEl) || corrEl.ValueKind != JsonValueKind.String) continue;
-            if (!attrs.TryGetProperty("ExecutionId", out var execEl) || execEl.ValueKind != JsonValueKind.String) continue;
-            if (!attrs.TryGetProperty("StepId", out var stepEl) || stepEl.ValueKind != JsonValueKind.String) continue;
-
-            var correlationId = corrEl.GetString()!;
-            var executionId = execEl.GetString()!;
-            var stepId = stepEl.GetString()!;
-
-            // Discriminate the two co-located StepId shapes: the processor per-hop "did-run" record carries
-            // attributes.MessageId; the orchestrator terminal-reached record carries attributes.WorkflowId (no
-            // MessageId). Only the former is an OBSERVED hop; the latter is orchestrator redundancy evidence.
-            var hasMessageId = attrs.TryGetProperty("MessageId", out var msgEl) && msgEl.ValueKind == JsonValueKind.String;
-
-            if (!hasMessageId)
-            {
-                // Terminal-reached record (D-12): the named StepId provably reached/ran → ANL-03 redundancy.
-                // NOTE (Phase 76 live-gate fix): OTel IncludeScopes stamps attributes.StepId (the CONSUMED step,
-                // from the InboundExecutionScopeConsumeFilter) onto EVERY log emitted during a consume — so this
-                // no-MessageId bucket is NOT a clean terminal-reached set: it also contains the orchestrator
-                // fan-out records (which additionally carry NextStepId), the sample's author value logs
-                // ("Step_X received/produced", which carry StepLabel), and orchestrator business logs
-                // ("Trip ended ..."). The convergent-terminal derivation therefore no longer reads this bucket
-                // (it uses the dispatch in-degree below). The proven-set contribution is retained UNCHANGED:
-                // over-population of `proven` can only reconcile a would-be-missing hop as non-binding — it can
-                // mask loss (a separate, fault-scenario-verified concern), never manufacture it, so it cannot
-                // produce the false FAIL this fix targets.
-                var pkey = $"{correlationId}|{executionId}";
-                (proven.TryGetValue(pkey, out var pset) ? pset : proven[pkey] = new(StringComparer.Ordinal)).Add(stepId);
-                continue;
-            }
-
-            var key = (correlationId, executionId);
-            (stepIdsByInstance.TryGetValue(key, out var steps) ? steps : stepIdsByInstance[key] = new()).Add(stepId);
-            stepIdByMessageId[msgEl.GetString()!] = stepId;
-
-            if (TryReadTimestamp(source, out var ts))
-            {
-                spanByInstance[key] = spanByInstance.TryGetValue(key, out var s)
-                    ? (s.Min < ts ? s.Min : ts, s.Max > ts ? s.Max : ts) : (ts, ts);
-                spanByCorrelation[correlationId] = spanByCorrelation.TryGetValue(correlationId, out var c)
-                    ? (c.Min < ts ? c.Min : ts, c.Max > ts ? c.Max : ts) : (ts, ts);
-            }
-        }
+        // NOT from a terminal-reached structural bucket — see BuildRunTraces' convergent derivation.
 
         // ── FW-02 DISPATCH: expected set (NextStepId) + orchestrator-redundancy edge (inbound EntryId → stepId) ──
         var expectedByExec = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
@@ -682,6 +645,44 @@ public sealed class AnalyzerE2ETests
                 out timestamp);
         }
         return false;
+    }
+
+    /// <summary>
+    /// Parse the raw structural ES hits into <see cref="FrameworkLogRecord"/>s for
+    /// <see cref="StructuralCohort.Classify"/> (Phase 78 D-04). Reads the Tier-1 ids
+    /// (<c>_source.attributes.{CorrelationId,ExecutionId,StepId}</c>) + the optional Tier-2
+    /// <c>attributes.MessageId</c> + the rendered <c>_source.body.text</c> (the record-KIND discriminator,
+    /// LogExportTests.cs:57 precedent) + the <c>@timestamp</c> span. Every read is defensive (T-66-09) — an
+    /// odd-shaped/missing-attribute/missing-body hit is DROPPED (<c>continue</c>), never thrown on. A record
+    /// with no readable body cannot be classified, so it is dropped rather than mis-bucketed.
+    /// </summary>
+    private static List<FrameworkLogRecord> ParseStructuralRecords(List<JsonElement> structuralHits)
+    {
+        var records = new List<FrameworkLogRecord>(structuralHits.Count);
+        foreach (var hit in structuralHits)
+        {
+            if (!hit.TryGetProperty("_source", out var source)) continue;
+            if (!source.TryGetProperty("attributes", out var attrs)) continue;
+            if (!attrs.TryGetProperty("CorrelationId", out var corrEl) || corrEl.ValueKind != JsonValueKind.String) continue;
+            if (!attrs.TryGetProperty("ExecutionId", out var execEl) || execEl.ValueKind != JsonValueKind.String) continue;
+            if (!attrs.TryGetProperty("StepId", out var stepEl) || stepEl.ValueKind != JsonValueKind.String) continue;
+
+            // Tier-2 {MessageId}: present only on the send/consume records; absent → null.
+            string? messageId = attrs.TryGetProperty("MessageId", out var msgEl) && msgEl.ValueKind == JsonValueKind.String
+                ? msgEl.GetString()
+                : null;
+
+            // Rendered body.text — the record-KIND discriminator. Defensive: body → text, drop on odd shape.
+            if (!source.TryGetProperty("body", out var bodyEl)) continue;
+            if (!bodyEl.TryGetProperty("text", out var textEl) || textEl.ValueKind != JsonValueKind.String) continue;
+            var bodyText = textEl.GetString()!;
+
+            DateTimeOffset? ts = TryReadTimestamp(source, out var parsed) ? parsed : null;
+
+            records.Add(new FrameworkLogRecord(
+                corrEl.GetString()!, execEl.GetString()!, stepEl.GetString()!, messageId, bodyText, ts));
+        }
+        return records;
     }
 
     // ── Prometheus windowed-delta counter set (OBS-03) ───────────────────────────────────────────────
