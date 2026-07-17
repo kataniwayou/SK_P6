@@ -244,6 +244,10 @@ services:
       RabbitMq__Password: guest
       ConnectionStrings__Redis: "redis:6379,abortConnect=false,connectTimeout=5000"
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
+      # TEST-ONLY reinject-defeat hook (env-gated, DEFAULT 0 = OFF). Interpolated from scripts/phase-79-falsify.ps1
+      # ONLY for the FALSIFY-01 gate-teeth negative control; unset everywhere else ⇒ 0 ⇒ keeper re-dispatches
+      # normally (byte-for-byte unchanged, D-06). NEVER set in production.
+      KEEPER_DEFEAT_REINJECT: "${KEEPER_DEFEAT_REINJECT:-0}"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8083/health/ready"]
       interval: 10s
