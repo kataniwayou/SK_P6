@@ -104,7 +104,7 @@ try {
         'TEST-08' = @{ targetContainers = @('processor-sample'); faultType = 'stop-only';       injectAfterNFires = 4; dwellSeconds = 0; notes = 'NEGATIVE (blind-spot demo): processor crash, NO recovery — dispatched-but-never-processed work is INVISIBLE (no Step_A) → PASS, proving the verdict cannot see fully-dead loss' }
         'TEST-09' = @{ targetContainers = @('processor-sample'); faultType = 'stop-on-inflight'; injectAfterNFires = 3; dwellSeconds = 0; notes = 'NEGATIVE (RMQ-timed FAIL): with the 3s per-hop delay hook on, kill the processor once its dispatch queue backlog >= 3 (executions visibly mid-flight, no recovery) — strands recoverable-but-lost runs → binding miss → FAIL' }
         'TEST-10' = @{ targetContainers = @('processor-sample'); faultType = 'stopstart-on-inflight'; injectAfterNFires = 3; dwellSeconds = 300; notes = 'OUTAGE-OUTLASTS-WINDOW: 3s delay hook on; kill on in-flight backlog then keep the processor down 300s (> the 300s observation window) and RESTART — does recovery complete within window+drain (PASS) or exceed the budget (FAIL)?' }
-        'FALSIFY-01' = @{ targetContainers = @(); faultType = 'inject-recovery-loss'; injectAfterNFires = 0; dwellSeconds = 0; notes = 'NEGATIVE CONTROL (gate-teeth): keeper env seam KEEPER_DEFEAT_REINJECT defeats exactly one reinject (K_EXECUTIONS=1, keeper scaled to 1 replica) → keeper logs "reinject" but suppresses the redispatch → byte-identical recoverable-but-lost binding miss → the sweep MUST flip this scenario to VERDICT_FAIL. NOT in the default TEST-01..07 capstone.' }
+        'FALSIFY-01' = @{ targetContainers = @(); faultType = 'inject-recovery-loss'; injectAfterNFires = 0; dwellSeconds = 0; notes = 'NEGATIVE CONTROL (gate-teeth): a recoverable-but-lost strand is manufactured by TWO env seams (K_EXECUTIONS=1; processor-sample + keeper each scaled to 1 replica). PROCESSOR_DEFEAT_READ forces one transient L2 read fault (data left intact) → processor sends a KeeperReinject; the keeper finds L2 present → logs "reinject" but KEEPER_DEFEAT_REINJECT suppresses the redispatch → byte-identical recoverable-but-lost binding miss → the sweep MUST flip this scenario to VERDICT_FAIL. NOT in the default TEST-01..07 capstone.' }
     }
 
     # Validate the requested id against the table BEFORE any docker/psql op (T-67-02).
@@ -132,8 +132,15 @@ try {
     # so the one-shot latch defeats exactly one reinject. Both cleared in the STEP-H finally.
     if ($scenario.faultType -eq 'inject-recovery-loss') {
         $env:KEEPER_DEFEAT_REINJECT = '1'
+        # Target Step_C (NOT Step_B): the victim must be a SCORED run, i.e. have >=1 framework hop RECORD. The
+        # Step_A source-entry marker is dropped by the analyzer (no ExecutionId, Phase-78 D-01), so faulting the
+        # FIRST real hop (Step_B) would leave the execution with ZERO records → invisible → not a binding miss.
+        # Faulting Step_C leaves Step_B's record (execution is "started") and drops C→G (incomplete) with the
+        # keeper "reinject" WR-01 veto → recoverable-but-lost BINDING MISS. Step_C is still pre-fan-out (linear),
+        # so the convergent terminal Step_G cannot complete via a sibling branch.
+        $env:PROCESSOR_DEFEAT_READ  = 'Step_C'
         $env:K_EXECUTIONS           = '1'
-        Write-Phase "  TEST-ONLY hook: KEEPER_DEFEAT_REINJECT=1 + K_EXECUTIONS=1 exported (FALSIFY-01 negative control; baked into keeper at compose-up)." 'Yellow'
+        Write-Phase "  TEST-ONLY hook: PROCESSOR_DEFEAT_READ=Step_C (reinject TRIGGER, armed at window-open) + KEEPER_DEFEAT_REINJECT=1 (redispatch LOSS) + K_EXECUTIONS=1 exported (FALSIFY-01 negative control; baked into processor-sample + keeper at compose-up)." 'Yellow'
     }
 
     # -----------------------------------------------------------------------
@@ -330,18 +337,35 @@ try {
     # without reaching N, abort loud (exit 60).
     # -----------------------------------------------------------------------
     if ($scenario.faultType -eq 'inject-recovery-loss') {
+        # ARM the processor reinject-trigger seam FIRST (immediately at window-open, BEFORE the ~15s of docker
+        # scaling) by SETting the Redis slot the seam claims. Early arming guarantees a post-window Step_B hop is
+        # still available to claim (the observation window closes fast on K=1). Because the arm is set just after
+        # windowStart (== RECOVERY_UTC) and baseline fire count is 0, the victim execution necessarily STARTED
+        # AFTER RECOVERY_UTC (in the analyzer cohort). The seam's atomic KeyDelete claims it exactly once.
+        docker exec sk-redis redis-cli SET skp:test:defeat-read-arm 1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { Write-Phase "failed to arm processor reinject-trigger seam (redis SET)." 'Red'; exit 60 }
+        Write-Phase "  processor reinject-trigger seam ARMED (skp:test:defeat-read-arm set); first post-window Step_B hop becomes the recoverable-but-lost victim." 'Yellow'
         # NEGATIVE CONTROL (gate-teeth): NO container crash. The loss is manufactured entirely by the keeper
         # KEEPER_DEFEAT_REINJECT seam exported above. Reduce the keeper to a SINGLE replica so the static
         # one-shot latch is process-global (compose default is deploy.replicas: 2 → a per-process latch could
         # otherwise defeat one reinject PER replica). Combined with K_EXECUTIONS=1 this makes "exactly one lost"
         # unambiguous. Restored to 2 by the next run's plain `docker compose up` (compose file replicas: 2).
-        Write-Phase "STEP F.2: FALSIFY-01 — scaling keeper to a SINGLE replica (global one-shot latch guarantee)"
+        Write-Phase "STEP F.2: FALSIFY-01 — scaling keeper AND processor-sample to a SINGLE replica each (global one-shot latch guarantee)"
         docker compose up -d --no-recreate --scale keeper=1 keeper | Out-Null
         if ($LASTEXITCODE -ne 0) { Write-Phase "docker compose --scale keeper=1 failed." 'Red'; exit 60 }
         # Confirm exactly one keeper instance is running before observing.
         $keeperCount = @(docker compose ps keeper --format json 2>$null | Where-Object { $_ -match '\S' }).Count
         if ($keeperCount -ne 1) { Write-Phase "expected exactly 1 keeper replica, saw $keeperCount. Aborting." 'Red'; exit 60 }
         Write-Phase "  keeper scaled to 1 replica ($keeperCount running). Keeper seam will defeat the first reinject." 'Gray'
+        # Same reasoning for the processor: the PROCESSOR_DEFEAT_READ one-shot read-fault latch is process-global
+        # (compose default deploy.replicas: 2 → a per-process latch could otherwise fault one read PER replica,
+        # producing >1 reinject and a non-deterministic Missing count). One replica ⇒ exactly ONE faulted read
+        # ⇒ exactly one reinject ⇒ the keeper defeats exactly that one. Restored to 2 by the next plain `up`.
+        docker compose up -d --no-recreate --scale processor-sample=1 processor-sample | Out-Null
+        if ($LASTEXITCODE -ne 0) { Write-Phase "docker compose --scale processor-sample=1 failed." 'Red'; exit 60 }
+        $procCount = @(docker compose ps processor-sample --format json 2>$null | Where-Object { $_ -match '\S' }).Count
+        if ($procCount -ne 1) { Write-Phase "expected exactly 1 processor-sample replica, saw $procCount. Aborting." 'Red'; exit 60 }
+        Write-Phase "  processor-sample scaled to 1 replica ($procCount running). Processor seam will trigger exactly one recoverable reinject." 'Gray'
         # Pin RECOVERY_UTC at window start so the defeated reinject is a POST-recovery binding miss (the redis-wipe
         # in-flight tolerance never applies; nothing was wiped) — mirrors the negative-path idiom at F.3.
         $recoveryUtc = $windowStart
@@ -557,7 +581,7 @@ try {
         dotnet test tests/BaseApi.Tests/BaseApi.Tests.csproj -c Release -- --filter-method "*Analyze_Window_Yields_Pass*" 2>&1 | Out-String | Write-Host
         $analyzerExit = $LASTEXITCODE
     } finally {
-        Remove-Item Env:SCENARIO_ID, Env:WINDOW_START_UTC, Env:WINDOW_END_UTC, Env:RECOVERY_UTC, Env:K_EXECUTIONS, Env:PROCESSOR_STEP_DELAY_MS, Env:KEEPER_DEFEAT_REINJECT -ErrorAction SilentlyContinue
+        Remove-Item Env:SCENARIO_ID, Env:WINDOW_START_UTC, Env:WINDOW_END_UTC, Env:RECOVERY_UTC, Env:K_EXECUTIONS, Env:PROCESSOR_STEP_DELAY_MS, Env:KEEPER_DEFEAT_REINJECT, Env:PROCESSOR_DEFEAT_READ -ErrorAction SilentlyContinue
     }
 
     # Locate + echo the analyzer report path (D-04 requires printing it).

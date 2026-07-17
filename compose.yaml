@@ -295,6 +295,10 @@ services:
       # TEST-ONLY fault hook (env-gated, DEFAULT 0 = OFF). Interpolated from the harness shell only for the
       # TEST-09 negative path (stop-on-inflight); unset everywhere else ⇒ 0 ⇒ SampleProcessor adds no delay.
       PROCESSOR_STEP_DELAY_MS: "${PROCESSOR_STEP_DELAY_MS:-0}"
+      # TEST-ONLY reinject-trigger hook (env-gated, DEFAULT 0 = OFF). Interpolated from the harness shell ONLY
+      # for the FALSIFY-01 gate-teeth negative control; unset everywhere else ⇒ 0 ⇒ ProcessorPipeline faults
+      # no read. Forces one transient L2 read fault (data left intact) so a recoverable KeeperReinject flows.
+      PROCESSOR_DEFEAT_READ: "${PROCESSOR_DEFEAT_READ:-0}"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/health/ready"]
       interval: 10s

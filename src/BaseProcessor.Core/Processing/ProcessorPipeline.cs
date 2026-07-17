@@ -55,6 +55,21 @@ public sealed class ProcessorPipeline(
     ProcessorMetrics metrics,
     ILogger<ProcessorPipeline> logger)
 {
+    // TEST-ONLY reinject-TRIGGER seam (Phase 79 negative control) — env-gated, DEFAULT OFF, NEVER set in
+    // production. A KeeperReinject only flows when a processor L2 read FAULTS (req 2 exhaustion); a healthy
+    // no-crash run never faults, so the keeper's KEEPER_DEFEAT_REINJECT seam would have nothing to defeat.
+    // PROCESSOR_DEFEAT_READ holds the TARGET step LABEL (e.g. "Step_B" — a LINEAR critical-path hop before the
+    // fan-out, so losing it can't be masked by the convergent terminal Step_G). The fault is ARMED out-of-band
+    // by the harness SETting the Redis key skp:test:defeat-read-arm at window-open — so the victim is an
+    // after-RECOVERY_UTC execution (in the analyzer cohort). The first matching hop atomically claims the
+    // single armed slot (KeyDelete → true for exactly ONE caller across replicas) and then faults ALL its read
+    // retries by throwing KeyAbsentException BEFORE StringGet (L2 data left INTACT — nothing deleted), so the
+    // RetryLoop exhausts → SendKeeper(BuildReinject) fires and the keeper finds ExecutionData PRESENT → logs
+    // "reinject" (recoverable). Paired with KEEPER_DEFEAT_REINJECT (which loses that one redispatch) this
+    // manufactures a byte-identical recoverable-but-lost binding miss. Unset/"0" ⇒ the block short-circuits
+    // (no Redis touch, no claim) ⇒ behaviour byte-for-byte unchanged.
+    private static Guid _reinjectTriggerTarget;  // the one victim EntryId whose read is faulted (per-process)
+
     public async Task RunAsync(EntryStepDispatch d, Guid messageId, CancellationToken ct)
     {
         var db = redis.GetDatabase();
@@ -85,6 +100,30 @@ public sealed class ProcessorPipeline(
             // StepFailed + return, with NO entry delete (C-2 / Pitfall 3 — left to TTL).
             var read = await RetryLoop.ExecuteAsync(async () =>
             {
+                // TEST-ONLY (env-gated, DEFAULT OFF): PROCESSOR_DEFEAT_READ = the target step LABEL. When the
+                // hop's payload carries that label AND the harness has armed the Redis slot, atomically claim it
+                // (KeyDelete → true for exactly one caller across replicas) and fault ALL retries of the claimed
+                // hop (throwing BEFORE StringGet, so L2 is left INTACT) → one recoverable KeeperReinject flows.
+                // Short-circuit when unset/"0" ⇒ no Redis touch, no claim ⇒ inert (byte-for-byte unchanged).
+                var defeatLabel = Environment.GetEnvironmentVariable("PROCESSOR_DEFEAT_READ");
+                if (!string.IsNullOrEmpty(defeatLabel) && defeatLabel != "0"
+                    // The label is a UNIQUE token in the payload (e.g. "Step_B" is not a substring of any other
+                    // Step_* label), so a formatting-agnostic Contains matches whether the jsonb payload renders
+                    // as {"label":"Step_B"} or the normalized {"label": "Step_B", "number": 1}.
+                    && d.Payload.Contains(defeatLabel, StringComparison.Ordinal))
+                {
+                    if (_reinjectTriggerTarget == Guid.Empty
+                        && await db.KeyDeleteAsync("skp:test:defeat-read-arm"))
+                    {
+                        _reinjectTriggerTarget = d.EntryId;   // this hop is the single victim (armed at window-open)
+                        logger.LogWarning("TEST-79 reinject-trigger CLAIMED victim entryId={EntryId} label={Label}", d.EntryId, defeatLabel);
+                    }
+                    if (d.EntryId == _reinjectTriggerTarget)
+                    {
+                        logger.LogWarning("TEST-79 reinject-trigger FAULTING read for entryId={EntryId} → recoverable KeeperReinject", d.EntryId);
+                        throw new KeyAbsentException();   // transient injected fault → RetryLoop exhausts → REINJECT
+                    }
+                }
                 var raw = await db.StringGetAsync(L2ProjectionKeys.ExecutionData(d.EntryId));
                 if (raw.IsNullOrEmpty) throw new KeyAbsentException();   // A2: unify absent/empty with a Redis fault
                 return raw.ToString();
