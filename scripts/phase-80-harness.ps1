@@ -15,6 +15,8 @@
         STEP A0  phase-80-build.ps1                  build the 4 app images :local (SourceHash currency)
         STEP A   phase-80-up.ps1                     kubectl apply -k + rollout + rollout-restart +
                                                      8 loopback port-forwards + baseapi /health/ready gate
+        STEP B0  kubectl rollout restart processor-sample + rollout status
+                                                     reset proc_sent counter baseline per scenario (MG-1 fix)
         STEP B   phase-80-reset.ps1                  kubectl-exec FLUSHALL + heal-wait + FK-safe graph DELETE
         STEP B1  kubectl rollout restart orchestrator + rollout status
                                                      GUARANTEE A CLEAN ORCHESTRATOR (no ghost Quartz crons)
@@ -218,6 +220,26 @@ try {
     } else {
         Write-Phase "  warm DB ($procCount processor row(s) present) — skipping bootstrap (proven reset->seed->start path)." 'Gray'
     }
+
+    # -----------------------------------------------------------------------
+    # STEP B0 — PROCESSOR COUNTER-BASELINE RESET (code 20) — 81-04 gap fix (MG-1 conservation).
+    # The shared-stack k8s sweep (D-03) restarts ONLY the orchestrator per scenario (STEP B1, for the
+    # Quartz clean-window), so `orchestrator_consumed` resets each scenario while `processor_sent`
+    # accumulates across the whole sweep. MG-1 compares the two counters at ABSOLUTE @end quiescence
+    # (PassFailEngine ConservationTol, reused verbatim — analyzer UNCHANGED per SPEC req 5), so the two
+    # binding crash scenarios (TEST-04 keeper, TEST-06 rabbitmq) fail on a false conservation gap despite
+    # Missing=0 / zero-dup. The compose capstone avoided this by recreating the WHOLE stack per scenario.
+    # Restart the processor-sample tier here too so BOTH conservation-counter-owning tiers share a
+    # per-scenario baseline — matching the compose whole-stack recreate. Placed BEFORE the reset so the
+    # STEP B heal-wait (polls skp:proc:*:* for liveness reconvergence, fail-loud) gates the fresh pods
+    # before STEP C seeds (avoids the ProcessorLivenessValidator 422 on POST /start).
+    # -----------------------------------------------------------------------
+    Write-Phase "STEP B0: reset processor counter baseline (kubectl rollout restart deployment/processor-sample) — align proc_sent with orch_consumed for MG-1"
+    kubectl -n skp rollout restart deployment/processor-sample | Out-Null
+    if ($LASTEXITCODE -ne 0) { Write-Phase "processor-sample rollout restart failed (exit $LASTEXITCODE). Aborting." 'Red'; exit 20 }
+    kubectl -n skp rollout status deployment/processor-sample --timeout=120s
+    if ($LASTEXITCODE -ne 0) { Write-Phase "processor-sample did not become Available within 120s after rollout restart. Aborting." 'Red'; exit 20 }
+    Write-Phase "  processor-sample restarted (fresh per-scenario counter baseline); STEP B heal-wait confirms liveness reconvergence." 'Gray'
 
     # -----------------------------------------------------------------------
     # STEP B — RESET (code 20).
