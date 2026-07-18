@@ -152,6 +152,25 @@ $forwards = @(
     @{ svc = 'svc/otel-collector';  map = '4317:4317'   }    # OTLP — REQUIRED by the ~FanOutSeeder in-proc WebApi OTEL endpoint
 )
 
+# ---- STEP 7-pre: reap STALE port-forwards from a prior run (WR-02) --------------------------------
+# On a re-run WITHOUT a harness teardown, forwards from the previous run may still hold the loopback
+# ports. Each new forward whose port is still bound exits immediately, yet Start-Process -PassThru
+# still hands back its (already-dead) PID — which we then overwrite the PID file with, ORPHANING the
+# still-live prior forward. STEP 8 then gets a 200 from localhost:8080 via that OLD baseapi forward and
+# falsely reports "stack UP" while the non-8080 tunnels are dead. So stop any PIDs recorded by a prior
+# run BEFORE binding the new set (best-effort, mirrors the harness STEP Z teardown).
+$pidFile = Join-Path (Get-Location) '.k8s-portforward-pids'
+if (Test-Path $pidFile) {
+    $stalePids = @(Get-Content $pidFile -ErrorAction SilentlyContinue | Where-Object { $_ -match '\S' })
+    if ($stalePids.Count -gt 0) {
+        Write-Phase "STEP 7-pre: stopping $($stalePids.Count) stale port-forward PID(s) from a prior run (PIDs: $($stalePids -join ', '))..." 'Yellow'
+        foreach ($p in $stalePids) {
+            try { Stop-Process -Id ([int]$p) -Force -ErrorAction SilentlyContinue } catch { }
+        }
+    }
+    Remove-Item $pidFile -ErrorAction SilentlyContinue
+}
+
 Write-Phase "STEP 7: starting $($forwards.Count) kubectl port-forwards (all bound --address 127.0.0.1)..."
 $pfProcs = foreach ($f in $forwards) {
     Write-Phase "  port-forward $($f.svc) $($f.map) --address 127.0.0.1"
