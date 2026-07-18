@@ -132,9 +132,13 @@ try {
     # case: a warm re-run (processor row already present, e.g. a second proof on the same PVC) skips
     # straight to the proven reset→seed→start path — byte-identical to the compose flow.
     Write-Phase "STEP A2: first-run bootstrap check (processors table empty => seed once to register the row)"
-    $procCount = (kubectl -n skp exec statefulset/postgres -- psql -U postgres -d stepsdb -tA `
-                    -c "SELECT count(*) FROM processors").Trim()
+    $procCountRaw = kubectl -n skp exec statefulset/postgres -- psql -U postgres -d stepsdb -tA `
+                    -c "SELECT count(*) FROM processors"
     if ($LASTEXITCODE -ne 0) { Write-Phase "processor-row precheck failed (psql exit $LASTEXITCODE). Aborting." 'Red'; exit 30 }
+    # Normalize AFTER the exit-code guard — on a failed exec stdout is empty, so trimming the raw
+    # capture (never $null once cast to string) can no longer throw a terminating error under
+    # $ErrorActionPreference='Stop' and bypass the distinct `exit 30`.
+    $procCount = ("$procCountRaw").Trim()
     if ($procCount -eq '0') {
         Write-Phase "  fresh DB (0 processor rows) — bootstrapping the processor row via one seed..." 'Yellow'
         dotnet test tests/BaseApi.Tests/BaseApi.Tests.csproj -c Release -- --filter-method "*FanOutSeeder_SeedsAndSelfVerifies*" 2>&1 | Out-String | Write-Host
@@ -196,10 +200,14 @@ try {
     # (the compose `-T postgres psql` exec) → `kubectl -n skp exec statefulset/postgres -- psql`.
     # -----------------------------------------------------------------------
     Write-Phase "STEP D: resolve v8-fanout-proof workflow id (kubectl exec psql)"
-    $wfId = (kubectl -n skp exec statefulset/postgres -- psql -U postgres -d stepsdb -tA `
-              -c "SELECT id FROM workflows WHERE name = 'v8-fanout-proof'").Trim()
-    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($wfId)) {
-        Write-Phase "could not resolve v8-fanout-proof workflow id (psql exit $LASTEXITCODE). Aborting." 'Red'; exit 40
+    $wfIdRaw = kubectl -n skp exec statefulset/postgres -- psql -U postgres -d stepsdb -tA `
+              -c "SELECT id FROM workflows WHERE name = 'v8-fanout-proof'"
+    # Pin the exit code BEFORE the (safe) trim — same fix as STEP A2: on a failed exec stdout is
+    # empty, so `.Trim()` on the raw capture (string-cast, never $null) cannot throw and bypass exit 40.
+    $wfIdExit = $LASTEXITCODE
+    $wfId = ("$wfIdRaw").Trim()
+    if ($wfIdExit -ne 0 -or [string]::IsNullOrWhiteSpace($wfId)) {
+        Write-Phase "could not resolve v8-fanout-proof workflow id (psql exit $wfIdExit). Aborting." 'Red'; exit 40
     }
     Write-Phase "resolved wfId = $wfId"
 
