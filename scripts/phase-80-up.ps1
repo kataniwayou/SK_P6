@@ -20,6 +20,15 @@
 # `kubectl rollout status` replaces it.
 # ---------------------------------------------------------------------------
 
+param(
+    # Escape hatch for the STEP-2 context guard. By DEFAULT this script HARD-FAILS (exit 12) when the
+    # current kube context is not 'docker-desktop', so the full stack + dev Secret can never land on a
+    # shared/real cluster (threat T-80-16/T-80-17). Pass -AllowNonDockerDesktop to deliberately target
+    # a non-docker-desktop context. The harness invokes this script with NO args, so the normal
+    # docker-desktop path is unaffected.
+    [switch]$AllowNonDockerDesktop
+)
+
 $ErrorActionPreference = 'Stop'
 Set-Location (Join-Path $PSScriptRoot '..')   # repo root — kubectl apply -k k8s/ is repo-relative
 
@@ -38,10 +47,22 @@ function Write-Phase {
         Write-Phase "docker compose down returned $LASTEXITCODE (continuing — likely already down)." 'Yellow'
     }
 
-    # ---- STEP 2: Assert the kube context is docker-desktop (warn loudly, do not hard-fail) ----
+    # ---- STEP 2: Assert the kube context is docker-desktop — HARD-FAIL on mismatch (exit 12) ----
+    # The whole threat model (T-80-16/T-80-17 and the dev Secret's emphatic "NEVER a real cluster")
+    # rests on this stack only ever touching the local single node. STEP 3 runs an UNCONDITIONAL
+    # `kubectl apply -k k8s/` against the CURRENT context — so a mis-pointed context would silently
+    # create ns skp, the dev Secret, and every workload on a shared/real cluster. A soft warning scrolls
+    # past in the harness's non-interactive `pwsh -File` run, so REFUSE outright unless the operator
+    # explicitly opts in with -AllowNonDockerDesktop (mirrors the reset script's fail-loud preconditions;
+    # the apply path is now at least as strict).
     $ctx = (kubectl config current-context 2>$null | Out-String).Trim()
     if ($ctx -ne 'docker-desktop') {
-        Write-Phase "kube context is '$ctx', expected 'docker-desktop'. Verify you are NOT pointed at a real cluster before continuing." 'Yellow'
+        if ($AllowNonDockerDesktop) {
+            Write-Phase "kube context is '$ctx', not 'docker-desktop' — proceeding anyway (-AllowNonDockerDesktop was set)." 'Yellow'
+        } else {
+            Write-Phase "kube context is '$ctx', not 'docker-desktop'. Refusing to apply the full stack + dev Secret to a non-Docker-Desktop context. Re-run with -AllowNonDockerDesktop to override." 'Red'
+            exit 12
+        }
     } else {
         Write-Phase "kube context = docker-desktop (OK)."
     }
