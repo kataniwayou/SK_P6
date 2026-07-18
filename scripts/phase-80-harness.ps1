@@ -305,7 +305,8 @@ try {
     Write-Phase "STEP F.6: stop workflow + drain result pipeline to quiescence (conservation settle)"
     $stopBody = ConvertTo-Json @($wfId)
     try { Invoke-WebRequest -Method Post -Uri 'http://localhost:8080/api/v1/orchestration/stop' `
-            -ContentType 'application/json' -Body $stopBody -TimeoutSec 15 -ErrorAction Stop | Out-Null } catch { }
+            -ContentType 'application/json' -Body $stopBody -TimeoutSec 15 -ErrorAction Stop | Out-Null }
+    catch { Write-Phase "  stop POST best-effort failed: $($_.Exception.Message)" 'Yellow' }
     $prevC = -1; $prevS = -1; $polls = 0; $drainDeadline = (Get-Date).AddSeconds(180)
     do {
         Start-Sleep -Seconds 20
