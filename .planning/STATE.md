@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 80-01-PLAN.md
-last_updated: "2026-07-18T06:30:33.887Z"
+stopped_at: Completed 80-02-PLAN.md
+last_updated: "2026-07-18T06:33:55.634Z"
 last_activity: 2026-07-18
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove per
 Phase: 80 (deploy-full-system-to-local-kubernetes-docker-desktop-port-c) — EXECUTING
 Current Plan: 1
 Total Plans: 5
-Plan: 2 of 10
+Plan: 3 of 10
 Status: Ready to execute
 Last activity: 2026-07-18
 
@@ -1092,6 +1092,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 79 P03 | 12 | 1 tasks | 1 files |
 | Phase 79 P04 | 3min | 1 tasks | 1 files |
 | Phase 80 P01 | 2min | 2 tasks | 3 files |
+| Phase 80 P02 | 3min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1615,6 +1616,7 @@ Recent decisions affecting current work:
 - Phase 79-03: FALSIFY-01 wired into phase-67-harness — inject-recovery-loss no-crash branch scales keeper to 1 replica (count-guarded) + arms KEEPER_DEFEAT_REINJECT=1/K_EXECUTIONS=1 before bring-up + pins RECOVERY_UTC at window start + finally teardown; TEST-01..07 byte-unchanged, parses clean (c537164).
 - Phase 79-04: phase-79-falsify.ps1 asserts harnessExit==1 EXACTLY (not merely non-zero) so INCONCLUSIVE(2)/infra-abort can never masquerade as a passing negative control; own exit 0 == gate correctly RED for the recoverable-but-lost binding-miss reason
 - 80-01: k8s foundation layer — namespace skp + dev-only skp-dev-secrets Secret (stringData) + otel/prometheus ConfigMaps (verbatim, diff-verified byte-identical)
+- 80-02: postgres StatefulSet+1Gi PVC and redis StatefulSet (no PVC, --save '' --appendonly no) ported from compose, secret-backed creds, headless Services (D-09/D-12)
 
 ### Roadmap Milestone Log
 
@@ -1725,8 +1727,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-18T06:30:27.409Z
-Stopped at: Completed 80-01-PLAN.md
+Last session: 2026-07-18T06:33:44.857Z
+Stopped at: Completed 80-02-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
