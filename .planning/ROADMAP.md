@@ -855,7 +855,7 @@ Plans:
 **Goal:** The k8s harness runs any of TEST-01..07 by id and reaches 7/7 VERDICT_PASS on the Docker Desktop target — crash injection re-targeted from `docker compose stop/start` to `kubectl -n skp scale --replicas=0`/restore for all 5 crashable tiers (replica counts preserved on restore; RECOVERY_UTC pinned only after terminate + Ready gates), driven by a k8s sweep that reuses the phase-68 analyzer + conservation/recovery metric gate byte-for-byte.
 **Requirements**: SPEC-1, SPEC-2, SPEC-3, SPEC-4, SPEC-5, SPEC-6 (81-SPEC.md — 6 locked requirements + 8 acceptance criteria)
 **Depends on:** Phase 80
-**Plans:** 4 plans (3 waves)
+**Plans:** 4/4 plans complete
 
 Plans:
 - [x] 81-01-PLAN.md — Wave 1: generalize phase-80-harness.ps1 — -ScenarioId + 7-row scenario table + bad-id guard (exit 64) + tier maps + kubectl-scale crash sequencer (terminate/Ready gates) + -SkipBringUp (SPEC-1..4) ✅ 2026-07-18 (9f581e6, 7592750) — -ScenarioId/-SkipBringUp params + 7-row [ordered] capstone table (TEST-01..07 only, bad-id exits 64) + static $TierKind/$TierReplicas maps (keeper=2, processor-sample=2 never a blanket 1) + kubectl -n skp scale --replicas=0/restore crash sequencer with 0-running-pods terminate-wait + rollout status Ready gate before pinning RECOVERY_UTC; zero docker compose calls; PARSE_OK + all acceptance greps green
