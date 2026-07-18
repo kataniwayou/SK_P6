@@ -843,7 +843,7 @@ Plans:
 - [ ] 80-02-PLAN.md — Wave 1: postgres (SS+1Gi PVC) + redis (SS no-PVC, persistence-off) StatefulSets (D-09/12)
 - [ ] 80-03-PLAN.md — Wave 1: rabbitmq (SS+1Gi PVC) + elasticsearch (SS+2Gi PVC) StatefulSets + startupProbes (D-10/11)
 - [ ] 80-04-PLAN.md — Wave 1: otel-collector + prometheus Deployments + ClusterIP Services + ConfigMap subPath mounts (D-06/13)
-- [ ] 80-05-PLAN.md — Wave 1: baseapi-service (Deploy+Svc 8080, $(VAR) Postgres) + orchestrator (Deploy x1, no Svc, literal 900) (D-04/08)
+- [x] 80-05-PLAN.md — Wave 1: baseapi-service (Deploy+Svc 8080, $(VAR) Postgres) + orchestrator (Deploy x1, no Svc, literal 900) (D-04/08)
 - [ ] 80-06-PLAN.md — Wave 1: keeper (Deploy x2) + processor-sample (Deploy x2) — literal 900 TTL, all fault seams omitted, badconfig excluded (D-04/08)
 - [ ] 80-07-PLAN.md — Wave 2: phase-80-build.ps1 (5 :local images) + kustomization.yaml aggregator + whole-stack dry-run gate (D-03/04/05)
 - [ ] 80-08-PLAN.md — Wave 2: phase-80-reset.ps1 — kubectl-exec re-target of the compose reset (Pitfall 1, first half)

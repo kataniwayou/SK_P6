@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 80-04-PLAN.md
-last_updated: "2026-07-18T06:41:06.274Z"
+stopped_at: Completed 80-05-PLAN.md
+last_updated: "2026-07-18T06:45:24.842Z"
 last_activity: 2026-07-18
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove per
 Phase: 80 (deploy-full-system-to-local-kubernetes-docker-desktop-port-c) — EXECUTING
 Current Plan: 1
 Total Plans: 5
-Plan: 5 of 10
+Plan: 6 of 10
 Status: Ready to execute
 Last activity: 2026-07-18
 
@@ -1095,6 +1095,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 80 P02 | 3min | 2 tasks | 2 files |
 | Phase 80 P03 | 2min | 2 tasks | 2 files |
 | Phase 80 P04 | 3min | 2 tasks | 2 files |
+| Phase 80 P05 | 12min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1622,6 +1623,9 @@ Recent decisions affecting current work:
 - 80-03: rabbitmq startupProbe 10s x 6 = 60s covers ~40s cold start; ES startupProbe 10s x 12 = 120s covers ~60s cold start (wait_for_status=yellow load-bearing)
 - 80-03: rabbitmq 1Gi PVC (D-11 durable mnesia), elasticsearch 2Gi PVC (D-10 run-evidence); both diverge from compose ephemeral posture
 - otel-collector readiness upgraded to kubelet-side httpGet :13133 — works on the distroless contrib image (RESEARCH Pattern 6, plan 80-04)
+- 80-05: baseapi -composed secret-backed Postgres string (Pattern 3, secretKeyRef ordered before composed value)
+- 80-05: orchestrator ships literal Orchestrator__OutputDataTtlSeconds 900, all test seams dropped (D-08/T-80-10); NO Service, replicas:1 SPOF locked
+- 80-05: baseapi composes Postgres via k8s dependent-env expansion — 3 POSTGRES_* secretKeyRef ordered before the composed ConnectionStrings__Postgres (RESEARCH Pattern 3)
 
 ### Roadmap Milestone Log
 
@@ -1732,8 +1736,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-18T06:40:59.682Z
-Stopped at: Completed 80-04-PLAN.md
+Last session: 2026-07-18T06:45:04.451Z
+Stopped at: Completed 80-05-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
