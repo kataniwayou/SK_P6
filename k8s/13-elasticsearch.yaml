@@ -1,0 +1,102 @@
+# ============================================================================
+# elasticsearch — log sink (StatefulSet + 2Gi PVC + yellow-status startupProbe + headless Service).
+# ============================================================================
+# Port of the compose `elasticsearch` block (compose.yaml L28-49). A StatefulSet
+# grants stable identity (`elasticsearch-0`) + stable DNS via the same-named
+# headless Service on 9200. A `volumeClaimTemplates` provisions a 2Gi per-pod PVC
+# (D-10) mounted at the data dir so accumulated run-evidence logs survive a pod
+# restart — deliberately diverging from compose's ephemeral posture. All 4 env
+# vars are carried VERBATIM; `discovery.type=single-node` skips the vm.max_map_count
+# bootstrap check (Pitfall 7) and security is disabled to match the proven compose
+# dev posture (T-80-05, accepted). The compose `9200:9200` host publish is dropped;
+# it re-emerges only at port-forward (D-14).
+#
+# COLD START (Pitfall 3): ES needs ~60s to boot (compose start_period: 60s). A
+# dedicated `startupProbe` (periodSeconds 10 × failureThreshold 12 = 120s budget)
+# holds off readiness until the cluster answers. `wait_for_status=yellow` is
+# LOAD-BEARING: single-node ES never reaches green (replicas can never be assigned),
+# so a green-gated probe would never pass.
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  namespace: skp
+  labels:
+    app: elasticsearch
+    app.kubernetes.io/part-of: skp
+spec:
+  clusterIP: None            # headless — required for StatefulSet stable DNS
+  selector:
+    app: elasticsearch
+  ports:
+    - port: 9200
+      targetPort: 9200
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: elasticsearch
+  namespace: skp
+  labels:
+    app: elasticsearch
+    app.kubernetes.io/part-of: skp
+spec:
+  serviceName: elasticsearch # MUST match the headless Service name
+  replicas: 1
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+    spec:
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:8.15.5   # verbatim (public image)
+          env:
+            # All 4 carried VERBATIM from compose L33-36 (list-form → env {name,value})
+            - name: discovery.type
+              value: single-node                    # skips the vm.max_map_count bootstrap check (Pitfall 7)
+            - name: xpack.security.enabled
+              value: "false"
+            - name: xpack.security.enrollment.enabled
+              value: "false"
+            - name: ES_JAVA_OPTS
+              value: "-Xms512m -Xmx512m"
+          ports:
+            - containerPort: 9200
+          volumeMounts:
+            - name: data
+              mountPath: /usr/share/elasticsearch/data
+          # compose start_period 60s → startupProbe (10s × 12 = 120s budget covers the cold start)
+          # wait_for_status=yellow is LOAD-BEARING: single-node ES never reaches green
+          startupProbe:
+            httpGet:
+              path: "/_cluster/health?wait_for_status=yellow&timeout=5s"
+              port: 9200
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          # compose healthcheck 10s/5s/retries 5 → readiness httpGet (startupProbe gates the cold start first)
+          readinessProbe:
+            httpGet:
+              path: "/_cluster/health?wait_for_status=yellow&timeout=5s"
+              port: 9200
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 5
+          resources:
+            requests:
+              memory: "700Mi"       # holds the 512m heap + JVM/off-heap overhead (Pitfall 6)
+            limits:
+              memory: "1Gi"
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi           # D-10 — run-evidence log stability
+        # storageClassName omitted → Docker Desktop default "hostpath" provisioner binds
