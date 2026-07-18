@@ -312,11 +312,14 @@ try {
         return [double]($r.data.result | ForEach-Object { [double]$_.value[1] } | Measure-Object -Sum).Sum
     }
 
-    $fireBaseline = Get-FireCount
-    Write-Phase "  baseline fire count = $fireBaseline" 'Gray'
-
-    # 5-minute observation window (300s). Poll cadence ~5s.
+    # 5-minute observation window (300s). Poll cadence ~5s. Set BEFORE the baseline read so the crash
+    # branch's $windowDeadline (the observe-loop upper bound) can be computed alongside it.
     $windowSeconds = 300
+    $fireBaseline = Get-FireCount
+    # Absolute deadline for the STEP F.2 observe-loop (crash branch only; the no-fault path uses the
+    # $windowStart-relative STEP F.5 hold). Mirrors phase-67-harness.ps1:337.
+    $windowDeadline = (Get-Date).AddSeconds($windowSeconds)
+    Write-Phase "  baseline fire count = $fireBaseline" 'Gray'
 
     # -----------------------------------------------------------------------
     # OPTIONAL execution-based observation window (default-OFF). When $env:K_EXECUTIONS is unset or 0
@@ -330,10 +333,71 @@ try {
     }
 
     # -----------------------------------------------------------------------
-    # STEP F.2 — NO-FAULT BASELINE: no injection. TEST-01 is faultType='none' — fall straight through
-    # to the window hold. (The fault sequencer / crash steps of phase-67 STEP F.2-F.4 are omitted.)
+    # STEP F.2/F.3/F.4 — FAULT BRANCH (code 60). The 'none' path (TEST-01) falls straight through to
+    # the STEP F.5 window hold — unchanged. The 'stop-start' path (TEST-02..07) is the Pitfall-1
+    # re-target of phase-67's compose crash sequencer: observe until N fires → scale each target tier
+    # to 0 (kubectl) → wait 0 running pods → dwell → scale back to the exact Phase-80 count → wait
+    # Ready → pin RECOVERY_UTC. Crash is purely kubectl-scale — no compose CLI (SPEC req 2). TEST-07
+    # crashes BOTH redis+rabbitmq: crash loop → ONE shared dwell → restore loop → Ready loop.
     # -----------------------------------------------------------------------
-    Write-Phase "STEP F.2: no-fault baseline — no injection (faultType='none')"
+    if ($scenario.faultType -eq 'none') {
+        Write-Phase "STEP F.2: no-fault baseline — no injection (faultType='none')"
+    } else {
+        # STEP F.2 — OBSERVE until N fires (proves the cron is actually firing before we inject).
+        Write-Phase "STEP F.2: observe-loop — waiting for N=$($scenario.injectAfterNFires) fires before inject"
+        $reachedN = $false
+        while ((Get-Date) -lt $windowDeadline) {
+            $observed = (Get-FireCount) - $fireBaseline
+            if ($observed -ge $scenario.injectAfterNFires) { $reachedN = $true; break }
+            Start-Sleep -Seconds 5
+        }
+        if (-not $reachedN) { Write-Phase "baseline never reached N=$($scenario.injectAfterNFires) fires before window close. Aborting." 'Red'; exit 60 }
+        Write-Phase "  reached N=$($scenario.injectAfterNFires) observed fires — injecting fault (kubectl scale)." 'Gray'
+
+        # STEP F.3 — CRASH: scale each target tier to 0 (whole-tier). TEST-07 crashes BOTH redis+rabbitmq.
+        foreach ($tier in $scenario.targetContainers) {
+            $kind = $TierKind[$tier]
+            Write-Phase "STEP F.3: crashing tier '$tier' ($kind) — kubectl -n skp scale $kind/$tier --replicas=0"
+            kubectl -n skp scale "$kind/$tier" --replicas=0 | Out-Null
+            if ($LASTEXITCODE -ne 0) { Write-Phase "scale '$tier' to 0 failed (exit $LASTEXITCODE)." 'Red'; exit 60 }
+        }
+        # STEP F.3 — TERMINATE-WAIT (SPEC req 4): block until 0 running pods per crashed tier (bounded 90s).
+        foreach ($tier in $scenario.targetContainers) {
+            $termDeadline = (Get-Date).AddSeconds(90); $terminated = $false
+            while ((Get-Date) -lt $termDeadline) {
+                $running = @(kubectl -n skp get pods -l app=$tier --field-selector=status.phase=Running -o name 2>$null |
+                            Where-Object { $_ -match '\S' })
+                if ($running.Count -eq 0) { $terminated = $true; break }
+                Start-Sleep -Seconds 2
+            }
+            if (-not $terminated) { Write-Phase "tier '$tier' still had running pods 90s after scale-0. Aborting." 'Red'; exit 60 }
+            Write-Phase "  tier '$tier' fully terminated (0 running pods)." 'Gray'
+        }
+
+        # DWELL — single shared dwell for the whole crashed set (TEST-07 both down together).
+        Write-Phase "  dwell $($scenario.dwellSeconds)s (tier(s) down)..."
+        Start-Sleep -Seconds $scenario.dwellSeconds
+
+        # STEP F.3 — RESTORE: scale each tier back to its Phase-80 count (NEVER a blanket 1 — SPEC req 3).
+        foreach ($tier in $scenario.targetContainers) {
+            $kind = $TierKind[$tier]; $rep = $TierReplicas[$tier]
+            Write-Phase "STEP F.3: restoring tier '$tier' — kubectl -n skp scale $kind/$tier --replicas=$rep"
+            kubectl -n skp scale "$kind/$tier" --replicas=$rep | Out-Null
+            if ($LASTEXITCODE -ne 0) { Write-Phase "scale '$tier' back to $rep failed (exit $LASTEXITCODE)." 'Red'; exit 60 }
+        }
+        # STEP F.4 — READINESS GATE (SPEC req 4): block until all replicas Ready BEFORE pinning RECOVERY_UTC.
+        # rollout status works uniformly for Deployments AND StatefulSets (D-05 discretion — simplest choice).
+        foreach ($tier in $scenario.targetContainers) {
+            $kind = $TierKind[$tier]
+            Write-Phase "STEP F.4: waiting for tier '$tier' ($kind) all replicas Ready (bounded 120s)"
+            kubectl -n skp rollout status "$kind/$tier" --timeout=120s
+            if ($LASTEXITCODE -ne 0) { Write-Phase "tier '$tier' did not become Ready within 120s after restore. Aborting." 'Red'; exit 60 }
+            Write-Phase "  tier '$tier' Ready again." 'Gray'
+        }
+        # Pin RECOVERY_UTC ONLY now — after every crashed tier passed terminate + Ready gates (SPEC req 4).
+        $recoveryUtc = [DateTimeOffset]::UtcNow
+        Write-Phase "  RECOVERY_UTC = $($recoveryUtc.ToString('o')) (all crashed tiers Ready)." 'Gray'
+    }
 
     # -----------------------------------------------------------------------
     # STEP F.5 — HOLD OUT THE 5-MIN WINDOW, then record windowEnd. For TEST-01 this is the whole
