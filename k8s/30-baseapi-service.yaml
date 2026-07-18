@@ -1,0 +1,126 @@
+# ============================================================================
+# baseapi-service — HTTP control plane (Deployment x1 + ClusterIP Service 8080).
+# ============================================================================
+# Port of the compose `baseapi-service` block (compose.yaml L359-398). This is
+# the ONLY tier the host harness talks HTTP to: POST /orchestration/start → 204
+# (T-80-08 — reached via 127.0.0.1 port-forward, plan 80-09). All other app
+# comms are in-cluster over Service DNS.
+#
+# IMAGE (D-04): `baseapi-service:local` + IfNotPresent — Docker Desktop's kubelet
+# reads the same local image store `docker build` writes, so no registry is needed.
+# A never-changing tag means the bring-up MUST `kubectl rollout restart` after a
+# rebuild (plan 80-09) to force the pod onto fresh bits (T-80-09 SourceHash currency).
+#
+# POSTGRES CONNECTION (RESEARCH Pattern 3 — $(VAR) dependent env): the 3 POSTGRES_*
+# secretKeyRef entries are listed BEFORE ConnectionStrings__Postgres so the kubelet
+# can expand $(POSTGRES_DB)/$(POSTGRES_USER)/$(POSTGRES_PASSWORD) into the composed
+# string. Redis/OTEL/RabbitMq host strings port BYTE-FOR-BYTE (Service DNS resolves
+# the bare names identically inside the `skp` namespace).
+#
+# PROBES (Pitfall 3 — decoupled): readiness hits /health/ready :8080 (bus is
+# SOFT-on-CRUD here, MinimalFailureStatus=Degraded, so a broker blip never flips it
+# to 503 — MSG-WEBAPI-04); liveness hits /health/live :8080, the always-Healthy
+# "self" check that binds as soon as Kestrel starts — decoupled from broker readiness
+# so a slow dependency never CrashLoops the pod. Compose depends_on + the 8080:8080
+# host publish are DROPPED (phased bring-up handles ordering; host reach = port-forward).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: baseapi-service
+  namespace: skp
+  labels:
+    app: baseapi-service
+    app.kubernetes.io/part-of: skp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: baseapi-service
+  template:
+    metadata:
+      labels:
+        app: baseapi-service
+    spec:
+      containers:
+        - name: baseapi-service
+          image: baseapi-service:local          # D-04 — local build, never :latest
+          imagePullPolicy: IfNotPresent          # D-04 — read the local store, no registry pull
+          env:
+            - name: ASPNETCORE_ENVIRONMENT
+              value: Production
+            # 3 POSTGRES_* refs FIRST (RESEARCH Pattern 3) so $(VAR) below resolves
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: skp-dev-secrets
+                  key: POSTGRES_DB
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: skp-dev-secrets
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: skp-dev-secrets
+                  key: POSTGRES_PASSWORD
+            # composed connection string — kubelet expands $(VAR) from the refs above
+            - name: ConnectionStrings__Postgres
+              value: "Host=postgres;Port=5432;Database=$(POSTGRES_DB);Username=$(POSTGRES_USER);Password=$(POSTGRES_PASSWORD)"
+            - name: ConnectionStrings__Redis
+              value: "redis:6379,abortConnect=false,connectTimeout=5000"   # verbatim
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4317"                          # verbatim
+            - name: RabbitMq__Host
+              value: rabbitmq                                              # verbatim (Service DNS)
+            - name: RabbitMq__Username
+              valueFrom:
+                secretKeyRef:
+                  name: skp-dev-secrets
+                  key: RABBITMQ_DEFAULT_USER
+            - name: RabbitMq__Password
+              valueFrom:
+                secretKeyRef:
+                  name: skp-dev-secrets
+                  key: RABBITMQ_DEFAULT_PASS
+          ports:
+            - containerPort: 8080
+          # readiness gates traffic on the bus-aware /health/ready (SOFT-on-CRUD)
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          # liveness is the always-Healthy self check → decoupled from broker (Pitfall 3)
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 6
+          resources:
+            requests:
+              memory: "192Mi"
+            limits:
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: baseapi-service
+  namespace: skp
+  labels:
+    app: baseapi-service
+    app.kubernetes.io/part-of: skp
+spec:
+  # ClusterIP (default) — host reach is 127.0.0.1 port-forward 8080→8080 (D-14).
+  selector:
+    app: baseapi-service
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
