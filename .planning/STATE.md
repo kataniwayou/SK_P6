@@ -1,18 +1,18 @@
 ---
 gsd_state_version: 1.0
-milestone: v7.0.0
-milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: 4
-status: milestone_complete
-stopped_at: Completed 81-04-PLAN.md — Phase 81 capstone 7/7 VERDICT_PASS
-last_updated: "2026-07-18T11:19:23.646Z"
+milestone: v10.0.0
+milestone_name: Orchestrator High Availability
+current_plan: Not started
+status: planning
+stopped_at: Milestone v10.0.0 started — phases 82-83 added (Orchestrator HA)
+last_updated: "2026-07-18T00:00:00.000Z"
 last_activity: 2026-07-18
 progress:
-  total_phases: 4
-  completed_phases: 1
+  total_phases: 2
+  completed_phases: 0
   total_plans: 0
   completed_plans: 0
-  percent: 25
+  percent: 0
 ---
 
 # Project State
@@ -28,12 +28,12 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 
 ## Current Position
 
-Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 81
+Milestone: v10.0.0 (Orchestrator High Availability) — STARTED 2026-07-18. Goal: run the orchestrator as N≥2 replicas with single-leader mutual exclusion so horizontal scaling never produces duplicate workflow triggers, with fast failover and role-tagged observability. Only the elected leader performs scheduler-triggered entry-step sends (gate on `WorkflowFireJob`'s send loop, read from a single-writer volatile `LeaderState`); leader election via `KubernetesClient` `LeaderElector` over a `coordination.k8s.io/v1` Lease in a `BackgroundService`; `attributes.role` on every orchestrator log. 2 phases: 82 (leader election + gate + role logging + RBAC + replica bump), 83 (failover proof). Builds on v9.0.0 k8s deploy (80-81). Phases continue at **82**. Prior milestone v9.0.0 (Canonical Two-Consumer Recovery & L2 Delivery Proof, phases 69-81) is complete-but-unarchived — run /gsd-complete-milestone to archive it.
+Phase: 82 (not planned yet)
 Current Plan: Not started
-Total Plans: 5
-Plan: 4 of 4
-Status: Milestone complete
+Total Plans: —
+Plan: —
+Status: Milestone v10.0.0 started — ready to plan Phase 82
 Last activity: 2026-07-18
 
 > Phase 79 Plan 01 — ✅ COMPLETE 2026-07-17 (Wave 1: the product-source fault seam that manufactures a True-Positive recoverable-but-lost strand for the gate-teeth negative control). **2 atomic feat commits** (`7ec9169` ReinjectConsumer: static `_defeatedOnce` Interlocked one-shot latch + gate the `ep.Send` redispatch behind `int.TryParse(Environment.GetEnvironmentVariable("KEEPER_DEFEAT_REINJECT"),out d) && d>0 && Interlocked.CompareExchange(ref _defeatedOnce,1,0)==0` — `if(!defeatReinject){ep.Send}` else a TEST-ONLY defeat warning; `CountSent` + the `"reinject"` LogInformation stay UNCHANGED after the gate so `attributes.ReinjectOutcome=="reinject"` reaches the analyzer and WR-01 vetoes → binding miss, byte-identical to a real loss (D-01); `4a9f692` compose.yaml keeper `environment:` gains `KEEPER_DEFEAT_REINJECT: "${KEEPER_DEFEAT_REINJECT:-0}"` after OTEL endpoint, `deploy.replicas` untouched). Decisions D-01/D-02/D-06 honoured; env-var `KEEPER_DEFEAT_REINJECT` (discretion). **Inertness proven:** short-circuit means the Interlocked call never runs when unset ⇒ `*ReinjectConsumerFacts` **8/8 GREEN** (redispatch runs, latch never consumed); `*PassFailEngineFacts` **29/29 GREEN**; `docker compose config` resolves the var to `"0"` default-off. **No deviations** — plan executed exactly as written. Verification: Keeper + test project both build **0-warning/0-error**. Full `--filter-not-trait Category=RealStack` shows 282/853 failures — ALL the documented Docker-less-sandbox infra baseline (RabbitMQ `No such host is known`, Postgres/Redis refused; 0 analyzer/keeper LOGIC facts among them), logged to `deferred-items.md`; full-suite exit 0 is Plan 79-05's live-gate concern. This plan did NOT run the live stack (compile + hermetic-logic green only). Summary: `.planning/phases/79-falsification-harness-for-the-resilience-sweep-negative-cont/79-01-SUMMARY.md` (Self-Check PASSED). Plan 02 next.
@@ -78,6 +78,7 @@ Last activity: 2026-07-18
 
 ### Roadmap Evolution
 
+- 2026-07-18 — **Milestone v10.0.0 (Orchestrator High Availability) started + Phases 82-83 added** (new milestone after v9.0.0 completed): orchestrator run as N≥2 replicas with single-leader mutual exclusion. **Phase 82** `orchestrator-ha-leader-election` — `KubernetesClient` `LeaderElector` (`RunAndTryToHoldLeadershipForeverAsync`) over a `coordination.k8s.io/v1` Lease in a `BackgroundService`; single-writer volatile `LeaderState`; the leader gate wraps `WorkflowFireJob`'s entry-step `foreach…DispatchAsync` loop ONLY (followers still reschedule + refresh L1; `RelocateTail` step-advancement stays ungated so in-flight workflows never stall on failover); `OrchestratorRoleLogEnricher` stamps `attributes.role`; RBAC Role/RoleBinding for `leases` in `skp`; orchestrator Deployment → N≥2 (HA-01..HA-06). **Phase 83** `orchestrator-ha-failover-proof` — kill the leader mid-run, prove zero duplicate triggers (distinct per-fire correlationIds) + bounded single-leader recovery (HA-07). Design confirmed in the 2026-07-18 conversation; mechanism = library-over-BackgroundService (not roll-your-own), verified `KubernetesClient` API. New dep: `KubernetesClient`. **Numbering:** created MANUALLY (not `phase.add`) with continued numbering (82/83) and `STATE.milestone` set to **v10.0.0** — avoided the [[gsd-phase-numbering]] stale-pointer bug (pointer was stale `v7.0.0`); did NOT run `phases.clear` (would have deleted unarchived v9.0.0 phase dirs 80-81). v9.0.0 left complete-but-unarchived. Created `REQUIREMENTS.md` (HA-01..HA-07).
 - 2026-07-18 — **Phase 81 added** (v9.0.0, after Phase 80): `re-run-the-7-scenario-fault-recovery-sweep-test-01-test-07-o` — re-run the 7-scenario fault-recovery sweep (TEST-01..07) on the k8s Docker Desktop target using `kubectl scale --replicas=0` (then scale-back) as the crash/recovery injection — the k8s analog of the compose `docker stop`/`start`. Generalizes the Phase-80 k8s harness (`phase-80-harness.ps1`, currently TEST-01-only) to accept a scenario id/list and re-targets the crash sequencer from docker-compose CLI to `kubectl scale` (THIRD instance of the RESEARCH Pitfall-1 CLI-coupling re-target), preserving each tier's replica count on restore (orchestrator 1, keeper 2, processor-sample 2, redis 1, rabbitmq 1) and waiting for actual terminate on scale-0 + Ready on restore before pinning RECOVERY_UTC. Reuses the phase-68 sweep analyzer + conservation/recovery metric gate verbatim. Scope = the 7 recovery-capstone scenarios only (processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq whole-tier crash + no-fault baseline); the seam-dependent negative controls (TEST-08/09/10, FALSIFY-01/02) stay OUT of scope because the Phase-80 manifests deliberately omit the test-only env seams they require (D-08). Realizes the "fault-scenario re-run on k8s" deferred idea from Phase 80's CONTEXT. Depends on Phase 80. **Numbering-bug fix applied ([[gsd-phase-numbering]], 7th occurrence):** `STATE.milestone` had regressed to the stale `v7.0.0` pointer AGAIN (post phase-80 `phase.complete` reset it to v7.0.0/milestone_complete; `phase.add` then numbered off phases 59-62 → bogus **63**, colliding with archived v8.0.0 phases 63-68, inserted at EOF with wrong `Depends on: Phase 62`). Reverted the bogus insertion (`git checkout ROADMAP.md` + `rm -rf 63-*`), reset `STATE.milestone` → **v9.0.0** BEFORE re-adding → numbering resolved to **81** (`Depends on: Phase 80`); then manually relocated the block from EOF into the v9.0.0 section (after Phase 80). Root cause STILL unfixed in the tool — always reset the pointer before a phase add.
 - 2026-07-17 — **Phase 79 added** (end of roadmap, v9.0.0): `falsification-harness-for-the-resilience-sweep` — a negative-control test proving the resilience-sweep pass/fail gate has TEETH (rules out the False-Negative / silent-green risk that the 7/7 true-negative sweeps cannot address). Adds a toggleable env-gated **lossy injection seam** (family of the existing `SCENARIO_ID`/`K_EXECUTIONS` seams) that deliberately **defeats the recovery path** for exactly one `{correlationId, executionId}` so it registers as **recoverable-but-lost** (NOT a clean keeper-drop, NOT tolerated in-flight-at-wipe loss). **Critical fidelity constraint:** defeating recovery must leave the ES telemetry shape byte-identical to a real loss — the only difference between the injected run and a genuine loss is HOW it was caused, never HOW it looks in the logs (else you only prove the detector catches a synthetic signature — the same hermetic/live gap that bit Phase 78's 78-04). A one-scenario harness (mirroring `scripts/phase-67-harness.ps1`) runs the injection and asserts `scripts/phase-68-sweep.ps1` flips that scenario to VERDICT_FAIL (Missing>0 or the recoverable-but-lost binding condition), confirming a **True Positive** fires. Scope: start with the recoverable-but-lost binding axis; missing/duplicate axes are follow-on negative controls (full gate-teeth coverage wants one per verdict axis). Validates the OBSERVER/gate, not the system's recovery — it makes the 7/7 true-negative sweeps admissible as evidence. Depends on Phase 78. **Numbering-bug fix applied ([[gsd-phase-numbering]], 6th occurrence):** `STATE.milestone` had regressed to the stale `v7.0.0` pointer again (max existing phase = 78); reset it to **v9.0.0** (Canonical Two-Consumer Recovery & L2 Delivery Proof — the milestone phases 76/77/78 live under) BEFORE `phase.add`, so numbering resolved correctly to **79** (`naming_mode: sequential`, no collision, no manual renumber). Root cause STILL unfixed in the tool — always reset the pointer before a phase add.
 
