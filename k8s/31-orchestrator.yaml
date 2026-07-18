@@ -33,6 +33,16 @@ metadata:
     app.kubernetes.io/part-of: skp
 spec:
   replicas: 1                                  # documented SPOF — LOCKED at 1 (D)
+  # Recreate (NOT the default RollingUpdate): the orchestrator declares an EXCLUSIVE
+  # RabbitMQ queue ('orchestrator'), so two instances must never run at once. On a
+  # rollout restart RollingUpdate briefly runs old+new together → the new pod gets
+  # RESOURCE_LOCKED (405) declaring the exclusive queue → readiness 503 → the rollout
+  # deadlocks (old never terminates until new is Ready). Recreate terminates the old
+  # pod FIRST (releasing the exclusive queue), then starts the replacement — the k8s
+  # expression of the documented single-owner invariant. Compose never hit this because
+  # `restart`/`--force-recreate` stop the old container before starting the new.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: orchestrator
