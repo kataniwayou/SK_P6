@@ -22,6 +22,9 @@
       STEP 3  FK-safe psql DELETE of the 6 workflow-graph tables in migration Down() order, in a
               single transaction. PRESERVES processors + config_schemas (schemas) — idempotent,
               NOT deleted (D-06). Static-literal SQL (no interpolated input — threat T-80-15).
+      STEP 3b rabbitmq drain (D-04) — enumerate (`rabbitmqctl list_queues`) then purge every durable
+              queue (`rabbitmqctl purge_queue`), fail-soft per queue, so stale messages do not bleed
+              across scenarios in the shared-stack sweep (rabbitmq has a PVC — queues survive a crash).
       STEP 4  Processor-set assertion — assert >=1 processor-sample pod is Running (expect 2).
       STEP 5  One-line success summary; exit 0.
 
@@ -119,6 +122,25 @@ if ($LASTEXITCODE -ne 0) {
     exit 2
 }
 Write-Phase '  graph rows deleted (processors + config_schemas preserved).' 'Gray'
+
+# ---------------------------------------------------------------------------
+# STEP 3b — rabbitmq drain (D-04): purge every durable queue so stale messages do not bleed across
+# scenarios in the shared-stack sweep. rabbitmq has a PVC (k8s/12-rabbitmq.yaml, Phase-80 D-11) so its
+# durable queues + mnesia survive BOTH a scale-0 crash AND a re-apply. Bounded + idempotent: purging an
+# empty/absent queue is a no-op success and MUST NOT abort the reset. Queue names are DYNAMIC (processor
+# dispatch queues '{ProcessorId:D}' + '{ProcessorId:D}-post'; orchestrator static queues) — ENUMERATE.
+# ---------------------------------------------------------------------------
+Write-Phase 'STEP 3b: rabbitmq drain — purge all durable queues (idempotent)...'
+$queues = @(kubectl -n skp exec statefulset/rabbitmq -- rabbitmqctl list_queues -q name 2>$null |
+    Where-Object { $_ -match '\S' })
+foreach ($q in $queues) {
+    # Per-queue purge is FAIL-SOFT (idempotent): a purge of an empty/absent queue is a no-op success,
+    # and a transient per-queue miss is re-run-tolerant — the whole-reset invariant is the keyspace/graph
+    # wipe, not any single queue purge. So this does NOT abort (no fail-loud guard) on a per-queue purge
+    # miss (unlike STEP 1/3 which fail-loud on the primary wipe).
+    kubectl -n skp exec statefulset/rabbitmq -- rabbitmqctl purge_queue $q 2>$null | Out-Null
+}
+Write-Phase "  drained $($queues.Count) queue(s)." 'Gray'
 
 # ---------------------------------------------------------------------------
 # STEP 4 — processor-set assertion.
