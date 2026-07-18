@@ -411,3 +411,6 @@ obj/
 .env.local
 *.env.local
 
+
+# Phase 80 k8s bring-up runtime output — port-forward PIDs written by scripts/phase-80-up.ps1
+.k8s-portforward-pids
