@@ -221,9 +221,123 @@ try {
     }
     Write-Phase "  activation accepted (204)." 'Gray'
 
-    # STEP F: TODO Task 2 — phase-aligned leader-kill sequencer
+    # -----------------------------------------------------------------------
+    # STEP F — LEADER-KILL SEQUENCER (NEW — the only genuinely new PowerShell).
+    # The load-bearing timing requirement: force-delete the leader ~3s before a :00/:30 cron boundary so
+    # the boundary tick deterministically lands in the ~11-17s election gap (phase-aligned kill — resolves
+    # the Nyquist gap-coverage problem for claim #3 WITHOUT changing the locked */30 cron).
+    # -----------------------------------------------------------------------
 
-    # STEP H: TODO Task 2 — verdict driver (exit 0/1/2)
+    # F.0 — deterministic leader identity (holderIdentity == POD_NAME, D-02a). NEVER target a pod picked
+    # by a blind replica change — read the exact Lease holder and delete that pod. Pin $LASTEXITCODE
+    # BEFORE the trim (a failed read yields empty stdout — the string-cast .Trim() can't throw and bypass exit 45).
+    Write-Phase "STEP F.0: read the current leader (kubectl get lease orchestrator-leader -o jsonpath spec.holderIdentity)"
+    $leaderRaw = kubectl get lease orchestrator-leader -n skp -o jsonpath='{.spec.holderIdentity}'
+    $leaderExit = $LASTEXITCODE
+    $leader = ("$leaderRaw").Trim()
+    if ($leaderExit -ne 0 -or [string]::IsNullOrWhiteSpace($leader)) {
+        Write-Phase "could not read Lease holderIdentity (kubectl exit $leaderExit). Aborting." 'Red'; exit 45
+    }
+    Write-Phase "current leader = $leader"
+
+    # F.1 — pin WINDOW_START and observe ES until >=1 CLEAN pre-kill fire is seen (>=1 processor
+    # hop-executed record carrying attributes.StepId since the window opened). This proves the seeded cron
+    # is actually firing under the current leader BEFORE we kill it. A clean-fire never observed within the
+    # bounded budget is a sequencer PRECONDITION failure (exit 60), NOT a system fault. Static ES body:
+    # only the EsIndexNames-style direct field path + the validated {windowStart:o} timestamp interpolate.
+    $windowStart = [DateTimeOffset]::UtcNow
+    Write-Phase "STEP F.1: window open at $($windowStart.ToString('o')) — observing ES for >=1 clean pre-kill fire (bounded 90s)..."
+    function Get-CleanFireCount([DateTimeOffset]$since) {
+        $body = @"
+{ "query": { "bool": { "filter": [
+  { "exists": { "field": "attributes.StepId" } },
+  { "range": { "@timestamp": { "gte": "$($since.ToString('o'))" } } }
+] } } }
+"@
+        try {
+            $r = Invoke-RestMethod -Method Post -Uri 'http://localhost:9200/logs-generic.otel-default/_count' `
+                   -ContentType 'application/json' -Body $body -TimeoutSec 10 -ErrorAction Stop
+            return [int]$r.count
+        } catch {
+            # 404 lazy-index / transient backend blip => treat as 0 clean fires (keep polling to the deadline).
+            return 0
+        }
+    }
+    $preKillDeadline = (Get-Date).AddSeconds(90)
+    $cleanFires = 0
+    while ((Get-Date) -lt $preKillDeadline) {
+        $cleanFires = Get-CleanFireCount $windowStart
+        if ($cleanFires -ge 1) { break }
+        Start-Sleep -Seconds 5
+    }
+    if ($cleanFires -lt 1) {
+        Write-Phase "no clean pre-kill fire observed within 90s (sequencer precondition failed). Aborting." 'Red'; exit 60
+    }
+    Write-Phase "  observed $cleanFires clean pre-kill fire record(s) — proceeding to the phase-aligned kill." 'Gray'
+
+    # F.2 — PHASE-ALIGN (Pitfall 1): sleep until ~3s before the next :00/:30 wall-clock boundary so the
+    # boundary tick lands ~3s into the guaranteed-minimum ~11s election gap → a deterministic single skip.
+    $now = [DateTimeOffset]::UtcNow
+    $secIntoHalfMin = ($now.Second % 30) + $now.Millisecond / 1000.0
+    $sleepS = (30 - $secIntoHalfMin) - 3.0
+    if ($sleepS -lt 0) { $sleepS += 30 }
+    Write-Phase "STEP F.2: phase-align — sleeping $([math]::Round($sleepS,2))s to ~3s before the next :00/:30 boundary"
+    Start-Sleep -Seconds $sleepS
+
+    # F.3 — SIGKILL the leader; NO graceful lease release (D-02). The survivor must wait out LeaseDuration
+    # (~15s) expiry before acquiring — the true bounded-recovery test. Target ONLY the holderIdentity pod
+    # read in F.0 (namespace-scoped). Pin KILL_UTC at the kubectl RETURN (Open Q1).
+    Write-Phase "STEP F.3: force-delete the leader pod $leader (kubectl delete pod --grace-period=0 --force)"
+    kubectl delete pod $leader -n skp --grace-period=0 --force | Out-Null
+    if ($LASTEXITCODE -ne 0) { Write-Phase "force-delete of leader failed (kubectl exit $LASTEXITCODE). Aborting." 'Red'; exit 55 }
+    $killUtc = [DateTimeOffset]::UtcNow
+    Write-Phase "  KILL_UTC = $($killUtc.ToString('o')) (force-deleted $leader)" 'Yellow'
+
+    # F.5 — HOLD ~120s to capture the election-gap bucket + the survivor's follower->leader role flip +
+    # >=1 post-recovery clean fire, then pin WINDOW_END. The hold + the fact's 60s drain covers
+    # KILL_UTC + gap(<=17s) + one cron period(30s) + export(~60s).
+    Write-Phase "STEP F.5: holding 120s to capture gap + role-flip + post-recovery fire..."
+    Start-Sleep -Seconds 120
+    $windowEnd = [DateTimeOffset]::UtcNow
+    Write-Phase "  window closed at $($windowEnd.ToString('o')) ($([int](($windowEnd - $windowStart).TotalSeconds))s)."
+
+    # -----------------------------------------------------------------------
+    # STEP H — VERDICT DRIVER (do NOT remap to an infra code) — clone of phase-80 STEP H, retargeted to the
+    # Plan-02 HA fact and carrying KILL_UTC. Set the env seam (SCENARIO_ID / WINDOW_*_UTC / KILL_UTC),
+    # invoke the RealStack verdict via the MTP-native filter, then resolve the AUTHORITATIVE verdict from
+    # the report JSON (written BEFORE the fixture's assert, so its Verdict is authoritative even when a
+    # non-Pass verdict made $LASTEXITCODE mirror 1). The env seam is cleared in a `finally`.
+    # -----------------------------------------------------------------------
+    Write-Phase "STEP H: HA verdict (dotnet test ~HaFailoverAnalyzer)"
+    $env:SCENARIO_ID      = 'phase-83-ha'
+    $env:WINDOW_START_UTC = $windowStart.ToString('o')
+    $env:WINDOW_END_UTC   = $windowEnd.ToString('o')
+    $env:KILL_UTC         = $killUtc.ToString('o')
+    try {
+        dotnet test tests/BaseApi.Tests/BaseApi.Tests.csproj -c Release `
+          -- --filter-method "*Ha_Failover_Window_Yields_Pass*" 2>&1 | Out-String | Write-Host
+        $analyzerExit = $LASTEXITCODE
+    } finally {
+        # Clear the env seam so a terminating error inside the verdict block cannot leak it into the parent shell.
+        Remove-Item Env:SCENARIO_ID, Env:WINDOW_START_UTC, Env:WINDOW_END_UTC, Env:KILL_UTC -ErrorAction SilentlyContinue
+    }
+
+    # Authoritative verdict from the report JSON (written BEFORE the assert), mapped 0/1/2 via the shared lib.
+    $report = Get-ChildItem -Path (Join-Path $repoRoot 'tests/BaseApi.Tests/bin') -Recurse -Filter 'phase-83-ha.json' `
+              -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'analyzer-reports' } | Select-Object -First 1
+    if ($report) {
+        Write-Phase "HA report: $($report.FullName)" 'Green'
+        try {
+            $analyzerExit = Resolve-AnalyzerExitCode (Get-Content $report.FullName -Raw | ConvertFrom-Json)
+        } catch {
+            Write-Phase "  WARNING: could not parse HA report for exit-code resolution: $($_.Exception.Message)" 'Yellow'
+        }
+    } else {
+        Write-Phase "WARNING: analyzer-reports/phase-83-ha.json not found — using the mirrored dotnet-test exit." 'Yellow'
+    }
+    $verdictClass = (Resolve-SweepClass $analyzerExit).Class
+    Write-Phase "HA verdict exit = $analyzerExit ($verdictClass; 0=PASS 1=FAIL 2=INCONCLUSIVE)" $(if ($analyzerExit -eq 0) { 'Green' } else { 'Yellow' })
+    exit $analyzerExit
 
 } finally {
     # -----------------------------------------------------------------------
