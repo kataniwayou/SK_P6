@@ -36,10 +36,10 @@ Milestone goal: run the orchestrator as N≥2 replicas with single-leader mutual
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| HA-01 | 82 | Pending |
-| HA-02 | 82 | Pending |
-| HA-03 | 82 | Pending |
-| HA-04 | 82 | Pending |
-| HA-05 | 82 | Pending |
-| HA-06 | 82 | Pending |
+| HA-01 | 82 | Complete |
+| HA-02 | 82 | Complete |
+| HA-03 | 82 | Complete |
+| HA-04 | 82 | Complete |
+| HA-05 | 82 | Complete |
+| HA-06 | 82 | Complete |
 | HA-07 | 83 | Pending |
