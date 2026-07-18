@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 2
-status: verifying
+status: milestone_complete
 stopped_at: Completed 82-04-PLAN.md
 last_updated: "2026-07-18T19:43:14.618Z"
 last_activity: 2026-07-18
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 0
   completed_plans: 0
-  percent: 0
+  percent: 25
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v10.0.0 (Orchestrator High Availability) — STARTED 2026-07-18. Goal: run the orchestrator as N≥2 replicas with single-leader mutual exclusion so horizontal scaling never produces duplicate workflow triggers, with fast failover and role-tagged observability. Only the elected leader performs scheduler-triggered entry-step sends (gate on `WorkflowFireJob`'s send loop, read from a single-writer volatile `LeaderState`); leader election via `KubernetesClient` `LeaderElector` over a `coordination.k8s.io/v1` Lease in a `BackgroundService`; `attributes.role` on every orchestrator log. 2 phases: 82 (leader election + gate + role logging + RBAC + replica bump), 83 (failover proof). Builds on v9.0.0 k8s deploy (80-81). Phases continue at **82**. Prior milestone v9.0.0 (Canonical Two-Consumer Recovery & L2 Delivery Proof, phases 69-81) is complete-but-unarchived — run /gsd-complete-milestone to archive it.
-Phase: 82 (orchestrator-ha-leader-election) — EXECUTING
-Current Plan: 2
+Phase: 82
+Current Plan: Not started
 Total Plans: 4
 Plan: 4 of 4
-Status: Phase complete — ready for verification
+Status: Milestone complete
 Last activity: 2026-07-18
 
 > Phase 82 Plan 01 — ✅ COMPLETE 2026-07-18 (Wave 1: the leader-election core — the foundation contract every other Phase-82 plan consumes). **3 atomic feat commits** (`d6fd3e2` CPM pin + Orchestrator PackageReference for `KubernetesClient`; `c2d06a9` `LeaderState` single-writer volatile snapshot holder; `29cff1c` `LeaderElectionService` build-only BackgroundService). Requirements **HA-02/HA-03/HA-04/HA-06**. `LeaderState` (src/Orchestrator/Election/LeaderState.cs): an immutable `LeaderSnapshot(IsLeader,Role,CurrentLeaderId)` record swapped whole into a `private volatile LeaderSnapshot _snapshot` (lock-free, torn-read-safe — mirrors StartupGate Volatile discipline + WorkflowFireJob record-with-swap); default is follower (`IsLeader==false`,`Role=="follower"`); ctor `LeaderState(bool startAsLeader=false)` seeds leader for the off-cluster Plan-02/D-02 path (construction, NOT a runtime write, so single-writer holds); writers `BecomeLeader`/`BecomeFollower`/`SetLeaderId`. `LeaderElectionService` (src/Orchestrator/Election/LeaderElectionService.cs): `BackgroundService` building `LeaderElector` over `LeaseLock(new Kubernetes(InClusterConfig()),"skp","orchestrator-leader",POD_NAME??MachineName)`; fixed timings as PUBLIC constants `LeaseDuration`(15s)/`RenewDeadline`(10s)/`RetryPeriod`(2s) (RenewDeadline<LeaseDuration self-demotion fence, HA-04) + `LeaseNamespace`/`LeaseName`; `OnStartedLeading→BecomeLeader`, `OnStoppedLeading→BecomeFollower`, `OnNewLeader→SetLeaderId` are the SOLE LeaderState writer (HA-03, grep-clean); `catch(OperationCanceledException){return;}` clean-shutdown; `RunAndTryToHoldLeadershipForeverAsync(stoppingToken)`. Per D-06 BUILD-ONLY — not registered in Program.cs (Plan 02 wires in-cluster) and never started under test. **1 deviation (Rule 3 - blocking):** the plan's suggested 15.x line (15.0.1) carries advisory GHSA-w7r3-mgwf-4mqq which the repo NuGetAudit promotes to a build error → `dotnet restore` failed; fix-forwarded the pin to non-vulnerable **18.0.13** (same LeaderElector API, net8.0) → restore exit 0. Verification: `dotnet restore` exit 0 (no NU1902); Orchestrator **Debug + Release 0-warning/0-error**; single-writer grep confirms the three writer callers are ONLY the election callbacks. Summary: `.planning/phases/82-orchestrator-ha-leader-election/82-01-SUMMARY.md` (Self-Check PASSED). Plan 02 (WorkflowFireJob leader gate + role enricher + Program.cs wiring) next.
@@ -768,7 +768,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 
 **Velocity:**
 
-- Total plans completed: 280
+- Total plans completed: 284
 - Average duration: —
 - Total execution time: —
 
@@ -851,6 +851,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | 79 | 5 | - | - |
 | 80 | 10 | - | - |
 | 81 | 4 | - | - |
+| 82 | 4 | - | - |
 
 **Recent Trend:**
 
