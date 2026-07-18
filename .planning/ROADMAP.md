@@ -852,13 +852,16 @@ Plans:
 
 ### Phase 81: Re-run the 7-scenario fault-recovery sweep (TEST-01..TEST-07) on the k8s Docker Desktop target — crash injection via kubectl scale --replicas=0 then scale-back as the analog of the compose docker stop/start. Generalize the Phase-80 k8s harness (phase-80-harness.ps1, currently TEST-01-only) to accept a scenario id/list and re-target the crash sequencer from docker-compose CLI to kubectl scale (third Pitfall-1 CLI re-target), preserving each tier's replica count on restore (orchestrator 1, keeper 2, processor-sample 2, redis 1, rabbitmq 1) and waiting for actual terminate on scale-0 and Ready on restore before pinning RECOVERY_UTC. Reuse the phase-68 sweep analyzer + conservation/recovery metric gate verbatim. Scope = the 7 recovery-capstone scenarios only (processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq whole-tier crash + no-fault baseline); the seam-dependent negative controls (TEST-08/09/10, FALSIFY-01/02) stay out of scope because the Phase-80 manifests omit the test-only env seams they require. Proves the two-consumer recovery architecture recovers on k8s the same as on compose.
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** The k8s harness runs any of TEST-01..07 by id and reaches 7/7 VERDICT_PASS on the Docker Desktop target — crash injection re-targeted from `docker compose stop/start` to `kubectl -n skp scale --replicas=0`/restore for all 5 crashable tiers (replica counts preserved on restore; RECOVERY_UTC pinned only after terminate + Ready gates), driven by a k8s sweep that reuses the phase-68 analyzer + conservation/recovery metric gate byte-for-byte.
+**Requirements**: SPEC-1, SPEC-2, SPEC-3, SPEC-4, SPEC-5, SPEC-6 (81-SPEC.md — 6 locked requirements + 8 acceptance criteria)
 **Depends on:** Phase 80
-**Plans:** 0 plans
+**Plans:** 4 plans (3 waves)
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 81 to break down)
+- [ ] 81-01-PLAN.md — Wave 1: generalize phase-80-harness.ps1 — -ScenarioId + 7-row scenario table + bad-id guard (exit 64) + tier maps + kubectl-scale crash sequencer (terminate/Ready gates) + -SkipBringUp (SPEC-1..4)
+- [ ] 81-02-PLAN.md — Wave 1: extend phase-80-reset.ps1 with a bounded idempotent rabbitmq queue drain (D-04, cross-scenario isolation) (SPEC-5)
+- [ ] 81-03-PLAN.md — Wave 2: create phase-81-sweep.ps1 — mirror phase-68-sweep + D-03 one-time bring-up, child -SkipBringUp harness loop, verbatim verdict roll-up (SPEC-5, SPEC-6)
+- [ ] 81-04-PLAN.md — Wave 3: capstone run — reused-verbatim guard + drive the sweep to 7/7 VERDICT_PASS (INCONCLUSIVE re-runnable; VERDICT_FAIL fails) + operator confirm (SPEC-5, SPEC-6)
 
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
 
