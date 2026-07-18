@@ -104,3 +104,68 @@ function Write-Phase {
         }
     }
     Write-Phase "All 10 tiers Ready (6 infra + 4 app), app pods on fresh :local bits." 'Green'
+
+# ---- STEP 7: Start the EIGHT loopback port-forwards (D-14 + seeder finding) ----------------------
+# `kubectl port-forward` is a blocking foreground process — run each as a tracked BACKGROUND process
+# (Start-Process -PassThru -WindowStyle Hidden, RESEARCH Pattern 5) so the script can return to the
+# harness with the forwards live.
+#
+# EVERY forward binds --address 127.0.0.1 explicitly — never 0.0.0.0 — so the bridged host ports stay
+# loopback-only (threat T-80-17: a 0.0.0.0 bind would expose the cluster to the LAN). Services stay
+# ClusterIP (no NodePort/ingress); port-forward is the ONLY host->cluster ingress.
+#
+# The forward set maps each harness-hard-coded localhost port to its Service's container port. D-14
+# enumerated SIX (baseapi/prometheus/elasticsearch/rabbitmq-mgmt/redis/postgres). The ~FanOutSeeder
+# proof runs an in-proc WebApi (RealStackWebAppFactory, SampleRoundTripE2ETests.cs L417-458) that ALSO
+# hard-codes RabbitMq__Port 5673 (AMQP) and OTEL_EXPORTER_OTLP_ENDPOINT http://localhost:4317 — so we
+# add the rabbitmq AMQP 5673->5672 and otel 4317->4317 forwards. This COMPLETES D-14's stated rationale
+# ("expose the ports the harness hard-codes") — the seeder IS part of the harness (planner finding).
+$forwards = @(
+    @{ svc = 'svc/baseapi-service'; map = '8080:8080'   },   # WebApi — the only HTTP tier the harness talks to
+    @{ svc = 'svc/prometheus';      map = '9090:9090'   },   # analyzer counter scrape
+    @{ svc = 'svc/elasticsearch';   map = '9200:9200'   },   # analyzer log queries
+    @{ svc = 'svc/rabbitmq';        map = '15673:15672' },   # mgmt UI — harness Get-ProcQueueDepth / mgmt reads
+    @{ svc = 'svc/redis';           map = '6380:6379'   },   # reset FLUSHALL / seeder L2 (localhost:6380)
+    @{ svc = 'svc/postgres';        map = '5433:5432'   },   # reset/seed SQL (localhost:5433)
+    @{ svc = 'svc/rabbitmq';        map = '5673:5672'   },   # AMQP — REQUIRED by the ~FanOutSeeder in-proc WebApi (RabbitMq__Port 5673)
+    @{ svc = 'svc/otel-collector';  map = '4317:4317'   }    # OTLP — REQUIRED by the ~FanOutSeeder in-proc WebApi OTEL endpoint
+)
+
+Write-Phase "STEP 7: starting $($forwards.Count) kubectl port-forwards (all bound --address 127.0.0.1)..."
+$pfProcs = foreach ($f in $forwards) {
+    Write-Phase "  port-forward $($f.svc) $($f.map) --address 127.0.0.1"
+    Start-Process kubectl -PassThru -WindowStyle Hidden `
+        -ArgumentList @('port-forward', $f.svc, $f.map, '-n', 'skp', '--address', '127.0.0.1')
+}
+
+# Persist the PIDs so plan 80-10's harness teardown can stop the forwards cleanly.
+$pidFile = Join-Path (Get-Location) '.k8s-portforward-pids'
+$pfProcs | ForEach-Object { $_.Id } | Set-Content -Path $pidFile -Encoding ascii
+Write-Phase "port-forward PIDs ($(($pfProcs | ForEach-Object { $_.Id }) -join ', ')) written to $pidFile"
+Write-Phase "TEARDOWN HINT: Get-Content '$pidFile' | ForEach-Object { Stop-Process -Id \$_ -Force -ErrorAction SilentlyContinue }" 'Yellow'
+
+# ---- STEP 8: Bounded baseapi readiness poll — confirms the forward is live before hand-off ----------
+# A port-forward reports success on start even before the tunnel carries traffic (Pattern 5 reliability
+# caveat), so gate on a REAL 200 from baseapi /health/ready before returning. This gives reset/seed/POST
+# a clean hand-off. Bounded ~60s; fail loud (exit 11) on timeout.
+Write-Phase "STEP 8: polling http://localhost:8080/health/ready (bounded ~60s)..."
+$deadline = (Get-Date).AddSeconds(60)
+$ready = $false
+do {
+    try {
+        $resp = Invoke-WebRequest -Uri 'http://localhost:8080/health/ready' -UseBasicParsing -TimeoutSec 5
+        if ($resp.StatusCode -eq 200) { $ready = $true }
+    } catch {
+        # forward not carrying traffic yet / app not ready — retry until the deadline
+    }
+    if (-not $ready) {
+        if ((Get-Date) -ge $deadline) {
+            Write-Phase "baseapi /health/ready did not return 200 within 60s. The stack is up but not harness-reachable. Aborting." 'Red'
+            exit 11
+        }
+        Start-Sleep -Seconds 2
+    }
+} while (-not $ready)
+
+Write-Phase "baseapi /health/ready == 200 — stack is UP and harness-reachable. Hand off to reset/seed/POST/sweep." 'Green'
+exit 0
