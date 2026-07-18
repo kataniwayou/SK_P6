@@ -7,10 +7,12 @@ using Microsoft.Extensions.Hosting;
 using Orchestrator.Configuration;
 using Orchestrator.Consumers;
 using Orchestrator.Dispatch;
+using Orchestrator.Election;
 using Orchestrator.Hydration;
 using Orchestrator.L1;
 using Orchestrator.Observability;
 using Orchestrator.Scheduling;
+using OpenTelemetry.Logs;      // ConfigureOpenTelemetryLoggerProvider (role enricher, D-09)
 using OpenTelemetry.Metrics;   // ConfigureOpenTelemetryMeterProvider (via OpenTelemetry.Extensions.Hosting)
 using Quartz;
 
@@ -23,11 +25,21 @@ var builder = Host.CreateApplicationBuilder(args);
 builder.AddBaseConsoleObservability(builder.Configuration);   // metrics-only OTel (no tracer — Pitfall 4)
 builder.Services.AddBaseConsole(builder.Configuration);       // Redis soft-dep + embedded health
 
-// D-06: a stable instance id per replica (fall back to a fresh GUID when unset). Captured by the
-// closure below so BOTH consumers share the SAME instance id → one temporary/auto-delete fan-out
-// queue "orchestrator-{instanceId}" (ORCH-CON-02): a fan-out broadcast, not competing-consumer
-// load-balance.
-var instanceId = builder.Configuration["Orchestrator:InstanceId"] ?? Guid.NewGuid().ToString("N");
+// D-01: the per-replica identity now derives from the k8s downward-API pod name (kubelet-supplied,
+// distinct per replica), falling back to the machine name off-cluster. Captured by the closure below so
+// EVERY consumer shares the SAME instance id → one temporary/auto-delete fan-out queue
+// "orchestrator-{instanceId}" per pod (ORCH-CON-02): a true fan-out broadcast at N>1, not a
+// competing-consumer load-balance. This SAME identity feeds the LeaseLock holder in
+// LeaderElectionService, so a queue-name collision cannot silently degrade the broadcast (T-82-06).
+// (The manifest that supplies POD_NAME + drops Orchestrator__InstanceId lands in Plan 03.)
+var instanceId = Environment.GetEnvironmentVariable("POD_NAME") ?? Environment.MachineName;
+
+// D-02: detect in-cluster once via the kubelet-injected KUBERNETES_SERVICE_HOST. Off-cluster (local
+// run + every hermetic test) this is null, so the elector never starts and cannot contend for the
+// production Lease (T-82-08). D-07: the LeaderState singleton therefore seeds LEADER off-cluster (the
+// lone instance MUST fire) and FOLLOWER in-cluster (pre-acquisition until the elector wins — SPEC HA-02).
+var inCluster = Environment.GetEnvironmentVariable("KUBERNETES_SERVICE_HOST") is not null;
+builder.Services.AddSingleton(new LeaderState(startAsLeader: !inCluster));
 
 builder.Services.AddBaseConsoleMessaging(builder.Configuration,
     x =>
@@ -100,7 +112,25 @@ builder.Services.Configure<Messaging.Contracts.Configuration.RetryOptions>(build
 // the Phase-29 ConfigureOpenTelemetryLoggerProvider seam, preserving the D-02 MeterName const symmetry.
 builder.Services.AddSingleton<OrchestratorMetrics>();
 builder.Services.ConfigureOpenTelemetryMeterProvider(mp => mp.AddMeter(OrchestratorMetrics.MeterName));
+
+// HA-05 / D-09: the role log enricher — the logger-provider twin of the meter registration above,
+// mirroring BaseProcessor's DI-resolved ConfigureOpenTelemetryLoggerProvider pair. Registered ALWAYS
+// (leader off-cluster, follower until the elector wins in-cluster) so EVERY log line carries
+// attributes.role, never empty.
+builder.Services.AddSingleton<OrchestratorRoleLogEnricher>();
+builder.Services.ConfigureOpenTelemetryLoggerProvider((sp, lp) =>
+    lp.AddProcessor(sp.GetRequiredService<OrchestratorRoleLogEnricher>()));
+
 builder.Services.AddHostedService<HydrationBackgroundService>();           // D-13 — drives MarkReady (D-12)
+
+// D-02/D-06: the leader-election BackgroundService runs ONLY in-cluster — off-cluster (and under every
+// hermetic test, which never sets KUBERNETES_SERVICE_HOST) the elector never starts, so LeaderState
+// keeps its off-cluster leader seed and the lone instance fires. In-cluster it contends for the
+// skp/orchestrator-leader Lease and its callbacks become the sole LeaderState writer (HA-03).
+if (inCluster)
+{
+    builder.Services.AddHostedService<LeaderElectionService>();
+}
 
 // WorkflowScheduler injects a concrete IScheduler — resolve the hosted scheduler from the factory.
 builder.Services.AddSingleton(sp =>

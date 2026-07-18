@@ -1,9 +1,11 @@
 using System.Text.Json;
+using BaseConsole.Core.Health;
 using MassTransit;
 using Messaging.Contracts;
 using Messaging.Contracts.Projections;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
+using Orchestrator.Election;
 using Orchestrator.Observability;
 using StackExchange.Redis;
 using System.Diagnostics.Metrics;
@@ -108,6 +110,22 @@ internal static class OrchestratorTestStubs
         var meterFactory = new ServiceCollection().AddMetrics().BuildServiceProvider()
             .GetRequiredService<IMeterFactory>();
         return new OrchestratorMetrics(meterFactory);
+    }
+
+    /// <summary>
+    /// A LeaderState seeded as LEADER (Phase 82) — the fire-gate default these pre-82 fire tests assume,
+    /// so <c>WorkflowFireJob</c> runs its DispatchAsync loop. Follower/un-hydrated gating is asserted by
+    /// the dedicated Plan-04 hermetic tests.
+    /// </summary>
+    public static LeaderState Leader() => new(startAsLeader: true);
+
+    /// <summary>A hydrated <see cref="IStartupGate"/> (IsReady == true) — the D-05 "hydrated" term so the
+    /// leader fire gate opens under test.</summary>
+    public static IStartupGate ReadyGate()
+    {
+        var gate = new StartupGate();
+        gate.MarkReady();
+        return gate;
     }
 
     /// <summary>A ConsumeContext substitute carrying <paramref name="message"/> and a cancellation token.</summary>
