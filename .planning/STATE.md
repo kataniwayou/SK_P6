@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 80-06-PLAN.md
-last_updated: "2026-07-18T06:49:47.046Z"
+stopped_at: Completed 80-07-PLAN.md
+last_updated: "2026-07-18T06:55:23.350Z"
 last_activity: 2026-07-18
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove per
 Phase: 80 (deploy-full-system-to-local-kubernetes-docker-desktop-port-c) — EXECUTING
 Current Plan: 1
 Total Plans: 5
-Plan: 7 of 10
+Plan: 8 of 10
 Status: Ready to execute
 Last activity: 2026-07-18
 
@@ -1097,6 +1097,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 80 P04 | 3min | 2 tasks | 2 files |
 | Phase 80 P05 | 12min | 2 tasks | 2 files |
 | Phase 80 P06 | 8min | 2 tasks | 2 files |
+| Phase 80 P07 | 3 | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1628,6 +1629,8 @@ Recent decisions affecting current work:
 - 80-05: orchestrator ships literal Orchestrator__OutputDataTtlSeconds 900, all test seams dropped (D-08/T-80-10); NO Service, replicas:1 SPOF locked
 - 80-05: baseapi composes Postgres via k8s dependent-env expansion — 3 POSTGRES_* secretKeyRef ordered before the composed ConnectionStrings__Postgres (RESEARCH Pattern 3)
 - Plan 80-06: keeper + processor-sample ported to replicas:2 no-Service Deployments; all four fault seams OMITTED (D-08), only literal-900 TTLs ship; bad-config subject excluded (D-04)
+- 80-07: kustomization = resource-list + namespace/label stamp ONLY (no configMapGenerator; keeps hand-authored 02-configmaps.yaml so Deployment volume refs don't break)
+- 80-07: server dry-run needs skp namespace pre-existing (kubectl namespace chicken-egg) — whole-stack --dry-run=server exits 0 once namespace exists
 
 ### Roadmap Milestone Log
 
@@ -1738,8 +1741,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-18T06:49:36.489Z
-Stopped at: Completed 80-06-PLAN.md
+Last session: 2026-07-18T06:55:14.441Z
+Stopped at: Completed 80-07-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
