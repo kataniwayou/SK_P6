@@ -1,22 +1,28 @@
 # ============================================================================
-# orchestrator — Quartz-cron workflow driver (Deployment x1, NO Service — SPOF).
+# orchestrator — Quartz-cron workflow driver (Deployment x3, HA, NO Service).
 # ============================================================================
 # Port of the compose `orchestrator` block (compose.yaml L185-218). The orchestrator
 # is a PURE CONSUMER — nothing connects to it inbound except the kubelet probe (which
-# hits the pod IP directly), so it gets NO Service. It drives the Quartz cron that
-# fires the workflow and holds the in-memory L1 pause/resume state, so it is a
-# documented single point of failure: `replicas: 1` is LOCKED (see 80-CONTEXT.md,
-# roadmap invariant — scaling it would double-fire the cron and split L1 state).
+# hits the pod IP directly), so it gets NO Service. It runs HA at three replicas: a
+# single leader is elected via a Kubernetes coordination Lease (skp/orchestrator-leader,
+# see 34-orchestrator-rbac.yaml) and ONLY the leader fires the Quartz cron; followers
+# run all other logic (bus consumers, health) and stand by to take over. Receive
+# endpoints are already per-replica (POD_NAME-derived InstanceId — D-01), so multiple
+# replicas co-exist on the bus safely and no cron double-fires (Phase 82 / SPEC HA-06).
 #
 # IMAGE (D-04): `orchestrator:local` + IfNotPresent (local store, no registry;
 # rollout restart after rebuild forces fresh bits — T-80-09).
+#
+# IDENTITY (D-01): each pod gets its own identity from a POD_NAME downward-API env
+# (metadata.name); Program.cs reads it for BOTH the MassTransit fanout endpoint
+# InstanceId and the Lease holder identity. The old hardcoded per-instance identity
+# env is DROPPED (a fixed value would collide across the three replicas).
 #
 # TTL LITERAL (D-08 / T-80-10 CRITICAL): compose shipped the recovery-backup TTL
 # through an interpolated test-only seam whose absence defaults to 900 (used solely by
 # the FALSIFY-02 short-TTL control). Here it is shipped as the bare production LITERAL
 # "900" — no shell interpolation and no test-seam env name appears in this manifest, so
 # the acceptance grep for their absence passes. Runtime behavior is identical (900).
-# Orchestrator__InstanceId is carried verbatim (orchestrator-only identity key).
 #
 # PROBES (Pitfall 3 — decoupled): readiness hits /health/ready :8081 which is
 # HARD-on-broker (gates Ready only once the bus is up); liveness hits /health/live
@@ -32,17 +38,15 @@ metadata:
     app: orchestrator
     app.kubernetes.io/part-of: skp
 spec:
-  replicas: 1                                  # documented SPOF — LOCKED at 1 (D)
-  # Recreate (NOT the default RollingUpdate): the orchestrator declares an EXCLUSIVE
-  # RabbitMQ queue ('orchestrator'), so two instances must never run at once. On a
-  # rollout restart RollingUpdate briefly runs old+new together → the new pod gets
-  # RESOURCE_LOCKED (405) declaring the exclusive queue → readiness 503 → the rollout
-  # deadlocks (old never terminates until new is Ready). Recreate terminates the old
-  # pod FIRST (releasing the exclusive queue), then starts the replacement — the k8s
-  # expression of the documented single-owner invariant. Compose never hit this because
-  # `restart`/`--force-recreate` stop the old container before starting the new.
+  replicas: 3                                  # HA — leader-elected via k8s Lease (HA-06)
+  # RollingUpdate (the default 25% surge/unavailable): multi-replica is now safe. Each
+  # pod declares a per-POD_NAME endpoint (no single-owner queue any more — D-01), so
+  # old+new pods co-exist on the bus without contention during a rollout. A rolling
+  # deploy that replaces the current leader is just the normal election gap: a follower
+  # acquires the Lease and resumes the cron (HA-04). RollingUpdate therefore gives
+  # zero-downtime deploys — the whole point of moving off the old single-owner model.
   strategy:
-    type: Recreate
+    type: RollingUpdate
   selector:
     matchLabels:
       app: orchestrator
@@ -51,6 +55,8 @@ spec:
       labels:
         app: orchestrator
     spec:
+      # dedicated SA (34-orchestrator-rbac.yaml) — grants lease access for election (D-08)
+      serviceAccountName: orchestrator
       containers:
         - name: orchestrator
           image: orchestrator:local            # D-04 — local build, never :latest
@@ -70,8 +76,12 @@ spec:
                   key: RABBITMQ_DEFAULT_PASS
             - name: ConnectionStrings__Redis
               value: "redis:6379,abortConnect=false,connectTimeout=5000"   # verbatim
-            - name: Orchestrator__InstanceId
-              value: orchestrator-1                                        # verbatim (orchestrator-only)
+            # per-pod identity (D-01) — Program.cs reads POD_NAME for both the fanout
+            # endpoint InstanceId and the Lease holder identity (no hardcoded value).
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             # LITERAL 900 — the compose interpolated test seam is dropped (D-08 / T-80-10)
             - name: Orchestrator__OutputDataTtlSeconds
               value: "900"
