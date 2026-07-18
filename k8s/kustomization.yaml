@@ -27,14 +27,19 @@ kind: Kustomization
 # itself (00-namespace.yaml) is cluster-scoped and is left untouched.
 namespace: skp
 
-# D-03 — additive common labels stamped onto every resource. These are supersets
-# of the per-manifest `app: <tier>` selectors; kustomize also injects them into
-# selector/matchLabels, but because every workload's selector is authored
-# consistently and these resources are created fresh, the injection is safe and
-# additive (no immutable-selector conflict on first apply).
-commonLabels:
-  app.kubernetes.io/part-of: skp
-  app.kubernetes.io/managed-by: kustomize
+# D-03 — additive common labels stamped onto every resource. `commonLabels` is
+# deprecated in kustomize v5 (bundled with recent kubectl) and, worse, injects the
+# labels into every workload's immutable `spec.selector.matchLabels` + Service
+# selectors — a latent foot-gun if a value ever changes (forces delete/recreate).
+# The modern `labels:` form with `includeSelectors: false` stamps the labels as
+# pure metadata WITHOUT touching selectors, so it is both non-deprecated and
+# selector-safe. The per-manifest `app: <tier>` selectors remain the sole,
+# hand-authored selector source.
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: skp
+      app.kubernetes.io/managed-by: kustomize
+    includeSelectors: false
 
 # All 13 manifests, in tier order (namespace → secret/config → stateful backing
 # services → observability → app tiers). Kind-sort at apply time still applies.
