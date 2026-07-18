@@ -55,5 +55,6 @@ resources:
   - 21-prometheus.yaml
   - 30-baseapi-service.yaml
   - 31-orchestrator.yaml
+  - 34-orchestrator-rbac.yaml
   - 32-keeper.yaml
   - 33-processor-sample.yaml
