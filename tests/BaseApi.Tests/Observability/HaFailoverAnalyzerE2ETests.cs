@@ -228,4 +228,140 @@ public sealed class HaFailoverAnalyzerE2ETests
         }
         return records;
     }
+
+    /// <summary>
+    /// The serializable HA-07 failover verdict report (mirrors the <c>AnalyzerReport</c> field style so the
+    /// <c>phase-83-ha.json</c> shape is recognizable). The top-level <see cref="Verdict"/> is serialized as
+    /// its STRING name (<c>[JsonConverter(typeof(JsonStringEnumConverter))]</c>, reusing the shared
+    /// <see cref="Verdict"/> enum) so <c>Resolve-AnalyzerExitCode</c> maps it 0/1/2 authoritatively — the
+    /// written report is the harness's source of truth even on a red run (write-then-assert, T-83-04). The
+    /// five per-claim flags + the measured recovery let a red report self-explain.
+    /// </summary>
+    private sealed record HaFailoverReport
+    {
+        public required string ScenarioId { get; init; }
+
+        [JsonConverter(typeof(JsonStringEnumConverter))]
+        public required Verdict Verdict { get; init; }
+
+        /// <summary>Claim #1+#2: every 30s bucket held ≤1 distinct send-correlationId (no split-brain / dup).</summary>
+        public required bool ZeroDuplicate { get; init; }
+        /// <summary>Claim #3 (half): ≥1 contiguous EMPTY election-gap tick observed.</summary>
+        public required bool GapObserved { get; init; }
+        /// <summary>Claim #3 (half): no election-gap tick was later backfilled with a fire.</summary>
+        public required bool NotBackfilled { get; init; }
+        /// <summary>Claim #5: an <c>attributes.role=leader</c> record appeared after the kill (the survivor's flip).</summary>
+        public required bool RoleFlipVisible { get; init; }
+        /// <summary>Claim #4: the role flip landed within 2×LeaseDuration (30s) of the kill.</summary>
+        public required bool BoundedRecovery { get; init; }
+
+        /// <summary>The measured recovery delta (roleFlipUtc − killUtc) in seconds, or null when no flip observed.</summary>
+        public double? RecoverySeconds { get; init; }
+
+        public required DateTimeOffset KillUtc { get; init; }
+        public required DateTimeOffset WindowStart { get; init; }
+        public required DateTimeOffset WindowEnd { get; init; }
+
+        /// <summary>Distinct send-correlationIds observed in the window (the leader-fire count).</summary>
+        public required int SendCorrIdCount { get; init; }
+        /// <summary>Distinct 30s wall-clock buckets that held a fire.</summary>
+        public required int BucketCount { get; init; }
+
+        /// <summary>Human-readable per-flag reasoning from the scorer, so a red report is self-explaining.</summary>
+        public required string HumanSummary { get; init; }
+    }
+
+    /// <summary>
+    /// The single HA-07 verdict fact. Fetches the two ES evidence streams (send-evidence + role-flip) over the
+    /// harness-pinned window, drains + polls-to-stable, feeds the parsed records to the pure
+    /// <see cref="HaFireBucketScorer.Score"/>, writes the <c>phase-83-ha.json</c> report (string Verdict)
+    /// BEFORE asserting, then asserts <c>Verdict == Pass</c>. A Fail/Inconclusive yields a non-zero process
+    /// exit; the harness reads the JSON for the exact 0/1/2.
+    /// </summary>
+    [Fact]
+    public async Task Ha_Failover_Window_Yields_Pass()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var scenarioId = Environment.GetEnvironmentVariable("SCENARIO_ID") ?? DefaultScenarioId;
+
+        // ── 1. SCENARIO ID + PATH-TRAVERSAL GUARD (Security V5 / T-83-01) ─────────────────────────────
+        //    Validate against the ^[A-Za-z0-9_-]+$ whitelist BEFORE composing any path.
+        Assert.True(
+            ScenarioIdPattern.IsMatch(scenarioId),
+            $"scenarioId '{scenarioId}' must match ^[A-Za-z0-9_-]+$ (path-traversal guard).");
+
+        // ── 2. WINDOW + KILL SEAM (RealStack: the harness MUST have pinned all three) ─────────────────
+        var windowPinned =
+            TryParseUtc(Environment.GetEnvironmentVariable("WINDOW_START_UTC"), out var windowStart)
+            & TryParseUtc(Environment.GetEnvironmentVariable("WINDOW_END_UTC"), out var windowEnd);
+        var killPinned = TryParseUtc(Environment.GetEnvironmentVariable("KILL_UTC"), out var killUtc);
+
+        Assert.True(windowPinned,
+            "WINDOW_START_UTC and WINDOW_END_UTC must be pinned by the phase-83 harness (RealStack fact).");
+        Assert.True(killPinned,
+            "KILL_UTC must be pinned by the phase-83 harness at kubectl-delete return (RealStack fact).");
+
+        using var es = new ElasticsearchTestClient();
+
+        // ── 3. DRAIN (Pitfall 4) — let the post-recovery fire + the role-flip record finish exporting ──
+        await Task.Delay(DrainMs, ct);
+
+        // ── 4. FETCH BOTH EVIDENCE STREAMS (poll-to-stable so no in-flight export is scored) ──────────
+        var stepHits = await PollHitsToStableAsync(es, BuildSendEvidenceBody(windowStart, windowEnd), ct);
+        var roleHits = await PollHitsToStableAsync(es, BuildRoleFlipBody(killUtc), ct);
+
+        // roleFlipUtc = the EARLIEST @timestamp among the post-kill role=leader records, or null if none.
+        DateTimeOffset? roleFlipUtc = null;
+        foreach (var hit in roleHits)
+        {
+            if (!hit.TryGetProperty("_source", out var source)) continue;
+            if (!TryReadTimestamp(source, out var ts)) continue;
+            if (roleFlipUtc is null || ts < roleFlipUtc) roleFlipUtc = ts;
+        }
+
+        // ── 5. PARSE + SCORE (pure — no IO) ───────────────────────────────────────────────────────────
+        var sends = ParseSendRecords(stepHits);
+        var v = HaFireBucketScorer.Score(sends, killUtc, roleFlipUtc);
+
+        // Report-only evidence counts (the scorer folds these internally; surfaced here for a self-explaining
+        // report). Each fire's EARLIEST timestamp per correlationId, floored to its 30s wall-clock bucket.
+        var fireTimeByCorr = new Dictionary<string, DateTimeOffset>(StringComparer.Ordinal);
+        foreach (var r in sends)
+        {
+            if (!fireTimeByCorr.TryGetValue(r.CorrelationId, out var cur) || r.Timestamp < cur)
+                fireTimeByCorr[r.CorrelationId] = r.Timestamp;
+        }
+        var bucketCount = fireTimeByCorr.Values.Select(HaFireBucketScorer.Bucket30s).Distinct().Count();
+
+        // ── 6. BUILD REPORT (string Verdict for Resolve-AnalyzerExitCode) ─────────────────────────────
+        var report = new HaFailoverReport
+        {
+            ScenarioId = scenarioId,
+            Verdict = v.Verdict,
+            ZeroDuplicate = v.ZeroDuplicate,
+            GapObserved = v.GapObserved,
+            NotBackfilled = v.NotBackfilled,
+            RoleFlipVisible = v.RoleFlipVisible,
+            BoundedRecovery = v.BoundedRecovery,
+            RecoverySeconds = v.Recovery?.TotalSeconds,
+            KillUtc = killUtc,
+            WindowStart = windowStart,
+            WindowEnd = windowEnd,
+            SendCorrIdCount = fireTimeByCorr.Count,
+            BucketCount = bucketCount,
+            HumanSummary = v.HumanSummary,
+        };
+
+        // ── 7. WRITE-THEN-ASSERT (order is load-bearing — T-83-04) ────────────────────────────────────
+        //    Serialize + write the JSON report FIRST so the artifact exists even on a red run, and the
+        //    persisted report + the exit code always reflect the SAME verdict.
+        var reportsDir = Path.Combine(AppContext.BaseDirectory, "analyzer-reports");
+        Directory.CreateDirectory(reportsDir);
+        var reportPath = Path.Combine(reportsDir, $"{scenarioId}.json");
+
+        var json = JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true });
+        await File.WriteAllTextAsync(reportPath, json, ct);                  // FIRST — exists on red
+
+        Assert.True(report.Verdict == Verdict.Pass, report.HumanSummary);    // THEN — FAIL ⇒ non-zero exit
+    }
 }
