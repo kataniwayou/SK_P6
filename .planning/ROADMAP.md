@@ -876,7 +876,11 @@ Plans:
 **Goal:** The orchestrator runs as N≥2 replicas on k8s with exactly one leader at any instant performing scheduler-triggered entry-step sends. A `BackgroundService` runs `KubernetesClient` `LeaderElector.RunAndTryToHoldLeadershipForeverAsync` over a `coordination.k8s.io/v1` Lease (`skp/orchestrator-leader`); its callbacks are the single writer of a volatile `LeaderState` snapshot (`IsLeader`/`Role`/`CurrentLeaderId`, defaulting to follower). The gate wraps `WorkflowFireJob`'s entry-step `foreach … DispatchAsync` loop ONLY (followers skip the send but still refresh L1 + reschedule); `RelocateTail` step-advancement stays ungated. An OTel `LogRecord` enricher stamps `attributes.role` on every orchestrator log. RBAC Role/RoleBinding grants the orchestrator ServiceAccount `get/create/update` on `leases` in `skp`; the orchestrator Deployment scales to N≥2. All hermetic + build gates green; `KubernetesClient` added.
 **Requirements**: HA-01, HA-02, HA-03, HA-04, HA-05, HA-06
 **Depends on:** Phase 81 (k8s deployment + resilience baseline)
-**Plans:** Not planned yet
+**Plans:** 4 plans
+- [ ] 82-01-PLAN.md — KubernetesClient dependency + single-writer volatile LeaderState + LeaderElectionService (election core, build-only)
+- [ ] 82-02-PLAN.md — WorkflowFireJob leader gate (IsLeader && hydrated) + OrchestratorRoleLogEnricher + Program.cs wiring (POD_NAME, in-cluster-gated election)
+- [ ] 82-03-PLAN.md — least-privilege RBAC (SA/Role/RoleBinding for leases) + Deployment replicas:3/RollingUpdate/POD_NAME
+- [ ] 82-04-PLAN.md — hermetic tests: leader-only fire gate, LeaderState single-writer transitions + timing fence, role enricher
 
 ### Phase 83: Orchestrator HA failover proof — scale to N replicas, kill the leader mid-run, prove zero duplicate workflow triggers + bounded single-leader recovery
 
