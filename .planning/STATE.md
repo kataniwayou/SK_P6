@@ -2,17 +2,17 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: Not started
-status: completed
-stopped_at: Phase 81 context gathered
-last_updated: "2026-07-18T09:06:56.105Z"
+current_plan: 1
+status: executing
+stopped_at: Completed 81-01-PLAN.md
+last_updated: "2026-07-18T09:49:28.654Z"
 last_activity: 2026-07-18
 progress:
-  total_phases: 27
-  completed_phases: 11
-  total_plans: 56
-  completed_plans: 56
-  percent: 100
+  total_phases: 4
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -21,7 +21,7 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase 80 — deploy-full-system-to-local-kubernetes-docker-desktop-port-c
+**Current focus:** Phase 81 — re-run-the-7-scenario-fault-recovery-sweep-test-01-test-07-o
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove perfect (zero-missing, effect-once) recovery of a fan-out orchestrated workflow (A→B→C→{D1→E1→F1, D2→E2→F2}, one shared processor-sample, cron `*/30 * * * * *`) under 7 sustained 5-minute fault scenarios (happy path, processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq crash), verified SOLELY from Prometheus metrics + Elasticsearch logs (aggregate by correlationId; missing/duplicate vs total triggers), fully automated. Prerequisite code change: enable 6-field seconds-cron. Supersedes v7.0.0's deferred Phase-62 live proof. Phases continue at **63**.
-Phase: 80
-Current Plan: Not started
+Phase: 81 (re-run-the-7-scenario-fault-recovery-sweep-test-01-test-07-o) — EXECUTING
+Current Plan: 1
 Total Plans: 5
-Plan: 10 of 10
-Status: Milestone complete
+Plan: 2 of 4
+Status: Ready to execute
 Last activity: 2026-07-18
 
 > Phase 79 Plan 01 — ✅ COMPLETE 2026-07-17 (Wave 1: the product-source fault seam that manufactures a True-Positive recoverable-but-lost strand for the gate-teeth negative control). **2 atomic feat commits** (`7ec9169` ReinjectConsumer: static `_defeatedOnce` Interlocked one-shot latch + gate the `ep.Send` redispatch behind `int.TryParse(Environment.GetEnvironmentVariable("KEEPER_DEFEAT_REINJECT"),out d) && d>0 && Interlocked.CompareExchange(ref _defeatedOnce,1,0)==0` — `if(!defeatReinject){ep.Send}` else a TEST-ONLY defeat warning; `CountSent` + the `"reinject"` LogInformation stay UNCHANGED after the gate so `attributes.ReinjectOutcome=="reinject"` reaches the analyzer and WR-01 vetoes → binding miss, byte-identical to a real loss (D-01); `4a9f692` compose.yaml keeper `environment:` gains `KEEPER_DEFEAT_REINJECT: "${KEEPER_DEFEAT_REINJECT:-0}"` after OTEL endpoint, `deploy.replicas` untouched). Decisions D-01/D-02/D-06 honoured; env-var `KEEPER_DEFEAT_REINJECT` (discretion). **Inertness proven:** short-circuit means the Interlocked call never runs when unset ⇒ `*ReinjectConsumerFacts` **8/8 GREEN** (redispatch runs, latch never consumed); `*PassFailEngineFacts` **29/29 GREEN**; `docker compose config` resolves the var to `"0"` default-off. **No deviations** — plan executed exactly as written. Verification: Keeper + test project both build **0-warning/0-error**. Full `--filter-not-trait Category=RealStack` shows 282/853 failures — ALL the documented Docker-less-sandbox infra baseline (RabbitMQ `No such host is known`, Postgres/Redis refused; 0 analyzer/keeper LOGIC facts among them), logged to `deferred-items.md`; full-suite exit 0 is Plan 79-05's live-gate concern. This plan did NOT run the live stack (compile + hermetic-logic green only). Summary: `.planning/phases/79-falsification-harness-for-the-resilience-sweep-negative-cont/79-01-SUMMARY.md` (Self-Check PASSED). Plan 02 next.
@@ -1102,6 +1102,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 80 P07 | 3 | 2 tasks | 2 files |
 | Phase 80 P08 | 3min | 1 tasks | 1 files |
 | Phase 80-deploy-full-system-to-local-kubernetes-docker-desktop-port-c P09 | 3min | 2 tasks | 2 files |
+| Phase 81 P01 | 6min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -1638,6 +1639,7 @@ Recent decisions affecting current work:
 - 80-08: k8s reset (phase-80-reset.ps1) re-targets ONLY docker/compose infra touch-points to kubectl -n skp exec; HTTP/metrics touch-points stay on localhost ports (port-forward, 80-09)
 - 80-08: STEP-4 badconfig orphan removal omitted — no processor-badconfig pod in k8s (D-04 excluded)
 - Phase 80-09: k8s bring-up phase-80-up.ps1 uses kubectl rollout status (10-tier gate) + rollout restart (image currency) + 8 loopback port-forwards incl. seeder AMQP 5673 + otel 4317
+- Phase 81-01: k8s harness rollout status used uniformly for Deployments AND StatefulSets as the readiness gate (D-05 discretion)
 
 ### Roadmap Milestone Log
 
@@ -1748,13 +1750,13 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: --stopped-at
-Stopped at: Phase 81 context gathered
-Resume file: --resume-file
+Last session: 2026-07-18T09:49:28.639Z
+Stopped at: Completed 81-01-PLAN.md
+Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
 **Phase 29 (Structured Execution-Scope Logging):** 5/5 plans complete — close gate GATE_EXIT=0 (405 Passed ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held; live scopeProof passes on a `processor-sample` Completed log); LOG-01..06 all complete. Awaiting orchestrator phase verification + `phase.complete`. Milestone v3.5.0 = 17/17 plans across phases 25-29.
 
 **Previous Phase:** 11 (migrate-prometheus-and-elastic-containers-from-compose-stack) — 10/10 plans — verified 2026-05-28 (3 consecutive GREEN dotnet test runs at 142/142 facts each; byte-identical psql `\l` SHA-256 `0d98b0de…0aac127`; OBSERV-12 superseded; INFRA-06 amendment locked in)
 
-**Planned Phase:** 80 (Deploy full system to local Kubernetes (Docker Desktop)) — 10 plans — 2026-07-17T22:58:57.317Z
+**Planned Phase:** 81 (k8s Fault-Recovery Sweep (TEST-01..07 via kubectl scale)) — 4 plans — 2026-07-18T09:37:54.928Z

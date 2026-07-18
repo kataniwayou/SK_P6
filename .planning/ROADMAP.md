@@ -858,7 +858,7 @@ Plans:
 **Plans:** 4 plans (3 waves)
 
 Plans:
-- [ ] 81-01-PLAN.md — Wave 1: generalize phase-80-harness.ps1 — -ScenarioId + 7-row scenario table + bad-id guard (exit 64) + tier maps + kubectl-scale crash sequencer (terminate/Ready gates) + -SkipBringUp (SPEC-1..4)
+- [x] 81-01-PLAN.md — Wave 1: generalize phase-80-harness.ps1 — -ScenarioId + 7-row scenario table + bad-id guard (exit 64) + tier maps + kubectl-scale crash sequencer (terminate/Ready gates) + -SkipBringUp (SPEC-1..4) ✅ 2026-07-18 (9f581e6, 7592750) — -ScenarioId/-SkipBringUp params + 7-row [ordered] capstone table (TEST-01..07 only, bad-id exits 64) + static $TierKind/$TierReplicas maps (keeper=2, processor-sample=2 never a blanket 1) + kubectl -n skp scale --replicas=0/restore crash sequencer with 0-running-pods terminate-wait + rollout status Ready gate before pinning RECOVERY_UTC; zero docker compose calls; PARSE_OK + all acceptance greps green
 - [ ] 81-02-PLAN.md — Wave 1: extend phase-80-reset.ps1 with a bounded idempotent rabbitmq queue drain (D-04, cross-scenario isolation) (SPEC-5)
 - [ ] 81-03-PLAN.md — Wave 2: create phase-81-sweep.ps1 — mirror phase-68-sweep + D-03 one-time bring-up, child -SkipBringUp harness loop, verbatim verdict roll-up (SPEC-5, SPEC-6)
 - [ ] 81-04-PLAN.md — Wave 3: capstone run — reused-verbatim guard + drive the sweep to 7/7 VERDICT_PASS (INCONCLUSIVE re-runnable; VERDICT_FAIL fails) + operator confirm (SPEC-5, SPEC-6)
