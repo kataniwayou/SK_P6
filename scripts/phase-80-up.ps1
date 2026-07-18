@@ -165,7 +165,13 @@ if (Test-Path $pidFile) {
     if ($stalePids.Count -gt 0) {
         Write-Phase "STEP 7-pre: stopping $($stalePids.Count) stale port-forward PID(s) from a prior run (PIDs: $($stalePids -join ', '))..." 'Yellow'
         foreach ($p in $stalePids) {
-            try { Stop-Process -Id ([int]$p) -Force -ErrorAction SilentlyContinue } catch { }
+            # Recycled-PID guard (IN-05): only kill if the PID is STILL a live kubectl process. A prior
+            # forward may have exited and had its PID recycled by the OS — force-killing it blindly could
+            # terminate an unrelated process. Best-effort — never throws.
+            try {
+                $proc = Get-Process -Id ([int]$p) -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq 'kubectl' }
+                if ($proc) { Stop-Process -Id ([int]$p) -Force -ErrorAction SilentlyContinue }
+            } catch { }
         }
     }
     Remove-Item $pidFile -ErrorAction SilentlyContinue

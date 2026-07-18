@@ -379,7 +379,13 @@ try {
     if (Test-Path $pidFile) {
         $pfPids = @(Get-Content $pidFile -ErrorAction SilentlyContinue | Where-Object { $_ -match '\S' })
         foreach ($p in $pfPids) {
-            try { Stop-Process -Id ([int]$p) -Force -ErrorAction SilentlyContinue } catch { }
+            # Recycled-PID guard: only kill if the PID is STILL a live kubectl process. If the forward
+            # already exited and the OS recycled its PID, this skips it rather than force-killing an
+            # unrelated process. Best-effort — never throws.
+            try {
+                $proc = Get-Process -Id ([int]$p) -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq 'kubectl' }
+                if ($proc) { Stop-Process -Id ([int]$p) -Force -ErrorAction SilentlyContinue }
+            } catch { }
         }
         Write-Phase "  stopped $($pfPids.Count) port-forward process(es) (PIDs: $($pfPids -join ', '))." 'Gray'
         Remove-Item $pidFile -ErrorAction SilentlyContinue
