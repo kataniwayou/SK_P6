@@ -887,7 +887,11 @@ Plans:
 **Goal:** Under the orchestrator scaled to N≥2 replicas on k8s, with the current leader killed (`kubectl scale`/delete) mid-run, prove: exactly one leader holds the Lease at any instant; ZERO duplicate workflow triggers across the failover (verified via distinct per-fire correlationIds through the existing phase-68/81 analyzer — a duplicate trigger would surface as an extra correlationId for the same scheduled tick); cron ticks landing in the election gap are skipped (not duplicated, not backfilled); a single leader is re-established within a bounded time (~`LeaseDuration`); and `attributes.role` in ES logs shows the failover transition. Likely an orchestrator-leader-kill scenario added to the existing sweep harness.
 **Requirements**: HA-07
 **Depends on:** Phase 82
-**Plans:** Not planned yet
+**Plans:** 4 plans (4 waves) — hermetic scorer core first, then the live verdict fact, the harness, and the live proof checkpoint. Dedicated `phase-83-ha-failover.ps1` (NOT an 8th sweep scenario); phase-aligned leader force-kill; automated dotnet-test verdict exit 0/1/2.
+- [ ] 83-01-PLAN.md — HaFireBucketScorer pure 30s-bucket + gap + recovery scorer (fail-closed fold) + hermetic facts + EsIndexNames.RoleFieldPath const [Wave 1]
+- [ ] 83-02-PLAN.md — HaFailoverAnalyzerE2ETests RealStack verdict fact (two ES streams -> scorer -> write-then-assert report, exit 0/1/2) [Wave 2]
+- [ ] 83-03-PLAN.md — scripts/phase-83-ha-failover.ps1 (reuse phase-80 bring-up + phase-aligned leader-kill sequencer + verdict driver) [Wave 3]
+- [ ] 83-04-PLAN.md — live end-to-end HA-07 failover proof (checkpoint: harness exit 0 / Verdict=Pass) [Wave 4]
 
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
 
