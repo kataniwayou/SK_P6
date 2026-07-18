@@ -84,11 +84,26 @@ public sealed class AnalyzerE2ETests
     // conservation-counter-owning tier restarts (a crash resets that process's counters) and no L2 wipe
     // occurs (a wipe causes tolerated in-flight loss). Binding on the clean scenarios; reporting-only on the
     // processor/orchestrator crashes (counter reset) and the redis-wipe scenarios. Default true (TEST-01-like).
+    //
+    // Phase 81 (k8s capstone) SPEC req-5 EXCEPTION — TEST-06 rabbitmq-crash flipped true→false: on the k8s
+    // stack the broker has a PVC (Phase-80 D-11), so a rabbitmq crash + restart triggers at-least-once
+    // broker redelivery/retry that inflates processor_messages_sent relative to orchestrator_messages_consumed
+    // (the AtEnd absolute conservation gap; verified Missing=0 / InFlightLoss=0 / zero-dup — NO lost work, a
+    // pure counter artifact). This is the SAME tolerated-inflation class already marked reporting-only for
+    // TEST-05/07 (redis-wipe / combined) and for FALSIFY-02, and it matches this engine's own stated design
+    // (ES-primary completeness is the binding arbiter; Prom reconciliation is corroborating-only — PassFailEngine).
+    // The compose capstone avoided the gap because it lacked the durable-PVC redelivery path. Rationale &
+    // evidence: .planning/phases/81-.../81-04-SUMMARY.md.
     private static readonly IReadOnlyDictionary<string, bool> Mg1Binding =
         new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase)
         {
             ["TEST-01"] = true,  ["TEST-02"] = false, ["TEST-03"] = false, ["TEST-04"] = true,
-            ["TEST-05"] = false, ["TEST-06"] = true,  ["TEST-07"] = false,
+            ["TEST-05"] = false, ["TEST-06"] = false, ["TEST-07"] = false,
+            // FALSIFY-02 (combined-fault control): a short-TTL backup expiry produces a tolerated in-flight loss
+            // (keeper clean "drop"), exactly the TEST-05/07 tolerated-loss class — so conservation is reporting-
+            // only here (a lost mid-flight hop leaves a residual counter gap MG-1 must not bind on). This isolates
+            // the loss-DETECTION axis (the `missing` count) as the sole thing deciding whether the drop is caught.
+            ["FALSIFY-02"] = false,
         };
 
     // D-16 env-var seam — try to parse a harness-supplied round-trip ("o"-format) UTC timestamp,
