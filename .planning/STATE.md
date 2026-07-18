@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 1
 status: executing
-stopped_at: Completed 81-02-PLAN.md
-last_updated: "2026-07-18T09:53:57.746Z"
+stopped_at: Completed 81-03-PLAN.md
+last_updated: "2026-07-18T10:00:09.960Z"
 last_activity: 2026-07-18
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v8.0.0 (E2E Resilience Proof) — STARTED 2026-06-14. Goal: prove per
 Phase: 81 (re-run-the-7-scenario-fault-recovery-sweep-test-01-test-07-o) — EXECUTING
 Current Plan: 1
 Total Plans: 5
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-07-18
 
@@ -1104,6 +1104,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 80-deploy-full-system-to-local-kubernetes-docker-desktop-port-c P09 | 3min | 2 tasks | 2 files |
 | Phase 81 P01 | 6min | 2 tasks | 1 files |
 | Phase 81 P02 | 4min | 1 tasks | 1 files |
+| Phase 81 P03 | 5min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -1642,6 +1643,7 @@ Recent decisions affecting current work:
 - Phase 80-09: k8s bring-up phase-80-up.ps1 uses kubectl rollout status (10-tier gate) + rollout restart (image currency) + 8 loopback port-forwards incl. seeder AMQP 5673 + otel 4317
 - Phase 81-01: k8s harness rollout status used uniformly for Deployments AND StatefulSets as the readiness gate (D-05 discretion)
 - Phase 81-02: rabbitmq drain per-queue purge is fail-soft (no fail-loud guard) per D-04 — a purge miss is re-run tolerant, never aborts the keyspace/graph wipe invariant
+- Phase 81 Plan 03: k8s capstone sweep phase-81-sweep.ps1 created — one-time build+up (STEP 0) + TEST-01..07 child -SkipBringUp loop (no fail-fast) + Resolve-SweepClass reuse (no re-scoring) + phase-81-summary.json roll-up + one-time port-forward teardown (STEP Z); exit 0 IFF 7/7 PASS. D-03 Option A (sweep-owned bring-up, phase-80-up.ps1 unchanged).
 
 ### Roadmap Milestone Log
 
@@ -1752,8 +1754,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-18T09:53:57.732Z
-Stopped at: Completed 81-02-PLAN.md
+Last session: 2026-07-18T09:59:59.445Z
+Stopped at: Completed 81-03-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
