@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 2
 status: executing
-stopped_at: Completed 83-02-PLAN.md
-last_updated: "2026-07-18T21:32:37.709Z"
+stopped_at: Completed 83-03-PLAN.md
+last_updated: "2026-07-18T21:39:36.595Z"
 last_activity: 2026-07-18
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v10.0.0 (Orchestrator High Availability) — STARTED 2026-07-18. Goal
 Phase: 83 — EXECUTING
 Current Plan: 2
 Total Plans: 4
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-07-18
 
@@ -1118,6 +1118,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 82 P04 | 19min | 3 tasks | 3 files |
 | Phase 83 P01 | 18min | 2 tasks | 3 files |
 | Phase 83 P02 | 18min | 2 tasks | 1 files |
+| Phase 83 P03 | 3min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -1666,6 +1667,7 @@ Recent decisions affecting current work:
 - 82-04: hermetic HA tests (10) prove HA-01..HA-05 directly (D-06) — leader-only fire gate, LeaderState transitions + RenewDeadline<LeaseDuration fence, live-read role enricher; standby Quartz scheduler for deterministic reschedule inspection; 0-warning Debug/Release
 - Phase 83: HA-07 verdict logic isolated as a pure HaFireBucketScorer (Docker-less-provable) before any live harness; fail-closed anti-vacuous fold (observability gaps -> Inconclusive, never a vacuous Pass)
 - 83-02: HA failover live verdict fact clones the analyzer ES/window/drain/write-then-assert scaffold and swaps only scoring — feeds two ES streams (exists-StepId leader sends + earliest post-kill role=leader flip) to the pure HaFireBucketScorer.Score, writes a string-Verdict phase-83-ha.json before asserting (exit 0/1/2)
+- 83-03: phase-aligned leader kill (~3s pre :00/:30 boundary) forces the cron tick into the ~11-17s election gap to deterministically prove HA-07 claim #3 without changing the locked */30 cron
 
 ### Roadmap Milestone Log
 
@@ -1777,8 +1779,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-18T21:32:37.693Z
-Stopped at: Completed 83-02-PLAN.md
+Last session: 2026-07-18T21:39:29.133Z
+Stopped at: Completed 83-03-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
