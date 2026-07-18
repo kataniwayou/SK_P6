@@ -119,6 +119,44 @@ try {
     if ($LASTEXITCODE -ne 0) { Write-Phase "bring-up failed (exit $LASTEXITCODE). Aborting." 'Red'; exit 10 }
 
     # -----------------------------------------------------------------------
+    # STEP A2 — FIRST-RUN BOOTSTRAP (code 30) — fresh-DB processor-row registration.
+    # On a FRESH k8s PVC the `processors` table is empty, so no processor row exists for the current
+    # SourceHash. The processor boots-before-register (ProcessorStartupOrchestrator): it polls for its
+    # row and its liveness watchdog stays "not started" until the row exists — so the STEP B heal-wait
+    # can NEVER converge on a fresh cluster (observed: "Liveness did not reconverge in 60s"). The compose
+    # harness never hit this because its persistent DB always had a prior processor row (reset preserves
+    # the `processors` table). Bootstrap-seed ONCE here (the seeder GET-or-creates the processor row via
+    # SeedProcessorAsync + seeds a throwaway workflow the STEP B graph-DELETE wipes; its self-verify is a
+    # DB-graph count, NOT a liveness check, so it succeeds with no live processor), then wait for
+    # per-instance liveness to converge so STEP B has live processors to observe. GUARDED to the fresh-DB
+    # case: a warm re-run (processor row already present, e.g. a second proof on the same PVC) skips
+    # straight to the proven reset→seed→start path — byte-identical to the compose flow.
+    Write-Phase "STEP A2: first-run bootstrap check (processors table empty => seed once to register the row)"
+    $procCount = (kubectl -n skp exec statefulset/postgres -- psql -U postgres -d stepsdb -tA `
+                    -c "SELECT count(*) FROM processors").Trim()
+    if ($LASTEXITCODE -ne 0) { Write-Phase "processor-row precheck failed (psql exit $LASTEXITCODE). Aborting." 'Red'; exit 30 }
+    if ($procCount -eq '0') {
+        Write-Phase "  fresh DB (0 processor rows) — bootstrapping the processor row via one seed..." 'Yellow'
+        dotnet test tests/BaseApi.Tests/BaseApi.Tests.csproj -c Release -- --filter-method "*FanOutSeeder_SeedsAndSelfVerifies*" 2>&1 | Out-String | Write-Host
+        if ($LASTEXITCODE -ne 0) { Write-Phase "bootstrap seed failed (exit $LASTEXITCODE). Aborting." 'Red'; exit 30 }
+        # Wait for per-instance liveness to converge: processors resolve identity (<=30s retry) then
+        # heartbeat every 10s. Same per-instance key shape + exclusion regex as the STEP B heal-wait.
+        Write-Phase "  waiting for per-replica liveness to converge after bootstrap (bounded 120s)..." 'Gray'
+        $bootDeadline = (Get-Date).AddSeconds(120)
+        $bootHealed = $false
+        while ((Get-Date) -lt $bootDeadline) {
+            $bk = @(kubectl -n skp exec statefulset/redis -- redis-cli --scan --pattern 'skp:proc:*' |
+                    Where-Object { $_ -notmatch '^skp:proc:[^:]+$' })
+            if ($bk.Count -ge 1) { $bootHealed = $true; break }
+            Start-Sleep -Seconds 5
+        }
+        if (-not $bootHealed) { Write-Phase "bootstrap liveness did not converge within 120s. Aborting." 'Red'; exit 30 }
+        Write-Phase "  bootstrap liveness converged ($($bk.Count) per-instance key(s)) — processor row registered." 'Gray'
+    } else {
+        Write-Phase "  warm DB ($procCount processor row(s) present) — skipping bootstrap (proven reset->seed->start path)." 'Gray'
+    }
+
+    # -----------------------------------------------------------------------
     # STEP B — RESET (code 20).
     # phase-80-reset.ps1: kubectl-exec FLUSHALL + 60s heal-wait + FK-safe graph DELETE (processors +
     # config_schemas preserved). Stack stays UP.
