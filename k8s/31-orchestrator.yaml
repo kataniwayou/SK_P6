@@ -1,0 +1,95 @@
+# ============================================================================
+# orchestrator — Quartz-cron workflow driver (Deployment x1, NO Service — SPOF).
+# ============================================================================
+# Port of the compose `orchestrator` block (compose.yaml L185-218). The orchestrator
+# is a PURE CONSUMER — nothing connects to it inbound except the kubelet probe (which
+# hits the pod IP directly), so it gets NO Service. It drives the Quartz cron that
+# fires the workflow and holds the in-memory L1 pause/resume state, so it is a
+# documented single point of failure: `replicas: 1` is LOCKED (see 80-CONTEXT.md,
+# roadmap invariant — scaling it would double-fire the cron and split L1 state).
+#
+# IMAGE (D-04): `orchestrator:local` + IfNotPresent (local store, no registry;
+# rollout restart after rebuild forces fresh bits — T-80-09).
+#
+# TTL LITERAL (D-08 / T-80-10 CRITICAL): compose shipped the recovery-backup TTL
+# through an interpolated test-only seam whose absence defaults to 900 (used solely by
+# the FALSIFY-02 short-TTL control). Here it is shipped as the bare production LITERAL
+# "900" — no shell interpolation and no test-seam env name appears in this manifest, so
+# the acceptance grep for their absence passes. Runtime behavior is identical (900).
+# Orchestrator__InstanceId is carried verbatim (orchestrator-only identity key).
+#
+# PROBES (Pitfall 3 — decoupled): readiness hits /health/ready :8081 which is
+# HARD-on-broker (gates Ready only once the bus is up); liveness hits /health/live
+# :8081, the always-Healthy self check with a generous initialDelay so a slow ~40s
+# rabbitmq cold start never CrashLoops the orchestrator (Kestrel binds before the
+# broker). Compose depends_on is DROPPED (phased bring-up handles ordering).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  namespace: skp
+  labels:
+    app: orchestrator
+    app.kubernetes.io/part-of: skp
+spec:
+  replicas: 1                                  # documented SPOF — LOCKED at 1 (D)
+  selector:
+    matchLabels:
+      app: orchestrator
+  template:
+    metadata:
+      labels:
+        app: orchestrator
+    spec:
+      containers:
+        - name: orchestrator
+          image: orchestrator:local            # D-04 — local build, never :latest
+          imagePullPolicy: IfNotPresent         # D-04 — read the local store, no registry pull
+          env:
+            - name: RabbitMq__Host
+              value: rabbitmq                                            # verbatim (Service DNS)
+            - name: RabbitMq__Username
+              valueFrom:
+                secretKeyRef:
+                  name: skp-dev-secrets
+                  key: RABBITMQ_DEFAULT_USER
+            - name: RabbitMq__Password
+              valueFrom:
+                secretKeyRef:
+                  name: skp-dev-secrets
+                  key: RABBITMQ_DEFAULT_PASS
+            - name: ConnectionStrings__Redis
+              value: "redis:6379,abortConnect=false,connectTimeout=5000"   # verbatim
+            - name: Orchestrator__InstanceId
+              value: orchestrator-1                                        # verbatim (orchestrator-only)
+            # LITERAL 900 — the compose interpolated test seam is dropped (D-08 / T-80-10)
+            - name: Orchestrator__OutputDataTtlSeconds
+              value: "900"
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4317"                          # verbatim
+          ports:
+            - containerPort: 8081                # kubelet-probed pod-local; NO Service
+          # readiness is HARD-on-broker — gates Ready only after the bus is reachable
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          # liveness is the always-Healthy self check → a slow 40s rabbitmq never CrashLoops (Pitfall 3)
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8081
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            failureThreshold: 6
+          resources:
+            requests:
+              memory: "192Mi"
+            limits:
+              memory: "512Mi"
+# NO Service — orchestrator is a pure consumer (event-driven over the bus; the only
+# inbound is the kubelet probe hitting the pod IP directly).
