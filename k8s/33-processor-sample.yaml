@@ -1,0 +1,102 @@
+# ============================================================================
+# processor-sample — step-execution worker (Deployment replicas:2, NO Service).
+# ============================================================================
+# Port of the compose `processor-sample` block (compose.yaml L287-320). The
+# processor is a PURE CONSUMER — nothing connects to it inbound except the kubelet
+# probe (which hits the pod IP directly), so it gets NO Service. Two replicas run
+# the shared step-execution workload (compose deploy.replicas:2 → spec.replicas:2);
+# the two pods share the same container-internal :8082 harmlessly (nothing published).
+#
+# IMAGE (D-04): `processor-sample:local` + IfNotPresent (local store, no registry;
+# rollout restart after rebuild forces fresh bits — T-80-09). The container's
+# assembly-embedded SourceHash must match the seeder's host-built Processor.Sample.dll.
+#
+# TTL LITERAL (D-08 / T-80-11 CRITICAL): compose shipped the execution-data TTL through
+# an interpolated test-only seam whose absence defaults to 900 — the LOAD-BEARING
+# production default (the jittered [900,1800] floor must outlast the recovery window).
+# Here it is shipped as the bare production LITERAL "900" — no shell interpolation
+# appears in this manifest. The two processor fault seams (the step-delay hook + the
+# read-defeat hook) are OMITTED ENTIRELY: absent ⇒ the code's :-0 default ⇒ OFF. The
+# acceptance grep for the absence of those seam names + any interpolation passes.
+#
+# BAD-CONFIG SUBJECT EXCLUDED (D-04 / T-80-12): the compose profile-gated bad-config
+# processor clone is NOT ported — no manifest is authored, mirroring the compose
+# default-profile exclusion. The acceptance grep asserts that token's absence.
+#
+# PROBES (Pitfall 3 — decoupled): readiness hits /health/ready :8082 which is
+# HARD-on-broker (gates Ready only once the bus is up); liveness hits /health/live
+# :8082, the always-Healthy self check with a generous initialDelay so a slow ~40s
+# rabbitmq cold start never CrashLoops the processor (Kestrel binds before the broker).
+# Compose depends_on (incl. baseapi-service) is DROPPED — the app self-heals via
+# readiness while phased bring-up handles ordering.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: processor-sample
+  namespace: skp
+  labels:
+    app: processor-sample
+    app.kubernetes.io/part-of: skp
+spec:
+  replicas: 2                                   # compose deploy.replicas:2 — shared step execution
+  selector:
+    matchLabels:
+      app: processor-sample
+  template:
+    metadata:
+      labels:
+        app: processor-sample
+    spec:
+      containers:
+        - name: processor-sample
+          image: processor-sample:local        # D-04 — local build, never :latest
+          imagePullPolicy: IfNotPresent         # D-04 — read the local store, no registry pull
+          env:
+            - name: RabbitMq__Host
+              value: rabbitmq                                            # verbatim (Service DNS)
+            - name: RabbitMq__Username
+              valueFrom:
+                secretKeyRef:
+                  name: skp-dev-secrets
+                  key: RABBITMQ_DEFAULT_USER
+            - name: RabbitMq__Password
+              valueFrom:
+                secretKeyRef:
+                  name: skp-dev-secrets
+                  key: RABBITMQ_DEFAULT_PASS
+            - name: ConnectionStrings__Redis
+              value: "redis:6379,abortConnect=false,connectTimeout=5000"   # verbatim
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "http://otel-collector:4317"                          # verbatim
+            # LITERAL 900 — the compose interpolated execution-data TTL test seam is dropped (D-08).
+            # This is the load-bearing production default: the jittered TTL floor outlasts recovery.
+            - name: Processor__ExecutionDataTtl
+              value: "900"
+            # NOTE: both processor fault hooks are OMITTED ENTIRELY (absent ⇒ code :-0 default ⇒ OFF).
+          ports:
+            - containerPort: 8082                # kubelet-probed pod-local; NO Service
+          # readiness is HARD-on-broker — gates Ready only after the bus is reachable
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8082
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 5
+          # liveness is the always-Healthy self check → a slow 40s rabbitmq never CrashLoops (Pitfall 3)
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8082
+            initialDelaySeconds: 45
+            periodSeconds: 15
+            failureThreshold: 6
+          resources:
+            requests:
+              memory: "160Mi"
+            limits:
+              memory: "384Mi"
+# NO Service — processor-sample is a pure consumer (event-driven over the bus; the
+# only inbound is the kubelet probe hitting the pod IP directly).
+# The profile-gated bad-config processor clone is EXCLUDED — no manifest (D-04).
