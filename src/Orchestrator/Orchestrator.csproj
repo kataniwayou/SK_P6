@@ -40,6 +40,9 @@
     <!-- Cronos (D-08/D-09): CronInterval next-occurrence + delta-seconds fire-time math.
          Version pinned in Directory.Packages.props (CPM — no Version=). -->
     <PackageReference Include="Cronos" />
+    <!-- KubernetesClient (SPEC HA-06 / HA-02): drives the HA leader election — a BackgroundService
+         runs the LeaderElector over the skp/orchestrator-leader Lease. NO Version= (CPM). -->
+    <PackageReference Include="KubernetesClient" />
   </ItemGroup>
 
   <ItemGroup>
