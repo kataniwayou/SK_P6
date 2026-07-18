@@ -171,6 +171,26 @@ public static class EsIndexNames
     public const string ReinjectOutcomeFieldPath = "attributes.ReinjectOutcome";
 
     /// <summary>
+    /// Phase 83 / HA-07 claim #4+#5 — the <c>OrchestratorRoleLogEnricher</c>'s <c>attributes.role</c>
+    /// (<c>leader</c>|<c>follower</c>), stamped on EVERY orchestrator log. The failover verdict (Plan 02)
+    /// <c>term</c>-queries this field for the earliest <c>role=leader</c> record after <c>KILL_UTC</c> — the
+    /// survivor's follower→leader flip — which is the single source of truth for bounded-recovery (claim #4)
+    /// AND role-transition-visible (claim #5).
+    ///
+    /// <para>
+    /// <b>DIRECT keyword path — NO <c>.keyword</c> sub-field.</b> Same rationale pinned on
+    /// <see cref="CorrelationIdFieldPath"/>/<see cref="StepIdFieldPath"/>/<see cref="ReinjectOutcomeFieldPath"/>:
+    /// the OTel-managed <c>logs-generic.otel-default</c> data stream's x-pack ECS index template
+    /// (<c>all_strings_to_keywords</c>) maps every string attribute DIRECTLY to <c>keyword</c> (no
+    /// <c>fields.keyword</c> sub-field), so appending a <c>.keyword</c> sub-field to this path returns ZERO
+    /// hits — the trap that broke 4 log-readback facts at Phase 11 UAT (commit 9370e89, reverted). Always
+    /// query <c>attributes.role</c> directly. Wave-0 <c>_mapping/field</c> probe confirms the <c>keyword</c>
+    /// mapping; the const value is correct regardless of probe availability (single-const edit).
+    /// </para>
+    /// </summary>
+    public const string RoleFieldPath = "attributes.role";
+
+    /// <summary>
     /// The OTLP field path for the per-step computed <c>Sum</c> attribute, expressed as a dot-separated path.
     /// Phase 66 / OBS-01 — read alongside <see cref="StepLabelFieldPath"/> when reconstructing per-run traces.
     ///
