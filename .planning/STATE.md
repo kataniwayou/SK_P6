@@ -4,8 +4,8 @@ milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 2
 status: executing
-stopped_at: Completed 82-03-PLAN.md
-last_updated: "2026-07-18T19:09:41.176Z"
+stopped_at: Completed 82-02-PLAN.md
+last_updated: "2026-07-18T19:18:40.344Z"
 last_activity: 2026-07-18
 progress:
   total_phases: 4
@@ -32,7 +32,7 @@ Milestone: v10.0.0 (Orchestrator High Availability) — STARTED 2026-07-18. Goal
 Phase: 82 (orchestrator-ha-leader-election) — EXECUTING
 Current Plan: 2
 Total Plans: 4
-Plan: 3 of 4
+Plan: 4 of 4
 Status: Ready to execute
 Last activity: 2026-07-18
 
@@ -1111,6 +1111,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 81 P03 | 5min | 2 tasks | 1 files |
 | Phase 82 P01 | 12min | 3 tasks | 4 files |
 | Phase 82-orchestrator-ha-leader-election P03 | 3min | 3 tasks | 3 files |
+| Phase 82-orchestrator-ha-leader-election P02 | 6min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1654,6 +1655,8 @@ Recent decisions affecting current work:
 - Phase 82-01: LeaderState is a single-writer volatile snapshot; the LeaderElector callbacks are the sole writer (HA-03, grep-enforced)
 - 82-03: Orchestrator RBAC Role is least-privilege — get/create/update on leases in coordination.k8s.io within skp only (T-82-09)
 - 82-03: Orchestrator Deployment scaled to 3 replicas with RollingUpdate; per-pod identity via POD_NAME downward-API env, hardcoded InstanceId dropped
+- 82-02: fire gate snapshots IsLeader && hydrated ONCE at fire top; follower skips only sends, still refreshes L1 + reschedules (HA-01)
+- 82-02: POD_NAME feeds both bus InstanceId and LeaseLock holder; election service registered in-cluster only (KUBERNETES_SERVICE_HOST); off-cluster defaults to leader
 
 ### Roadmap Milestone Log
 
@@ -1765,8 +1768,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-18T19:09:26.269Z
-Stopped at: Completed 82-03-PLAN.md
+Last session: 2026-07-18T19:18:26.219Z
+Stopped at: Completed 82-02-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
