@@ -1,0 +1,54 @@
+# ============================================================================
+# kustomization.yaml — the D-03 ordered-apply convenience aggregator.
+# ============================================================================
+# This is NOT an overlay structure (D-01: raw kubectl YAML, one deploy target).
+# It ONLY (a) lists every manifest as a resource so `kubectl apply -k k8s/` is a
+# single command, and (b) stamps the `skp` namespace + two common labels. No
+# templating, no patches, no configMapGenerator (the ConfigMaps are the
+# hand-authored 02-configmaps.yaml — swapping to a generator would rename them
+# with a content-hash suffix and break the Deployment volume `configMap.name`
+# references, so it is deliberately NOT used here — RESEARCH Open-Q4 default).
+#
+# APPLY-ORDER NOTE: `kubectl apply -k` sorts by KIND, not by this file's order
+# (Namespace first, then CRDs/ConfigMaps/Secrets, then workloads). True infra→app
+# readiness ordering (wait-for-healthy between tiers) lives in the bring-up script
+# `scripts/phase-80-up.ps1` (phased `kubectl rollout status`), NOT here. The
+# resources are still listed in tier order below for human diff-ability.
+#
+# WHOLE-STACK LINT GATE: `kubectl apply -k k8s/ --dry-run=server` validates the
+# entire aggregated stack against the live API server (schema + admission) before
+# anything is created — the T-80-14 malformed-manifest guard.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# D-02 — every resource lands in the dedicated `skp` namespace. The manifests
+# already hardcode `namespace: skp`; this restates the intent at the aggregate
+# level (and namespaces any resource that omitted it). The Namespace object
+# itself (00-namespace.yaml) is cluster-scoped and is left untouched.
+namespace: skp
+
+# D-03 — additive common labels stamped onto every resource. These are supersets
+# of the per-manifest `app: <tier>` selectors; kustomize also injects them into
+# selector/matchLabels, but because every workload's selector is authored
+# consistently and these resources are created fresh, the injection is safe and
+# additive (no immutable-selector conflict on first apply).
+commonLabels:
+  app.kubernetes.io/part-of: skp
+  app.kubernetes.io/managed-by: kustomize
+
+# All 13 manifests, in tier order (namespace → secret/config → stateful backing
+# services → observability → app tiers). Kind-sort at apply time still applies.
+resources:
+  - 00-namespace.yaml
+  - 01-secret.yaml
+  - 02-configmaps.yaml
+  - 10-postgres.yaml
+  - 11-redis.yaml
+  - 12-rabbitmq.yaml
+  - 13-elasticsearch.yaml
+  - 20-otel-collector.yaml
+  - 21-prometheus.yaml
+  - 30-baseapi-service.yaml
+  - 31-orchestrator.yaml
+  - 32-keeper.yaml
+  - 33-processor-sample.yaml
