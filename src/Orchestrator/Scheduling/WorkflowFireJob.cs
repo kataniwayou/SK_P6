@@ -1,8 +1,10 @@
+using BaseConsole.Core.Health;
 using MassTransit;
 using Messaging.Contracts;
 using Messaging.Contracts.Projections;
 using Microsoft.Extensions.Logging;
 using Orchestrator.Dispatch;
+using Orchestrator.Election;
 using Orchestrator.L1;
 using Quartz;
 
@@ -32,7 +34,9 @@ public sealed class WorkflowFireJob(
     IStepDispatcher dispatcher,
     WorkflowScheduler scheduler,
     TimeProvider timeProvider,
-    ILogger<WorkflowFireJob> logger) : IJob
+    ILogger<WorkflowFireJob> logger,
+    LeaderState leaderState,
+    IStartupGate startupGate) : IJob
 {
     public async Task Execute(IJobExecutionContext context)
     {
@@ -66,24 +70,41 @@ public sealed class WorkflowFireJob(
             [ExecutionLogScope.WorkflowId] = workflowId.ToString(),
         }))
         {
-            foreach (var entryStepId in wf.EntryStepIds)
+            // D-04/D-05 (HA-01): snapshot the fire gate ONCE at the top of the fire (not per-iteration).
+            // Only a leader that is ALSO hydrated may emit entry-step sends — the `&& hydrated` term
+            // (IStartupGate.IsReady) fences the cold-leader lost/duplicate-fire edge on an empty L1.
+            var fireEnabled = leaderState.IsLeader && startupGate.IsReady;
+            if (fireEnabled)
             {
-                if (!wf.Steps.TryGetValue(entryStepId, out var step))
+                foreach (var entryStepId in wf.EntryStepIds)
                 {
-                    // BUSINESS skip — entry step not in the L1 step map.
-                    logger.LogWarning(
-                        "Entry step {StepId} of workflow {WorkflowId} missing from L1 steps — skipping (business)",
-                        entryStepId, workflowId);
-                    continue;
-                }
+                    if (!wf.Steps.TryGetValue(entryStepId, out var step))
+                    {
+                        // BUSINESS skip — entry step not in the L1 step map.
+                        logger.LogWarning(
+                            "Entry step {StepId} of workflow {WorkflowId} missing from L1 steps — skipping (business)",
+                            entryStepId, workflowId);
+                        continue;
+                    }
 
-                // D-01: the build-and-Send shape lives in IStepDispatcher (the single owner). D-03: the
-                // entry-step fire seeds entryId = Guid.Empty — the source-step sentinel (SourceStep.IsSource)
-                // that replaces the retired deterministic hash. The first Guid.Empty is the (unchanged)
-                // executionId lineage; the second is the new entryId sentinel. An infra fault on Send propagates.
-                await dispatcher.DispatchAsync(
-                    workflowId, entryStepId, step.ProcessorId, step.Payload,
-                    correlationId, Guid.Empty, Guid.Empty, context.CancellationToken);
+                    // D-01: the build-and-Send shape lives in IStepDispatcher (the single owner). D-03: the
+                    // entry-step fire seeds entryId = Guid.Empty — the source-step sentinel (SourceStep.IsSource)
+                    // that replaces the retired deterministic hash. The first Guid.Empty is the (unchanged)
+                    // executionId lineage; the second is the new entryId sentinel. An infra fault on Send propagates.
+                    await dispatcher.DispatchAsync(
+                        workflowId, entryStepId, step.ProcessorId, step.Payload,
+                        correlationId, Guid.Empty, Guid.Empty, context.CancellationToken);
+                }
+            }
+            else
+            {
+                // HA-01: a follower (or un-hydrated leader) skips ONLY the entry-step sends — it still
+                // refreshes L1 liveness and reschedules below. WorkflowId rides the ALREADY-OPEN scope,
+                // NOT the message template (T-18-04, ids-in-scope-not-template) — hence NO template arg,
+                // so CA2017 (arg/placeholder count) is suppressed for this ONE deliberate scope-only line.
+#pragma warning disable CA2017 // WorkflowId is supplied by the open log scope, not a template argument (T-18-04)
+                logger.LogInformation("Follower — leader gate closed; skipping entry-step sends for {WorkflowId}");
+#pragma warning restore CA2017
             }
 
             // L1 liveness refresh — in-memory only (NO L2 write). Replace the immutable LivenessProjection
