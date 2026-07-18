@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: Not started
-status: completed
+current_plan: 2
+status: executing
 stopped_at: Phase 83 context gathered
-last_updated: "2026-07-18T20:52:51.271Z"
-last_activity: 2026-07-18
+last_updated: "2026-07-18T21:22:42.023Z"
+last_activity: 2026-07-18 -- Phase 83 Plan 01 complete (HA-07 fire-bucket scorer + role const)
 progress:
   total_phases: 4
   completed_phases: 0
@@ -21,7 +21,7 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase --phase — 82
+**Current focus:** Phase --phase — 83
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
@@ -29,12 +29,14 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v10.0.0 (Orchestrator High Availability) — STARTED 2026-07-18. Goal: run the orchestrator as N≥2 replicas with single-leader mutual exclusion so horizontal scaling never produces duplicate workflow triggers, with fast failover and role-tagged observability. Only the elected leader performs scheduler-triggered entry-step sends (gate on `WorkflowFireJob`'s send loop, read from a single-writer volatile `LeaderState`); leader election via `KubernetesClient` `LeaderElector` over a `coordination.k8s.io/v1` Lease in a `BackgroundService`; `attributes.role` on every orchestrator log. 2 phases: 82 (leader election + gate + role logging + RBAC + replica bump), 83 (failover proof). Builds on v9.0.0 k8s deploy (80-81). Phases continue at **82**. Prior milestone v9.0.0 (Canonical Two-Consumer Recovery & L2 Delivery Proof, phases 69-81) is complete-but-unarchived — run /gsd-complete-milestone to archive it.
-Phase: 82
-Current Plan: Not started
+Phase: 83 — EXECUTING
+Current Plan: 2
 Total Plans: 4
-Plan: 4 of 4
-Status: Milestone complete
-Last activity: 2026-07-18
+Plan: 2 of 4
+Status: Executing Phase 83 (Plan 01 complete; Plan 02 next)
+Last activity: 2026-07-18 -- Phase 83 Plan 01 complete (HA-07 fire-bucket scorer + role const)
+
+> Phase 83 Plan 01 — ✅ COMPLETE 2026-07-18 (Wave 1: the hermetically-testable HA-07 decision core — the pure scorer every downstream Plan-02/03/04 verdict trusts). **3 atomic commits** (`d7c5981` feat: `EsIndexNames.RoleFieldPath = "attributes.role"` direct-keyword const for the Plan-02 role-flip term query; `bad08e1` test-RED: six failing `HaFireBucketScorerFacts`; `8cef46c` feat-GREEN: `HaFireBucketScorer.Score`). Requirement **HA-07** (hermetic core half). `HaFireBucketScorer` (tests/BaseApi.Tests/Observability/Analysis/HaFireBucketScorer.cs): a pure static classifier (mirrors `StructuralCohort`) folding the five HA-07 claims to a `Verdict` — `Bucket30s` wall-clock flooring + per-corrId earliest-timestamp bucketing (claims #1+#2, ≤1 distinct send-corrId/bucket), an election-window `[killBucket, recoveryBucket]` gap/backfill walk (claim #3), role-flip recovery ≤2×LeaseDuration=30s (claims #4+#5); `SendEvidenceRecord(CorrelationId, Timestamp)` struct + `HaFireVerdict` result record (REUSES the `AnalyzerReport.Verdict` enum, not redeclared). **Fail-closed anti-vacuous fold (exact order):** zero-sends → Inconclusive; `!zeroDuplicate` → Fail; `!roleFlipVisible` → Fail; `recovery<0` → Inconclusive; `recovery>30s` → Fail; `gapObserved && !notBackfilled` → Fail; `!gapObserved` → Inconclusive; else Pass (T-83-04a: an observability gap is NEVER a vacuous green). Six hermetic facts (no `RealStack` trait) green Docker-less: happy-Pass, split-brain-Fail, no-gap-Inconclusive, backfill-Fail, recovery-over-30s-Fail, zero-sends-Inconclusive. **2 deviations:** (1) Rule 1 — replaced RESEARCH Code Example 4's verbatim boundary arithmetic (which makes `notBackfilled` tautologically true → the required `BackfilledGapTick_IsFail` fact UNREACHABLE) with an election-window walk preserving the same intent; (2) Rule 3 — renamed a `recovery is {} r` pattern var to `rec` to clear a CS0136 clash with the `foreach r` loop var. **Wave-0 probe:** `_mapping/field/attributes.role` returned empty mappings (ES up, no `attributes.role` docs indexed yet — non-blocking, const correct per direct-path convention; Plan 04 live run confirms). Verification: 0-warning Debug+Release; HaFireBucketScorerFacts 6/6, StructuralCohortFacts 3/3, PassFailEngineFacts 30/30 (zero new hermetic regressions). Summary: `.planning/phases/83-orchestrator-ha-failover-proof/83-01-SUMMARY.md` (Self-Check PASSED). Plan 02 (`HaFailoverAnalyzerE2ETests` live verdict consuming `Score` + `RoleFieldPath`) next.
 
 > Phase 82 Plan 01 — ✅ COMPLETE 2026-07-18 (Wave 1: the leader-election core — the foundation contract every other Phase-82 plan consumes). **3 atomic feat commits** (`d6fd3e2` CPM pin + Orchestrator PackageReference for `KubernetesClient`; `c2d06a9` `LeaderState` single-writer volatile snapshot holder; `29cff1c` `LeaderElectionService` build-only BackgroundService). Requirements **HA-02/HA-03/HA-04/HA-06**. `LeaderState` (src/Orchestrator/Election/LeaderState.cs): an immutable `LeaderSnapshot(IsLeader,Role,CurrentLeaderId)` record swapped whole into a `private volatile LeaderSnapshot _snapshot` (lock-free, torn-read-safe — mirrors StartupGate Volatile discipline + WorkflowFireJob record-with-swap); default is follower (`IsLeader==false`,`Role=="follower"`); ctor `LeaderState(bool startAsLeader=false)` seeds leader for the off-cluster Plan-02/D-02 path (construction, NOT a runtime write, so single-writer holds); writers `BecomeLeader`/`BecomeFollower`/`SetLeaderId`. `LeaderElectionService` (src/Orchestrator/Election/LeaderElectionService.cs): `BackgroundService` building `LeaderElector` over `LeaseLock(new Kubernetes(InClusterConfig()),"skp","orchestrator-leader",POD_NAME??MachineName)`; fixed timings as PUBLIC constants `LeaseDuration`(15s)/`RenewDeadline`(10s)/`RetryPeriod`(2s) (RenewDeadline<LeaseDuration self-demotion fence, HA-04) + `LeaseNamespace`/`LeaseName`; `OnStartedLeading→BecomeLeader`, `OnStoppedLeading→BecomeFollower`, `OnNewLeader→SetLeaderId` are the SOLE LeaderState writer (HA-03, grep-clean); `catch(OperationCanceledException){return;}` clean-shutdown; `RunAndTryToHoldLeadershipForeverAsync(stoppingToken)`. Per D-06 BUILD-ONLY — not registered in Program.cs (Plan 02 wires in-cluster) and never started under test. **1 deviation (Rule 3 - blocking):** the plan's suggested 15.x line (15.0.1) carries advisory GHSA-w7r3-mgwf-4mqq which the repo NuGetAudit promotes to a build error → `dotnet restore` failed; fix-forwarded the pin to non-vulnerable **18.0.13** (same LeaderElector API, net8.0) → restore exit 0. Verification: `dotnet restore` exit 0 (no NU1902); Orchestrator **Debug + Release 0-warning/0-error**; single-writer grep confirms the three writer callers are ONLY the election callbacks. Summary: `.planning/phases/82-orchestrator-ha-leader-election/82-01-SUMMARY.md` (Self-Check PASSED). Plan 02 (WorkflowFireJob leader gate + role enricher + Program.cs wiring) next.
 
@@ -1114,6 +1116,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 82-orchestrator-ha-leader-election P03 | 3min | 3 tasks | 3 files |
 | Phase 82-orchestrator-ha-leader-election P02 | 6min | 3 tasks | 6 files |
 | Phase 82 P04 | 19min | 3 tasks | 3 files |
+| Phase 83 P01 | 18min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1660,6 +1663,7 @@ Recent decisions affecting current work:
 - 82-02: fire gate snapshots IsLeader && hydrated ONCE at fire top; follower skips only sends, still refreshes L1 + reschedules (HA-01)
 - 82-02: POD_NAME feeds both bus InstanceId and LeaseLock holder; election service registered in-cluster only (KUBERNETES_SERVICE_HOST); off-cluster defaults to leader
 - 82-04: hermetic HA tests (10) prove HA-01..HA-05 directly (D-06) — leader-only fire gate, LeaderState transitions + RenewDeadline<LeaseDuration fence, live-read role enricher; standby Quartz scheduler for deterministic reschedule inspection; 0-warning Debug/Release
+- Phase 83: HA-07 verdict logic isolated as a pure HaFireBucketScorer (Docker-less-provable) before any live harness; fail-closed anti-vacuous fold (observability gaps -> Inconclusive, never a vacuous Pass)
 
 ### Roadmap Milestone Log
 

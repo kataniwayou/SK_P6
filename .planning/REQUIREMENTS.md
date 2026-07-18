@@ -18,7 +18,8 @@ Milestone goal: run the orchestrator as N≥2 replicas with single-leader mutual
 **: Every orchestrator log carries `attributes.role = leader|follower`, added by an OpenTelemetry `LogRecord` enricher that reads the live `LeaderState` (mirrors `ProcessorIdLogEnricher`), dynamic across failover, present from the first boot log (defaults to follower).
 - [x] **HA-06
 **: RBAC Role + RoleBinding grant the orchestrator ServiceAccount `get/create/update` on `leases` in `coordination.k8s.io` within the `skp` namespace; the orchestrator Deployment is scaled to N≥2 replicas. `KubernetesClient` is added as a dependency.
-- [ ] **HA-07**: Under N≥2 replicas with the leader killed mid-run, the system produces zero duplicate workflow triggers (verified via distinct per-fire correlationIds through the existing analyzer) and re-establishes a single leader within a bounded time.
+- [x] **HA-07
+**: Under N≥2 replicas with the leader killed mid-run, the system produces zero duplicate workflow triggers (verified via distinct per-fire correlationIds through the existing analyzer) and re-establishes a single leader within a bounded time.
 
 ## Future Requirements (deferred)
 
