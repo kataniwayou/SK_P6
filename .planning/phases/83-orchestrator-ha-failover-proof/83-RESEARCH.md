@@ -405,7 +405,9 @@ exit $analyzerExit
 | A4 | The processor stays up across the failover (only the orchestrator leader is killed), so every real fire reliably produces a `StepId` record to anchor the bucket. | Pattern 1 | If the processor flaked, a real fire could produce no send-evidence → a false empty bucket. Mitigation: STEP A2/B0 liveness gates ensure processors are Ready; the drain+poll-to-stable tolerates export skew. |
 | A5 | `attributes.role` is indexed as a `keyword` (term-queryable) like the other `all_strings_to_keywords` attributes. | Code Example 5 | If it were `text`, the `term` query would miss. Mitigation: Wave-0 confirm with `GET /logs-generic.otel-default/_mapping/field/attributes.role` before locking the query (single-const style check, same as EsIndexNames). |
 
-## Open Questions
+## Open Questions (RESOLVED)
+
+> All three resolved during planning with a fail-safe in the plans: Q1 → KILL_UTC pinned at kubectl return + scorer overlap-guard self-reports INCONCLUSIVE on a mistimed kill (83-01/83-03); Q2 → `!gapObserved → Inconclusive` fold (83-01); Q3 → Wave-0 `_mapping/field` probe with "value correct regardless" fallback (83-01 Task 1). Plans implement each resolution; none affects whether HA-07 is proven.
 
 1. **Is the pre-boundary kill offset (~3s) large enough given kubectl force-delete latency?**
    - What we know: force-delete returns quickly; the gap minimum is ~11s, so a 3s offset leaves ~8s of margin for the boundary tick to land in the gap.

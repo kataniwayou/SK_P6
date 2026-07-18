@@ -1,8 +1,8 @@
 ---
 phase: 83
 slug: orchestrator-ha-failover-proof
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-07-18
 ---
@@ -79,11 +79,11 @@ HA-07's observable claims are **sampled by ES-query buckets**, and the sampling 
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references (new test + scorer + script)
-- [ ] Gap-coverage anti-vacuous rule encoded (no gap tick → INCONCLUSIVE, never PASS)
-- [ ] No watch-mode flags
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies (plan-checker Dimension 8 pass)
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references (new test + scorer + script)
+- [x] Gap-coverage anti-vacuous rule encoded (no gap tick → INCONCLUSIVE, never PASS)
+- [x] No watch-mode flags
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+**Approval:** approved 2026-07-18 (plan-checker VERIFICATION PASSED, 0 blockers)
