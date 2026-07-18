@@ -847,7 +847,7 @@ Plans:
 - [ ] 80-06-PLAN.md — Wave 1: keeper (Deploy x2) + processor-sample (Deploy x2) — literal 900 TTL, all fault seams omitted, badconfig excluded (D-04/08)
 - [ ] 80-07-PLAN.md — Wave 2: phase-80-build.ps1 (5 :local images) + kustomization.yaml aggregator + whole-stack dry-run gate (D-03/04/05)
 - [ ] 80-08-PLAN.md — Wave 2: phase-80-reset.ps1 — kubectl-exec re-target of the compose reset (Pitfall 1, first half)
-- [ ] 80-09-PLAN.md — Wave 3: phase-80-up.ps1 — apply + rollout status + rollout restart + 8 loopback port-forwards (D-14/15, Pitfalls 2/5)
+- [x] 80-09-PLAN.md — Wave 3: phase-80-up.ps1 — apply + rollout status + rollout restart + 8 loopback port-forwards (D-14/15, Pitfalls 2/5)
 - [ ] 80-10-PLAN.md — Wave 4: phase-80-harness.ps1 (STEP B1/D re-target) + live happy-path proof checkpoint (D-16)
 
 *v3.2.0 shipped 2026-05-28 (11 phases). v3.3.0 shipped 2026-05-29 (5 phases, Orchestration L3→L1→L2 build pipeline). v3.4.0 shipped 2026-06-01 (9 phases 17-24+24.1, BaseConsole + Orchestrator Messaging). v3.5.0 shipped 2026-06-02 (6 phases 25-30, Processor Console — `BaseProcessor.Core` + `Processor.Sample`, assembly-embedded SourceHash, WebApi bus responders, L2 liveness self-registration, live execution round-trip + runtime/business metrics) — note: formal archival (ROADMAP/MILESTONES/tag) deferred. v3.6.0 shipped 2026-06-05 (4 phases 31-32.1, Idempotent Execution — exactly-once-effect round-trip via deterministic `H` + effect-first `flag[H]` dedup at both hops; cancelled circuit-breaker built then reverted to plain dead-lettering). Next milestone planning begins with `/gsd-new-milestone`.*
