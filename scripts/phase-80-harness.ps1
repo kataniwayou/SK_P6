@@ -44,6 +44,8 @@
         30  seeder (dotnet test ~FanOutSeeder) failed
         40  wf-id kubectl-exec psql lookup failed/empty
         50  activation gate != 204
+        60  fault inject / recover / firing failed (crash sequencer — STEP F.2/F.3/F.4)
+        64  bad -ScenarioId argument (config-usage error)
 
     CLEAN-WINDOW GUARANTEE (STEP B1): phase-80-reset.ps1 FLUSHALLs Redis and deletes the workflow-graph
     rows, but the long-running orchestrator keeps its already-registered Quartz crons in its in-process
@@ -60,17 +62,31 @@
     AFTER `--`: `-- --filter-method "*FanOutSeeder_SeedsAndSelfVerifies*"` (seed) and
     `-- --filter-method "*Analyze_Window_Yields_Pass*"` (analyzer) — BYTE-FOR-BYTE as phase-67.
 
+.PARAMETER ScenarioId
+    Which capstone scenario to run (TEST-01..07). Default TEST-01 (the no-fault happy-path baseline —
+    Phase 80's D-16 proof stays reproducible). TEST-02..07 crash a whole tier via `kubectl scale`
+    (the crash sequencer, STEP F.2/F.3/F.4). An out-of-range id exits 64 (config-usage) before any op.
+
+.PARAMETER SkipBringUp
+    When set, STEP A0 (build) + STEP A (up + port-forwards) + the STEP Z port-forward teardown are
+    skipped — for the plan 81-03 sweep that owns a ONE-TIME bring-up and shares the stack across the
+    7 scenarios. STEP A2 (fresh-DB bootstrap) is NOT gated: its warm-DB guard self-skips.
+
 .PARAMETER TearDownCluster
     When set, STEP Z ALSO runs `kubectl delete -k k8s/` after stopping the port-forwards. Default OFF —
     the stack + PVCs are kept for inspection between runs (mirrors phase-67's volume-preserving teardown).
 
 .NOTES
-    Dev/ops-only tooling. No product source touched. Happy-path only (D-16, TEST-01 faultType='none') —
-    no fault seams, no crash sequencer, no FALSIFY/TEST-02+ branches.
+    Dev/ops-only tooling. No product source touched. TEST-01 is the no-fault baseline (D-16,
+    faultType='none'); TEST-02..07 crash a whole tier via `kubectl -n skp scale --replicas=0`/restore.
     Fully automated — no interactive prompt anywhere.
 #>
 
-param([switch]$TearDownCluster)
+param(
+    [string]$ScenarioId = 'TEST-01',
+    [switch]$SkipBringUp,
+    [switch]$TearDownCluster
+)
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -93,8 +109,43 @@ try {
     # -----------------------------------------------------------------------
     . (Join-Path $PSScriptRoot 'lib/exit-code-resolution.ps1')
 
-    $scenarioId = 'TEST-01'
-    Write-Phase "scenario '$scenarioId' — no-fault baseline (k8s happy-path D-16 proof; faultType=none)."
+    # -----------------------------------------------------------------------
+    # SCENARIO TABLE + BAD-ID GUARD (code 64) — the k8s port of phase-67-harness.ps1's
+    # 7 capstone rows ONLY (the extended + negative-control rows carried by the compose harness are
+    # out of scope per SPEC / D-08). TEST-01 stays the default so Phase 80's no-fault proof stays reproducible
+    # (SPEC req 1 / D-01). `targetContainers` names double as tier keys for the D-05 maps below —
+    # they already match the k8s workload names (`app=<tier>` labels in k8s/*.yaml).
+    # -----------------------------------------------------------------------
+    $Scenarios = [ordered]@{
+        'TEST-01' = @{ targetContainers = @();                    faultType = 'none';       injectAfterNFires = 0; dwellSeconds = 0;  notes = 'no-fault baseline' }
+        'TEST-02' = @{ targetContainers = @('processor-sample');  faultType = 'stop-start'; injectAfterNFires = 4; dwellSeconds = 45; notes = 'processor whole-tier crash' }
+        'TEST-03' = @{ targetContainers = @('orchestrator');      faultType = 'stop-start'; injectAfterNFires = 4; dwellSeconds = 45; notes = 'orchestrator crash — RAMJobStore re-hydration from L2 parent index' }
+        'TEST-04' = @{ targetContainers = @('keeper');            faultType = 'stop-start'; injectAfterNFires = 4; dwellSeconds = 45; notes = 'keeper whole-tier crash (BOTH replicas)' }
+        'TEST-05' = @{ targetContainers = @('redis');             faultType = 'stop-start'; injectAfterNFires = 4; dwellSeconds = 45; notes = 'redis crash — L2 wipe (no PVC)' }
+        'TEST-06' = @{ targetContainers = @('rabbitmq');          faultType = 'stop-start'; injectAfterNFires = 4; dwellSeconds = 45; notes = 'rabbitmq crash — durable queues survive (PVC)' }
+        'TEST-07' = @{ targetContainers = @('redis','rabbitmq');  faultType = 'stop-start'; injectAfterNFires = 4; dwellSeconds = 45; notes = 'redis + rabbitmq combined crash' }
+    }
+    if (-not $Scenarios.Contains($ScenarioId)) {
+        Write-Phase "unknown scenario '$ScenarioId'. Known: $($Scenarios.Keys -join ', ')" 'Red'
+        exit 64
+    }
+    $scenario = $Scenarios[$ScenarioId]
+    $scenarioId = $ScenarioId   # keep the lowercase name used by STEP F.1/H (:332,:351,:366) unchanged
+    Write-Phase "scenario '$ScenarioId' — $($scenario.notes) (faultType=$($scenario.faultType), N=$($scenario.injectAfterNFires), dwell=$($scenario.dwellSeconds)s)"
+
+    # -----------------------------------------------------------------------
+    # D-05 STATIC TIER MAPS (verified against k8s/*.yaml — see 81-PATTERNS.md). The crash
+    # sequencer NEVER derives kind/replica from the -ScenarioId argument (threat T-81-01): the id
+    # only selects a fixed table row; these maps are static in-script. NEVER a blanket --replicas=1
+    # for the ×2 tiers (keeper=2, processor-sample=2 — SPEC req 3 / T-81-02).
+    # -----------------------------------------------------------------------
+    $TierKind = @{
+        'processor-sample' = 'deployment'; 'orchestrator' = 'deployment'; 'keeper' = 'deployment'
+        'redis' = 'statefulset'; 'rabbitmq' = 'statefulset'
+    }
+    $TierReplicas = @{
+        'processor-sample' = 2; 'orchestrator' = 1; 'keeper' = 2; 'redis' = 1; 'rabbitmq' = 1
+    }
 
     # -----------------------------------------------------------------------
     # STEP A0 — IMAGE BUILD (code 10) — SourceHash currency guarantee.
@@ -103,20 +154,28 @@ try {
     # processor id than the seeded v8-fanout-proof binds → the ProcessorLivenessValidator 422s the
     # POST /start. Building here (and rollout-restarting in STEP A) guarantees currency.
     # -----------------------------------------------------------------------
-    Write-Phase "STEP A0: build the 4 app images :local (SourceHash currency — phase-80-build.ps1)"
-    pwsh -File (Join-Path $PSScriptRoot 'phase-80-build.ps1')
-    if ($LASTEXITCODE -ne 0) { Write-Phase "image build failed (exit $LASTEXITCODE). Aborting." 'Red'; exit 10 }
+    # -SkipBringUp (SPEC req 7 / D-03): when the sweep (plan 81-03) owns a ONE-TIME bring-up and
+    # shares the stack across the 7 scenarios, STEP A0 (build) + STEP A (up + port-forwards) are
+    # skipped. STEP A2 below is deliberately NOT gated — its warm-DB guard self-skips on a warm DB
+    # but MUST still bootstrap the processor row on the first (fresh-PVC) sweep scenario.
+    if (-not $SkipBringUp) {
+        Write-Phase "STEP A0: build the 4 app images :local (SourceHash currency — phase-80-build.ps1)"
+        pwsh -File (Join-Path $PSScriptRoot 'phase-80-build.ps1')
+        if ($LASTEXITCODE -ne 0) { Write-Phase "image build failed (exit $LASTEXITCODE). Aborting." 'Red'; exit 10 }
 
-    # -----------------------------------------------------------------------
-    # STEP A — BRING-UP (code 10).
-    # phase-80-up.ps1: compose-down (port-collision guard) → kubectl apply -k k8s/ →
-    # phased rollout status (6 infra + 4 app) → rollout restart the 4 app Deployments onto fresh
-    # :local bits → start the 8 loopback port-forwards → poll baseapi /health/ready. On return the
-    # stack is UP and harness-reachable over localhost.
-    # -----------------------------------------------------------------------
-    Write-Phase "STEP A: bring-up (phase-80-up.ps1 — kubectl apply -k + rollout + port-forwards + readiness gate)"
-    pwsh -File (Join-Path $PSScriptRoot 'phase-80-up.ps1')
-    if ($LASTEXITCODE -ne 0) { Write-Phase "bring-up failed (exit $LASTEXITCODE). Aborting." 'Red'; exit 10 }
+        # -------------------------------------------------------------------
+        # STEP A — BRING-UP (code 10).
+        # phase-80-up.ps1: compose-down (port-collision guard) → kubectl apply -k k8s/ →
+        # phased rollout status (6 infra + 4 app) → rollout restart the 4 app Deployments onto fresh
+        # :local bits → start the 8 loopback port-forwards → poll baseapi /health/ready. On return the
+        # stack is UP and harness-reachable over localhost.
+        # -------------------------------------------------------------------
+        Write-Phase "STEP A: bring-up (phase-80-up.ps1 — kubectl apply -k + rollout + port-forwards + readiness gate)"
+        pwsh -File (Join-Path $PSScriptRoot 'phase-80-up.ps1')
+        if ($LASTEXITCODE -ne 0) { Write-Phase "bring-up failed (exit $LASTEXITCODE). Aborting." 'Red'; exit 10 }
+    } else {
+        Write-Phase "STEP A0/A: -SkipBringUp — reusing the already-up stack + port-forwards (sweep-owned bring-up)." 'Gray'
+    }
 
     # -----------------------------------------------------------------------
     # STEP A2 — FIRST-RUN BOOTSTRAP (code 30) — fresh-DB processor-row registration.
@@ -374,23 +433,29 @@ try {
     # failure logs loud but the harness STILL surfaces the analyzer verdict (the FINAL exit mirrors the
     # analyzer, never the teardown result).
     # -----------------------------------------------------------------------
-    Write-Phase "STEP Z: teardown — stop the kubectl port-forwards (keep the stack + PVCs)"
-    $pidFile = Join-Path $repoRoot '.k8s-portforward-pids'
-    if (Test-Path $pidFile) {
-        $pfPids = @(Get-Content $pidFile -ErrorAction SilentlyContinue | Where-Object { $_ -match '\S' })
-        foreach ($p in $pfPids) {
-            # Recycled-PID guard: only kill if the PID is STILL a live kubectl process. If the forward
-            # already exited and the OS recycled its PID, this skips it rather than force-killing an
-            # unrelated process. Best-effort — never throws.
-            try {
-                $proc = Get-Process -Id ([int]$p) -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq 'kubectl' }
-                if ($proc) { Stop-Process -Id ([int]$p) -Force -ErrorAction SilentlyContinue }
-            } catch { }
+    # -SkipBringUp (SPEC req 7 / D-03): when the sweep owns the shared stack, leave the port-forwards
+    # UP so the next scenario can reuse them — the sweep tears them down once at the very end.
+    if (-not $SkipBringUp) {
+        Write-Phase "STEP Z: teardown — stop the kubectl port-forwards (keep the stack + PVCs)"
+        $pidFile = Join-Path $repoRoot '.k8s-portforward-pids'
+        if (Test-Path $pidFile) {
+            $pfPids = @(Get-Content $pidFile -ErrorAction SilentlyContinue | Where-Object { $_ -match '\S' })
+            foreach ($p in $pfPids) {
+                # Recycled-PID guard: only kill if the PID is STILL a live kubectl process. If the forward
+                # already exited and the OS recycled its PID, this skips it rather than force-killing an
+                # unrelated process. Best-effort — never throws.
+                try {
+                    $proc = Get-Process -Id ([int]$p) -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq 'kubectl' }
+                    if ($proc) { Stop-Process -Id ([int]$p) -Force -ErrorAction SilentlyContinue }
+                } catch { }
+            }
+            Write-Phase "  stopped $($pfPids.Count) port-forward process(es) (PIDs: $($pfPids -join ', '))." 'Gray'
+            Remove-Item $pidFile -ErrorAction SilentlyContinue
+        } else {
+            Write-Phase "  no .k8s-portforward-pids file found — nothing to stop (forwards may already be down)." 'Yellow'
         }
-        Write-Phase "  stopped $($pfPids.Count) port-forward process(es) (PIDs: $($pfPids -join ', '))." 'Gray'
-        Remove-Item $pidFile -ErrorAction SilentlyContinue
     } else {
-        Write-Phase "  no .k8s-portforward-pids file found — nothing to stop (forwards may already be down)." 'Yellow'
+        Write-Phase "STEP Z: -SkipBringUp — leaving port-forwards up for the sweep." 'Gray'
     }
     if ($TearDownCluster) {
         Write-Phase "STEP Z: -TearDownCluster set — kubectl delete -k k8s/ (dropping the stack + PVCs)" 'Yellow'
