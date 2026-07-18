@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: 1
+current_plan: 4
 status: executing
-stopped_at: Completed 81-03-PLAN.md
-last_updated: "2026-07-18T10:00:09.960Z"
+stopped_at: Completed 81-04-PLAN.md — Phase 81 capstone 7/7 VERDICT_PASS
+last_updated: "2026-07-18T11:19:23.646Z"
 last_activity: 2026-07-18
 progress:
   total_phases: 4
@@ -1743,6 +1743,7 @@ None yet.
 - 22-05 Task 5 (close gate) paused: Plan 04 liveness gate + Plan 03 no-create boundary break ~10 happy-path /start tests across 8+ files OUTSIDE Plan 05 scope (StartLoopFacts, IdempotencyFacts, HappyPathE2EFacts, StartCleanupFacts, StopScanFacts, StartOrchestrationFacts, ValidationOrderFacts). Needs operator decision on fix strategy (per-test seed vs centralized harness helper) before full-suite-GREEN x3 close gate can run.
 - 57-04 CFG-10 freeze defect: SchemaDefinitionFreezeFacts.NameDescription_Edit_On_Referenced_Schema_Returns_200 returns 409 instead of 200 (Definition-change detection bug in SchemaService.UpdateAsync). Out of scope for 57-03; logged in deferred-items.md; must fix before CFG-10 sign-off.
 - D-04 live gate (78-04) FAILED-FINDING: reworked live analyzer flips all scenarios PASS->FAIL incl the no-fault baseline (Duplicates==StartedRuns, 100% effect-once violations, Missing=0). Root cause: Phase-77 uniform execution-scope logging emits multiple StepId-scoped framework records per hop; the reworked structural step query counts each as a distinct step execution. Value axis was dark. NOT re-baselined. Needs a follow-up fix plan (collapse multi-record hops per {executionId,stepId} in BuildStepSearchBody/cohort). D-04 remains OPEN.
+- Phase 81 capstone gate NOT met (5 PASS / 2 FAIL / TEST-07 not-run). TEST-04 (keeper) + TEST-06 (rabbitmq) = VERDICT_FAIL (exit 1) SOLELY on MG-1 conservation (orch_consumed@end << proc_sent@end); structural recovery PERFECT for both (Missing=0, all runs complete, zero dup). ROOT CAUSE: D-03 shared-stack sweep rollout-restarts ONLY the orchestrator per scenario (STEP B1, resets orchestrator_consumed) but NEVER the processor (processor_sent accumulates across all scenarios), so MG-1 absolute-AtEnd conservation is baseline-confounded for mg1Binding=true crash scenarios past position 1 (TEST-01 binding passes at pos 1 with no drift; TEST-04 pos4 gap=322; TEST-06 pos6 gap=928). NOT a recovery-architecture defect. RECOMMENDED FIX (in Phase-81 harness scope, analyzer untouched per SPEC-5): rollout-restart the processor-sample tier per scenario too (STEP B/B1) so both conservation-counter-owning tiers share a per-scenario baseline like the compose whole-stack recreate. Requires human/gap-closure decision (methodology change).
 
 ## Deferred Items
 
