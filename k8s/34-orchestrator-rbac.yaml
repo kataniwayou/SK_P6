@@ -1,0 +1,58 @@
+# ============================================================================
+# orchestrator-rbac — least-privilege lease access for HA leader election.
+# ============================================================================
+# The orchestrator runs at replicas: 3 (31-orchestrator.yaml); a single leader is
+# elected via a Kubernetes coordination Lease (skp/orchestrator-leader) so that
+# only ONE replica fires the Quartz cron while the others stand by (SPEC HA-06 /
+# 82-CONTEXT D-08). Contending for that Lease requires API access the pods do not
+# get by default — hence this dedicated ServiceAccount + Role + RoleBinding.
+#
+# LEAST PRIVILEGE (T-82-09): the Role grants ONLY get/create/update on `leases` in
+# the `coordination.k8s.io` group, namespaced to `skp`. No wildcards, no cluster
+# scope, no list/watch/delete/patch, no other resource — a compromised orchestrator
+# token cannot read secrets, mutate workloads, or escalate. The RoleBinding subject
+# is scoped to the single `orchestrator` ServiceAccount (T-82-10 / T-82-11), so no
+# other workload can tamper with the Lease and the identity cannot be spoofed.
+#
+# There is no other RBAC in this repo; this manifest is authored directly from the
+# k8s API spec and mirrors the house conventions (hardcoded namespace: skp + the
+# app.kubernetes.io/part-of: skp label). Registered in kustomization.yaml resources.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: orchestrator
+  namespace: skp
+  labels:
+    app: orchestrator
+    app.kubernetes.io/part-of: skp
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: orchestrator-leader-election
+  namespace: skp
+  labels:
+    app: orchestrator
+    app.kubernetes.io/part-of: skp
+rules:
+  # Single least-privilege rule: leases only, three verbs only, no wildcards.
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: orchestrator-leader-election
+  namespace: skp
+  labels:
+    app: orchestrator
+    app.kubernetes.io/part-of: skp
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: orchestrator-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: orchestrator
+    namespace: skp
