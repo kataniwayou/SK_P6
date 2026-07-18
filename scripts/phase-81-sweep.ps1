@@ -77,6 +77,19 @@ try {
     $Ids = @($ScenarioIds)
     Write-Phase "sweep over $($Ids.Count) scenario(s): $($Ids -join ', ')"
 
+    # -----------------------------------------------------------------------
+    # STEP 0 (D-03) — ONE bring-up per sweep (NOT per-scenario). Build the 4 app images :local + bring
+    # the k8s stack up ONCE; the 7 scenarios share this stack (each re-establishes a clean window via the
+    # harness STEP B reset + STEP B1 orchestrator rollout-restart). SourceHash currency (Phase-80 D-05)
+    # holds for THIS build. The child harness runs in -SkipBringUp mode, so the port-forwards this STEP 0
+    # starts stay up for every scenario (the harness skips its own STEP A0/A + STEP Z teardown).
+    # -----------------------------------------------------------------------
+    Write-Phase "STEP 0: one-time build + bring-up (phase-80-build.ps1 + phase-80-up.ps1) — shared across all $($Ids.Count) scenarios"
+    & pwsh -File (Join-Path $PSScriptRoot 'phase-80-build.ps1')
+    if ($LASTEXITCODE -ne 0) { Write-Phase "one-time image build failed (exit $LASTEXITCODE). Aborting sweep." 'Red'; exit 10 }
+    & pwsh -File (Join-Path $PSScriptRoot 'phase-80-up.ps1')
+    if ($LASTEXITCODE -ne 0) { Write-Phase "one-time bring-up failed (exit $LASTEXITCODE). Aborting sweep." 'Red'; exit 10 }
+
     $rows = @()
 
     foreach ($id in $Ids) {
@@ -135,6 +148,28 @@ try {
     $passCount = (@($rows | Where-Object { $_.harnessExit -eq 0 }).Count)
     $total = $rows.Count
     Write-Phase "CAPSTONE: $passCount/$total PASS" $(if ($passCount -eq $total) { 'Green' } else { 'Red' })
+
+    # -----------------------------------------------------------------------
+    # STEP Z (D-03) — one-time port-forward teardown (the sweep owns the shared-stack lifecycle). Runs on
+    # BOTH the pass and non-pass exit paths (computed before the final `exit`). Keep the k8s stack + PVCs
+    # for inspection; stop only the loopback port-forwards phase-80-up.ps1 recorded, guarded by a
+    # recycled-PID check (only kills live `kubectl` processes) — mirrors harness STEP Z.
+    # -----------------------------------------------------------------------
+    Write-Phase "STEP Z: teardown — stop the kubectl port-forwards (keep the stack + PVCs)"
+    $pidFile = Join-Path $repoRoot '.k8s-portforward-pids'
+    if (Test-Path $pidFile) {
+        $pfPids = @(Get-Content $pidFile -ErrorAction SilentlyContinue | Where-Object { $_ -match '\S' })
+        foreach ($p in $pfPids) {
+            try {
+                $proc = Get-Process -Id ([int]$p) -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -eq 'kubectl' }
+                if ($proc) { Stop-Process -Id ([int]$p) -Force -ErrorAction SilentlyContinue }
+            } catch { }
+        }
+        Write-Phase "  stopped $($pfPids.Count) port-forward process(es)." 'Gray'
+        Remove-Item $pidFile -ErrorAction SilentlyContinue
+    } else {
+        Write-Phase "  no .k8s-portforward-pids file found — nothing to stop." 'Yellow'
+    }
 
     # Final exit (D-02): 0 iff every selected scenario was a PASS, else non-zero.
     exit ($(if ($passCount -eq $total) { 0 } else { 1 }))
