@@ -2,11 +2,11 @@
 gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
-current_plan: Not started
-status: planning
-stopped_at: Phase 82 context gathered
-last_updated: "2026-07-18T18:52:40.129Z"
-last_activity: 2026-07-18
+current_plan: 2
+status: executing
+stopped_at: Completed 82-01-PLAN.md
+last_updated: "2026-07-18T19:03:53.190Z"
+last_activity: 2026-07-18 -- Phase --phase execution started
 progress:
   total_phases: 4
   completed_phases: 0
@@ -21,7 +21,7 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase 81 — re-run-the-7-scenario-fault-recovery-sweep-test-01-test-07-o
+**Current focus:** Phase --phase — 82
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
@@ -29,12 +29,14 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v10.0.0 (Orchestrator High Availability) — STARTED 2026-07-18. Goal: run the orchestrator as N≥2 replicas with single-leader mutual exclusion so horizontal scaling never produces duplicate workflow triggers, with fast failover and role-tagged observability. Only the elected leader performs scheduler-triggered entry-step sends (gate on `WorkflowFireJob`'s send loop, read from a single-writer volatile `LeaderState`); leader election via `KubernetesClient` `LeaderElector` over a `coordination.k8s.io/v1` Lease in a `BackgroundService`; `attributes.role` on every orchestrator log. 2 phases: 82 (leader election + gate + role logging + RBAC + replica bump), 83 (failover proof). Builds on v9.0.0 k8s deploy (80-81). Phases continue at **82**. Prior milestone v9.0.0 (Canonical Two-Consumer Recovery & L2 Delivery Proof, phases 69-81) is complete-but-unarchived — run /gsd-complete-milestone to archive it.
-Phase: 82 (not planned yet)
-Current Plan: Not started
-Total Plans: —
-Plan: —
-Status: Milestone v10.0.0 started — ready to plan Phase 82
-Last activity: 2026-07-18
+Phase: 82 (orchestrator-ha-leader-election) — EXECUTING
+Current Plan: 2
+Total Plans: 4
+Plan: 2 of 4
+Status: Executing Phase 82
+Last activity: 2026-07-18 -- Phase 82 Plan 01 complete
+
+> Phase 82 Plan 01 — ✅ COMPLETE 2026-07-18 (Wave 1: the leader-election core — the foundation contract every other Phase-82 plan consumes). **3 atomic feat commits** (`d6fd3e2` CPM pin + Orchestrator PackageReference for `KubernetesClient`; `c2d06a9` `LeaderState` single-writer volatile snapshot holder; `29cff1c` `LeaderElectionService` build-only BackgroundService). Requirements **HA-02/HA-03/HA-04/HA-06**. `LeaderState` (src/Orchestrator/Election/LeaderState.cs): an immutable `LeaderSnapshot(IsLeader,Role,CurrentLeaderId)` record swapped whole into a `private volatile LeaderSnapshot _snapshot` (lock-free, torn-read-safe — mirrors StartupGate Volatile discipline + WorkflowFireJob record-with-swap); default is follower (`IsLeader==false`,`Role=="follower"`); ctor `LeaderState(bool startAsLeader=false)` seeds leader for the off-cluster Plan-02/D-02 path (construction, NOT a runtime write, so single-writer holds); writers `BecomeLeader`/`BecomeFollower`/`SetLeaderId`. `LeaderElectionService` (src/Orchestrator/Election/LeaderElectionService.cs): `BackgroundService` building `LeaderElector` over `LeaseLock(new Kubernetes(InClusterConfig()),"skp","orchestrator-leader",POD_NAME??MachineName)`; fixed timings as PUBLIC constants `LeaseDuration`(15s)/`RenewDeadline`(10s)/`RetryPeriod`(2s) (RenewDeadline<LeaseDuration self-demotion fence, HA-04) + `LeaseNamespace`/`LeaseName`; `OnStartedLeading→BecomeLeader`, `OnStoppedLeading→BecomeFollower`, `OnNewLeader→SetLeaderId` are the SOLE LeaderState writer (HA-03, grep-clean); `catch(OperationCanceledException){return;}` clean-shutdown; `RunAndTryToHoldLeadershipForeverAsync(stoppingToken)`. Per D-06 BUILD-ONLY — not registered in Program.cs (Plan 02 wires in-cluster) and never started under test. **1 deviation (Rule 3 - blocking):** the plan's suggested 15.x line (15.0.1) carries advisory GHSA-w7r3-mgwf-4mqq which the repo NuGetAudit promotes to a build error → `dotnet restore` failed; fix-forwarded the pin to non-vulnerable **18.0.13** (same LeaderElector API, net8.0) → restore exit 0. Verification: `dotnet restore` exit 0 (no NU1902); Orchestrator **Debug + Release 0-warning/0-error**; single-writer grep confirms the three writer callers are ONLY the election callbacks. Summary: `.planning/phases/82-orchestrator-ha-leader-election/82-01-SUMMARY.md` (Self-Check PASSED). Plan 02 (WorkflowFireJob leader gate + role enricher + Program.cs wiring) next.
 
 > Phase 79 Plan 01 — ✅ COMPLETE 2026-07-17 (Wave 1: the product-source fault seam that manufactures a True-Positive recoverable-but-lost strand for the gate-teeth negative control). **2 atomic feat commits** (`7ec9169` ReinjectConsumer: static `_defeatedOnce` Interlocked one-shot latch + gate the `ep.Send` redispatch behind `int.TryParse(Environment.GetEnvironmentVariable("KEEPER_DEFEAT_REINJECT"),out d) && d>0 && Interlocked.CompareExchange(ref _defeatedOnce,1,0)==0` — `if(!defeatReinject){ep.Send}` else a TEST-ONLY defeat warning; `CountSent` + the `"reinject"` LogInformation stay UNCHANGED after the gate so `attributes.ReinjectOutcome=="reinject"` reaches the analyzer and WR-01 vetoes → binding miss, byte-identical to a real loss (D-01); `4a9f692` compose.yaml keeper `environment:` gains `KEEPER_DEFEAT_REINJECT: "${KEEPER_DEFEAT_REINJECT:-0}"` after OTEL endpoint, `deploy.replicas` untouched). Decisions D-01/D-02/D-06 honoured; env-var `KEEPER_DEFEAT_REINJECT` (discretion). **Inertness proven:** short-circuit means the Interlocked call never runs when unset ⇒ `*ReinjectConsumerFacts` **8/8 GREEN** (redispatch runs, latch never consumed); `*PassFailEngineFacts` **29/29 GREEN**; `docker compose config` resolves the var to `"0"` default-off. **No deviations** — plan executed exactly as written. Verification: Keeper + test project both build **0-warning/0-error**. Full `--filter-not-trait Category=RealStack` shows 282/853 failures — ALL the documented Docker-less-sandbox infra baseline (RabbitMQ `No such host is known`, Postgres/Redis refused; 0 analyzer/keeper LOGIC facts among them), logged to `deferred-items.md`; full-suite exit 0 is Plan 79-05's live-gate concern. This plan did NOT run the live stack (compile + hermetic-logic green only). Summary: `.planning/phases/79-falsification-harness-for-the-resilience-sweep-negative-cont/79-01-SUMMARY.md` (Self-Check PASSED). Plan 02 next.
 
@@ -1107,6 +1109,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 81 P01 | 6min | 2 tasks | 1 files |
 | Phase 81 P02 | 4min | 1 tasks | 1 files |
 | Phase 81 P03 | 5min | 2 tasks | 1 files |
+| Phase 82 P01 | 12min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1646,6 +1649,8 @@ Recent decisions affecting current work:
 - Phase 81-01: k8s harness rollout status used uniformly for Deployments AND StatefulSets as the readiness gate (D-05 discretion)
 - Phase 81-02: rabbitmq drain per-queue purge is fail-soft (no fail-loud guard) per D-04 — a purge miss is re-run tolerant, never aborts the keyspace/graph wipe invariant
 - Phase 81 Plan 03: k8s capstone sweep phase-81-sweep.ps1 created — one-time build+up (STEP 0) + TEST-01..07 child -SkipBringUp loop (no fail-fast) + Resolve-SweepClass reuse (no re-scoring) + phase-81-summary.json roll-up + one-time port-forward teardown (STEP Z); exit 0 IFF 7/7 PASS. D-03 Option A (sweep-owned bring-up, phase-80-up.ps1 unchanged).
+- Phase 82-01: KubernetesClient pinned to 18.0.13 (fix-forward off 15.0.1 advisory GHSA-w7r3-mgwf-4mqq promoted to build error by NuGetAudit)
+- Phase 82-01: LeaderState is a single-writer volatile snapshot; the LeaderElector callbacks are the sole writer (HA-03, grep-enforced)
 
 ### Roadmap Milestone Log
 
@@ -1757,9 +1762,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-18T18:04:25.605Z
-Stopped at: Phase 82 context gathered
-Resume file: .planning/phases/82-orchestrator-ha-leader-election/82-CONTEXT.md
+Last session: 2026-07-18T19:03:53.176Z
+Stopped at: Completed 82-01-PLAN.md
+Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
 **Phase 29 (Structured Execution-Scope Logging):** 5/5 plans complete — close gate GATE_EXIT=0 (405 Passed ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held; live scopeProof passes on a `processor-sample` Completed log); LOG-01..06 all complete. Awaiting orchestrator phase verification + `phase.complete`. Milestone v3.5.0 = 17/17 plans across phases 25-29.

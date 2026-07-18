@@ -877,7 +877,7 @@ Plans:
 **Requirements**: HA-01, HA-02, HA-03, HA-04, HA-05, HA-06
 **Depends on:** Phase 81 (k8s deployment + resilience baseline)
 **Plans:** 4 plans
-- [ ] 82-01-PLAN.md — KubernetesClient dependency + single-writer volatile LeaderState + LeaderElectionService (election core, build-only)
+- [x] 82-01-PLAN.md — KubernetesClient dependency + single-writer volatile LeaderState + LeaderElectionService (election core, build-only) ✅ 2026-07-18 (d6fd3e2, c2d06a9, 29cff1c) — HA-02/HA-03/HA-04/HA-06; KubernetesClient pinned 18.0.13 (fix-forward off 15.0.1 advisory GHSA-w7r3-mgwf-4mqq), LeaderState volatile single-writer holder (follower default), LeaderElectionService build-only BackgroundService over skp/orchestrator-leader Lease; Debug+Release 0-warning, single-writer grep-clean
 - [ ] 82-02-PLAN.md — WorkflowFireJob leader gate (IsLeader && hydrated) + OrchestratorRoleLogEnricher + Program.cs wiring (POD_NAME, in-cluster-gated election)
 - [ ] 82-03-PLAN.md — least-privilege RBAC (SA/Role/RoleBinding for leases) + Deployment replicas:3/RollingUpdate/POD_NAME
 - [ ] 82-04-PLAN.md — hermetic tests: leader-only fire gate, LeaderState single-writer transitions + timing fence, role enricher
