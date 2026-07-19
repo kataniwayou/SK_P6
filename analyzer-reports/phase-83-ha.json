@@ -1,0 +1,16 @@
+{
+  "ScenarioId": "phase-83-ha",
+  "Verdict": "Pass",
+  "ZeroDuplicate": true,
+  "GapObserved": true,
+  "NotBackfilled": true,
+  "RoleFlipVisible": true,
+  "BoundedRecovery": true,
+  "RecoverySeconds": 15.4390265,
+  "KillUtc": "2026-07-19T05:25:27.1969735+00:00",
+  "WindowStart": "2026-07-19T05:24:35.3778727+00:00",
+  "WindowEnd": "2026-07-19T05:27:27.2129457+00:00",
+  "SendCorrIdCount": 4,
+  "BucketCount": 4,
+  "HumanSummary": "HA-07 verdict=Pass: all five HA-07 claims green: \u22641 corrId/bucket, one empty non-backfilled gap tick, bounded role flip. [zeroDuplicate=True, gapObserved=True, notBackfilled=True, roleFlipVisible=True, boundedRecovery=True, recovery=00:00:15.4390265, buckets=4, gapTicks=1]"
+}
