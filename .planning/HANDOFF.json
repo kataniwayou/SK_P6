@@ -1,0 +1,32 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-07-19",
+  "phase": "n/a",
+  "phase_name": "offline-bundle + k8s-only (Compose removal)",
+  "phase_dir": ".planning",
+  "status": "paused",
+  "completed_tasks": [
+    {"id": 1, "name": "Offline nugets feed + lock files + NuGet.config + offline Dockerfiles + runbook", "status": "done", "commit": "38f60ab"},
+    {"id": 2, "name": "SourceHash build-output echo (SourceHash.targets)", "status": "done", "commit": "baa47d4"},
+    {"id": 3, "name": "Offline verify: restore+build+docker-build+deploy (orchestrator 3/3)", "status": "done"},
+    {"id": 4, "name": "Remove Compose handling from code (5 Program.cs revert, probe+compose deleted, SourceHash restored 94ca171c)", "status": "done", "commit": "6bb1f83"}
+  ],
+  "remaining_tasks": [
+    {"id": 5, "name": "Remove now-broken `docker compose down` guard from k8s scripts (phase-80-up.ps1 STEP 1 etc.)", "status": "not_started", "note": "FUNCTIONAL — errors now that compose.yaml is gone"},
+    {"id": 6, "name": "Strip Compose mentions from 5 Dockerfile comments + OFFLINE-SETUP.md", "status": "not_started", "note": "cosmetic"},
+    {"id": 7, "name": "Rebuild+redeploy processor-sample (94ca171c) + reseed + POST /start + ES-validate fires (final green proof)", "status": "not_started"}
+  ],
+  "blockers": [],
+  "human_actions_pending": [
+    {"action": "Transport offline-bundle/ (SDK 214MB + images.tar 1.5GB) out-of-band to the offline machine", "context": "gitignored by design", "blocking": false}
+  ],
+  "decisions": [
+    {"decision": "k8s-only; remove all Compose handling from code", "rationale": "project deploys only on k8s"},
+    {"decision": "Keep KUBERNETES_SERVICE_HOST/inCluster detection + appsettings service names", "rationale": "k8s-vs-hermetic-test detection, not Compose; used by 4 test files"},
+    {"decision": "Keep ~16 legacy Compose-era scripts as archived history (option b)", "rationale": "reproducibility of shipped milestones"},
+    {"decision": "Never put non-business code in Processor.*/Program.cs", "rationale": "Program.cs is in the SourceHash fold; edits change processor identity"}
+  ],
+  "uncommitted_files": [],
+  "next_action": "Remove the `docker compose down` guard from scripts/phase-80-up.ps1 (and check 80-reset/81-sweep/83), then rebuild+redeploy processor-sample and run the ES-validated orchestration.",
+  "context_notes": "All code committed + build green. k8s stack up (orchestrator 3/3 on :offline). Processor SourceHash restored to 94ca171c after reverting the Compose-only healthcheck guard. See .planning/.continue-here.md for full state."
+}
