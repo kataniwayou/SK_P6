@@ -1,5 +1,26 @@
 # Steps API — Milestones
 
+## v10.0.0 Orchestrator High Availability (Shipped: 2026-07-19)
+
+**Tag:** `v10.0.0`
+**Archives:** [milestones/v10.0.0-ROADMAP.md](milestones/v10.0.0-ROADMAP.md) · [milestones/v10.0.0-REQUIREMENTS.md](milestones/v10.0.0-REQUIREMENTS.md)
+**Phases completed:** 2 phases (82–83), 9 plans. **Requirements:** HA-01…HA-07 all satisfied.
+
+**Delivered:** The orchestrator now runs as N≥2 replicas on k8s with single-leader mutual exclusion — horizontal scaling never produces duplicate workflow triggers, failover is bounded (seconds), and observability is role-tagged. Only the elected leader performs scheduler-triggered entry-step sends; followers run every other path unchanged.
+
+**Key accomplishments:**
+
+- **Kubernetes-Lease leader election (Phase 82, HA-01…HA-06).** A `LeaderElectionService : BackgroundService` runs the `KubernetesClient` `LeaderElector` over a `coordination.k8s.io/v1` Lease (`skp/orchestrator-leader`; LeaseDuration 15s / RenewDeadline 10s / RetryPeriod 2s self-demotion fence); its callbacks are the single writer of a volatile immutable-record `LeaderState`. `WorkflowFireJob` gates ONLY the entry-step `foreach…DispatchAsync` loop on `IsLeader && IsReady` (a follower still mints the correlationId, refreshes L1, reschedules); `RelocateTail`/step-advancement stays ungated. Least-privilege RBAC + `replicas:3` + RollingUpdate + `KubernetesClient` 18.0.13.
+- **`attributes.role` on every orchestrator log (HA-05).** `OrchestratorRoleLogEnricher` stamps `leader|follower` from live `LeaderState` — verified live in ES (2,419 role-stamped docs; failover flip visible).
+- **HA-07 proven LIVE (Phase 83).** Automated verdict `Pass` (exit 0): leader force-killed at `replicas:3`, all five claims green — zero duplicate triggers (≤1 send-correlationId per 30s tick), one election-gap tick skipped-not-backfilled, role flip visible, single-leader recovery **15.44s** (≤2×LeaseDuration). Built as a Docker-less scorer + hermetic facts + RealStack verdict fact + `scripts/phase-83-ha-failover.ps1` kill-sequencer; artifact `analyzer-reports/phase-83-ha.json`.
+- **The live proof caught + fixed a real Phase-82 defect (HA-blocking).** The orchestrator could not run `replicas:3` — its fan-out consumer definitions pinned a fixed `EndpointName` that (MassTransit 8.5.5) bypasses the per-pod `InstanceId` formatter → exclusive queues collided (`RESOURCE_LOCKED`). Gap-closure plan 83-05: per-instance `e.Name` via `OrchestratorFanoutEndpoints`, hermetic guard. (Plus a scorer same-bucket gap-detection fix and a documented Docker-Desktop stale-`:local`-image deploy trap.)
+
+**Known deferred items at close:** 8 (mostly stale carry-overs already tracked — see STATE.md → Deferred Items): 1 debug session (phase29, v3.x), 5 quick-tasks (v8.0.0-era), Phase 70 UAT/verification `human_needed` (v9.0.0).
+
+**⚠ Documented debt — v9.0.0 unarchived:** The prior milestone **v9.0.0 (Canonical Two-Consumer Recovery & L2 Delivery Proof, phases 69–81)** is complete but was NEVER archived; its `REQUIREMENTS.md` was overwritten when v10.0.0 began, so it has no `milestones/v9.0.0-*` archive. Phases 69–81 remain in git history and the archived v10.0.0-ROADMAP.md snapshot. Reconstruct/close separately if a formal v9.0.0 archive is later needed (operator decision 2026-07-19: leave as documented debt).
+
+---
+
 ## v8.0.0 E2E Resilience Proof (Shipped: 2026-06-15)
 
 **Phases completed:** 6 phases (63–68), 15 plans

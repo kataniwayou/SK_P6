@@ -246,6 +246,35 @@ A fully-automated, Prometheus+Elasticsearch-only live resilience proof of the fa
 - Model mix: orchestration/execution on Opus (profile `quality`); verifiers/analysis on Sonnet.
 - Notable: 139 commits (18 feat / 21 fix) over ~2 days; the bulk was test harness + analyzer, not product code.
 
+## Milestone: v10.0.0 — Orchestrator High Availability
+
+**Shipped:** 2026-07-19
+**Phases:** 2 (82–83) | **Plans:** 9
+
+### What Was Built
+Orchestrator N≥2 replicas on k8s with Kubernetes-Lease single-leader mutual exclusion (Phase 82: `LeaderElectionService` + volatile single-writer `LeaderState` + leader-gated `WorkflowFireJob` fire + `OrchestratorRoleLogEnricher` + RBAC + replicas:3). HA-07 proven LIVE (Phase 83): a Docker-less `HaFireBucketScorer` + hermetic facts, a RealStack verdict fact, and a phase-aligned leader-kill harness → verdict **Pass**, zero duplicate triggers, 15.44s recovery.
+
+### What Worked
+- **The live proof earned its keep.** It falsified a Phase-82 assumption ("exclusive-queue constraint dismissed") that every hermetic + build gate had passed — the orchestrator physically could not run replicas:3 (`RESOURCE_LOCKED`). A hermetic-only close would have shipped a non-functional HA mechanism.
+- **Anti-vacuous scorer design.** The fail-closed fold (no gap tick / zero sends → Inconclusive, never a false Pass) correctly refused the first clean run and surfaced a real scorer bug instead of green-washing it.
+- **Fix-then-reprove discipline.** Both blockers (Phase-82 exclusive queues, scorer same-bucket gap detection) were fixed with hermetic regression guards before re-running the live proof.
+
+### What Was Inefficient
+- **Docker-Desktop stale-`:local`-image trap cost two full bring-up cycles.** The harness rebuilt the fixed image but k8s kept serving the cached same-tag image (containerd imports to the k8s.io namespace only on first deploy). Diagnosed via DLL-in-image grep vs pod behavior; worked around with a unique tag + `kubectl set image` + `-SkipBringUp`. The harness's `:local`+IfNotPresent+`rollout restart` deploy path is latently broken for rebuilds.
+- **Detached-run watcher kept getting reaped** (~1-min), forcing repeated manual polls of the harness log.
+
+### Patterns Established
+- **Live-proof phases should assume they will find real defects** in the mechanism they prove, and budget a gap-closure plan — not just tooling.
+- **Per-instance k8s deploys need a unique image tag**, not a rebuilt same-tag; build-output SourceHash echo (added this milestone) makes currency a one-glance check.
+
+### Key Lessons
+- A green hermetic + build + manifest gate is NOT a substitute for a live proof when the claim is behavioral (multi-replica, failover). Phase 82 shipped "build-only"; the real defect was invisible until Phase 83 ran it live.
+- MassTransit 8.5.5: a `ConsumerDefinition.EndpointName` literal bypasses the `InstanceId` formatter — fixed-name + `Temporary` = exclusive collision at N>1.
+
+### Cost Observations
+- Model mix: discuss/plan/execute/verify on Opus + Sonnet verifiers; live proof driven inline.
+- Notable: milestone caught + fixed 2 real bugs during the live proof; product-code change was small (per-instance endpoint naming), most effort was diagnosis + harness.
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
