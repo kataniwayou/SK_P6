@@ -5,6 +5,11 @@
 **/.idea
 **/*.user
 
+# Offline bundle: SDK installer + saved image tars + isolated restore caches (multi-GB — NEVER send
+# to the docker daemon as build context). NOTE: nugets/ is intentionally NOT ignored — the Dockerfiles
+# COPY it for the offline restore.
+offline-bundle/
+
 # Tests (not needed for runtime image)
 tests/
 

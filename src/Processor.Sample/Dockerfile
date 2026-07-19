@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# Offline build: no `# syntax=` frontend (would pull docker/dockerfile from the registry); no RUN --mount used.
 # Phase 28 (SAMPLE-02) — first runnable Processor.Sample container.
 # Mirrors src/Orchestrator/Dockerfile's multi-stage net8.0 structure, swapping the COPY restore-cache
 # list + publish target to Processor.Sample's reference closure (Messaging.Contracts + BaseConsole.Core
@@ -13,7 +13,9 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim AS build
 WORKDIR /src
 # Cache layer: restore depends only on csproj + props + lock files.
-COPY ["Directory.Packages.props", "Directory.Build.props", "global.json", "./"]
+# Offline restore: NuGet.config (nuget.org cleared, offline feed) + the nugets/ local feed.
+COPY ["NuGet.config", "Directory.Packages.props", "Directory.Build.props", "global.json", "./"]
+COPY nugets/ nugets/
 COPY ["src/Messaging.Contracts/Messaging.Contracts.csproj", "src/Messaging.Contracts/"]
 COPY ["src/BaseConsole.Core/BaseConsole.Core.csproj", "src/BaseConsole.Core/"]
 COPY ["src/BaseProcessor.Core/BaseProcessor.Core.csproj", "src/BaseProcessor.Core/"]
@@ -25,12 +27,8 @@ RUN dotnet publish "src/Processor.Sample/Processor.Sample.csproj" -c Release -o 
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-bookworm-slim AS runtime
 WORKDIR /app
-# The aspnet:8.0-bookworm-slim runtime ships NEITHER wget NOR curl, so the compose
-# `["CMD", "wget", "--spider", ...]` /health/ready healthcheck cannot exec. Install wget (root,
-# so BEFORE `USER app`) in a single clean layer to make the established wget --spider idiom work.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends wget \
-    && rm -rf /var/lib/apt/lists/*
+# Offline build: NO `apt-get install wget`. k8s uses httpGet probes; compose uses the app's dotnet
+# self-probe (`dotnet Processor.Sample.dll --healthcheck`) — no wget/curl needed.
 COPY --from=build /publish .
 USER app
 ENV ASPNETCORE_URLS=http://+:8082

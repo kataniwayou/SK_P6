@@ -33,6 +33,10 @@
     <AnalysisMode>latest</AnalysisMode>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- Offline-build support: pin the exact transitive package closure into a per-project
+         packages.lock.json so the offline `nugets/` folder feed is provably complete and
+         restore is deterministic (identical on the online build machine and the offline target). -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <!-- Phase 6 D-11/D-12 (codes corrected MP→RMG per RESEARCH A-01).
          RMG089 (Info) is the ONLY load-bearing entry here — TreatWarningsAsErrors=true
          above only catches Warning/Error severities, so RMG089 needs the explicit list.

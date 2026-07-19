@@ -199,6 +199,10 @@ services:
       RabbitMq__Password: guest
       ConnectionStrings__Redis: "redis:6379,abortConnect=false,connectTimeout=5000"
       Orchestrator__InstanceId: orchestrator-1
+      # TEST-ONLY recovery-backup TTL override (DEFAULT 900 = production). The orchestrator RelocateTail writes
+      # the per-hop ExecutionData(entryId) recovery backup with this jittered [ttl,2×ttl] TTL. Interpolated from
+      # the harness ONLY for the FALSIFY-02 combined-fault control (short-TTL backup expiry); unset ⇒ 900 unchanged.
+      Orchestrator__OutputDataTtlSeconds: "${ORCH_OUTPUT_TTL:-900}"
       # Phase 20 (20-03 fix) — the OTLP exporter is wired bare (AddOtlpExporter() with no
       # endpoint), so it reads the standard OTEL_EXPORTER_OTLP_ENDPOINT env var and otherwise
       # defaults to localhost:4317 (the container itself → telemetry lost). baseapi-service sets
@@ -207,7 +211,7 @@ services:
       # (the appsettings OpenTelemetry:Endpoint key is dead config, consumed nowhere in code).
       OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4317"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8081/health/ready"]
+      test: ["CMD", "dotnet", "Orchestrator.dll", "--healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -248,8 +252,17 @@ services:
       # ONLY for the FALSIFY-01 gate-teeth negative control; unset everywhere else ⇒ 0 ⇒ keeper re-dispatches
       # normally (byte-for-byte unchanged, D-06). NEVER set in production.
       KEEPER_DEFEAT_REINJECT: "${KEEPER_DEFEAT_REINJECT:-0}"
+      # TEST-ONLY reinject-DELAY hook (env-gated, DEFAULT 0 = OFF). Interpolated from the harness ONLY for the
+      # FALSIFY-02 combined-fault negative control (short-TTL backup expiry). >0 ⇒ the ReinjectConsumer sleeps
+      # this many ms BEFORE the L2 STRLEN read, so a short-TTL ExecutionData backup expires DURING recovery and
+      # the keeper logs a clean "drop". Unset everywhere else ⇒ 0 ⇒ no delay (byte-for-byte unchanged). NEVER in prod.
+      KEEPER_REINJECT_DELAY_MS: "${KEEPER_REINJECT_DELAY_MS:-0}"
+      # TEST-ONLY recovery re-materialize TTL override (DEFAULT 900 = production). The keeper OrchestratorInject
+      # re-writes ExecutionData(entryId) with this jittered TTL; lowered alongside ORCH_OUTPUT_TTL for FALSIFY-02
+      # so a re-materialized backup also expires on the short clock. Unset ⇒ 900 unchanged.
+      Recovery__ExecutionDataTtlSeconds: "${KEEPER_RECOVERY_TTL:-900}"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8083/health/ready"]
+      test: ["CMD", "dotnet", "Keeper.dll", "--healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -300,7 +313,7 @@ services:
       # no read. Forces one transient L2 read fault (data left intact) so a recoverable KeeperReinject flows.
       PROCESSOR_DEFEAT_READ: "${PROCESSOR_DEFEAT_READ:-0}"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/health/ready"]
+      test: ["CMD", "dotnet", "Processor.Sample.dll", "--healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -337,7 +350,7 @@ services:
       # TEST-09 negative path (stop-on-inflight); unset everywhere else ⇒ 0 ⇒ SampleProcessor adds no delay.
       PROCESSOR_STEP_DELAY_MS: "${PROCESSOR_STEP_DELAY_MS:-0}"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8082/health/ready"]
+      test: ["CMD", "dotnet", "Processor.BadConfig.dll", "--healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -364,7 +377,7 @@ services:
     ports:
       - "8080:8080"
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8080/health/ready"]
+      test: ["CMD", "dotnet", "BaseApi.Service.dll", "--healthcheck"]
       interval: 10s
       timeout: 3s
       retries: 5

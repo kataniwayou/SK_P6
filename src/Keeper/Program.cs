@@ -16,6 +16,10 @@ using Keeper;
 // MINUS the scheduler/L1/hydration/metrics runtime block and MINUS the default-readiness-service
 // removal — Keeper has no hydration, so readiness flips on bus-start (D-06): the base library's
 // default readiness service is KEPT here, not stripped.
+// Offline container healthcheck (no wget/curl in the image): `dotnet Keeper.dll --healthcheck`.
+if (args is ["--healthcheck"])
+    return await Messaging.Contracts.Diagnostics.OfflineHealthProbe.RunAsync(8083);
+
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.AddBaseConsoleObservability(builder.Configuration);   // metrics-only OTel (no tracer)
@@ -94,3 +98,4 @@ builder.Services.ConfigureOpenTelemetryMeterProvider(
 
 var host = builder.Build();
 await host.RunAsync();
+return 0;

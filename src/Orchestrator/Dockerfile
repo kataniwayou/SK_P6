@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7
+# Offline build: no `# syntax=` frontend (would pull docker/dockerfile from the registry); no RUN --mount used.
 # Phase 19 D-09 (INFRA-RMQ-02) — first runnable Orchestrator container.
 # Mirrors the root Dockerfile multi-stage net8.0 structure, swapping the COPY restore-cache
 # list + publish target to Orchestrator's reference closure (Messaging.Contracts + BaseConsole.Core
@@ -9,7 +9,9 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0-bookworm-slim AS build
 WORKDIR /src
 # Cache layer: restore depends only on csproj + props + lock files
-COPY ["Directory.Packages.props", "Directory.Build.props", "global.json", "./"]
+# Offline restore: NuGet.config (nuget.org cleared, offline feed) + the nugets/ local feed.
+COPY ["NuGet.config", "Directory.Packages.props", "Directory.Build.props", "global.json", "./"]
+COPY nugets/ nugets/
 COPY ["src/Messaging.Contracts/Messaging.Contracts.csproj", "src/Messaging.Contracts/"]
 COPY ["src/BaseConsole.Core/BaseConsole.Core.csproj", "src/BaseConsole.Core/"]
 COPY ["src/Orchestrator/Orchestrator.csproj", "src/Orchestrator/"]
@@ -21,13 +23,8 @@ RUN dotnet publish "src/Orchestrator/Orchestrator.csproj" -c Release -o /publish
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-bookworm-slim AS runtime
 WORKDIR /app
 COPY --from=build /publish .
-# Phase 19 fix(19-04): the aspnet:8.0-bookworm-slim runtime ships NEITHER wget NOR curl, so the
-# compose `["CMD", "wget", "--spider", ...]` /health/ready healthcheck cannot exec ("wget: not found")
-# and Docker marks the container unhealthy even though the app + bus start fine. Install wget (root,
-# so BEFORE `USER app`) in a single clean layer to make the established wget --spider idiom work.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends wget \
-    && rm -rf /var/lib/apt/lists/*
+# Offline build: NO `apt-get install wget`. k8s uses httpGet probes; compose uses the app's dotnet
+# self-probe (`dotnet Orchestrator.dll --healthcheck`) — no wget/curl needed.
 USER app
 ENV ASPNETCORE_URLS=http://+:8081
 EXPOSE 8081

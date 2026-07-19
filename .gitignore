@@ -414,3 +414,10 @@ obj/
 
 # Phase 80 k8s bring-up runtime output — port-forward PIDs written by scripts/phase-80-up.ps1
 .k8s-portforward-pids
+
+# Offline bundle: SDK installer + saved image tars + isolated restore caches (multi-GB, ship out-of-band)
+offline-bundle/
+
+# Offline NuGet feed — force-track despite the global *.nupkg ignore above
+!nugets/
+!nugets/*.nupkg

@@ -10,6 +10,10 @@ using BaseProcessorBase = BaseProcessor.Core.Processing.BaseProcessor;
 // identity + liveness + dispatch + heartbeat); this console supplies ONLY metrics-only observability
 // + the one concrete transform registered AS the abstract BaseProcessor (the
 // EntryStepDispatchConsumer resolves BaseProcessor). It does NOT call the folded extensions directly.
+// Offline container healthcheck (no wget/curl in the image): `dotnet Processor.Sample.dll --healthcheck`.
+if (args is ["--healthcheck"])
+    return await Messaging.Contracts.Diagnostics.OfflineHealthProbe.RunAsync(8082);
+
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.AddBaseConsoleObservability(builder.Configuration);          // metrics-only OTel (no tracer)
@@ -18,3 +22,4 @@ builder.Services.AddSingleton<BaseProcessorBase, SampleProcessor>(); // the ONE 
 
 var host = builder.Build();
 await host.RunAsync();
+return 0;
