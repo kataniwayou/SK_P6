@@ -21,10 +21,6 @@ using Quartz;
 // WebApplication. The base library supplies all infra (observability, Redis soft-dep, embedded
 // health, the MassTransit bus + correlation pipeline); this console supplies only its two
 // consumers + the per-replica fan-out endpoint.
-// Offline container healthcheck (no wget/curl in the image): `dotnet Orchestrator.dll --healthcheck`.
-if (args is ["--healthcheck"])
-    return await Messaging.Contracts.Diagnostics.OfflineHealthProbe.RunAsync(8081);
-
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.AddBaseConsoleObservability(builder.Configuration);   // metrics-only OTel (no tracer — Pitfall 4)
@@ -160,4 +156,3 @@ foreach (var d in builder.Services
 
 var host = builder.Build();
 await host.RunAsync();
-return 0;

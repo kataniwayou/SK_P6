@@ -2,10 +2,6 @@ using BaseApi.Core.DependencyInjection;
 using BaseApi.Service;
 using BaseApi.Service.Composition;
 
-// Offline container healthcheck (no wget/curl in the image): `dotnet BaseApi.Service.dll --healthcheck`.
-if (args is ["--healthcheck"])
-    return await Messaging.Contracts.Diagnostics.OfflineHealthProbe.RunAsync(8080);
-
 var builder = WebApplication.CreateBuilder(args);
 builder.AddBaseApiObservability(builder.Configuration);
 builder.Services.AddBaseApi<AppDbContext>(builder.Configuration);
@@ -17,7 +13,6 @@ var app = builder.Build();
 app.UseBaseApi();
 app.MapControllers();
 app.Run();
-return 0;
 
 // Marker type for WebApplicationFactory<Program> in tests (Phase 1 D-10).
 // Top-level statements generate an internal Program by default; this partial class

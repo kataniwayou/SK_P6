@@ -12,10 +12,6 @@ using BaseProcessorBase = BaseProcessor.Core.Processing.BaseProcessor;
 // registered AS the abstract BaseProcessor (the EntryStepDispatchConsumer resolves BaseProcessor).
 // It does NOT call the folded extensions directly — unmodified AddBaseProcessor preserves the
 // Phase-57 stay-up clash posture (no startup-orchestrator override).
-// Offline container healthcheck (no wget/curl in the image): `dotnet Processor.BadConfig.dll --healthcheck`.
-if (args is ["--healthcheck"])
-    return await Messaging.Contracts.Diagnostics.OfflineHealthProbe.RunAsync(8082);
-
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.AddBaseConsoleObservability(builder.Configuration);            // metrics-only OTel (no tracer)
@@ -24,4 +20,3 @@ builder.Services.AddSingleton<BaseProcessorBase, BadConfigProcessor>(); // the O
 
 var host = builder.Build();
 await host.RunAsync();
-return 0;
