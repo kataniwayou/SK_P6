@@ -118,6 +118,18 @@ public class ComputeSourceHash : Microsoft.Build.Utilities.Task
   </Target>
 
   <!--
+    (3b) Echo the computed SourceHash into the build output. AfterTargets="EmitSourceHashAttribute"
+    (NOT ComputeSourceHash): on an incremental no-source-change build ComputeSourceHash is skipped by its
+    Inputs/Outputs stamp and $(SourceHash) is empty until EmitSourceHashAttribute reads it back from the
+    stamp — so anchoring here guarantees the value is populated in BOTH the fresh-compute and
+    incremental-skip paths. Importance="high" prints at the default `dotnet build` (minimal) verbosity;
+    the project name distinguishes concretes in a multi-project build (Processor.Sample, BaseApi.Tests, …).
+  -->
+  <Target Name="EchoSourceHash" AfterTargets="EmitSourceHashAttribute">
+    <Message Text="SourceHash ($(MSBuildProjectName)): $(SourceHash)" Importance="high" />
+  </Target>
+
+  <!--
     (4) Diagnostic dump target (Task 3 exclusion fact): when $(ImplFilesDump) is set, write the
     @(ImplFiles) set to that file so a test can assert BaseConsole.Core / Messaging.Contracts /
     generated files never leak into the fold. No-op in a normal build.
