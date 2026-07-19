@@ -3,11 +3,15 @@ using MassTransit;
 namespace Orchestrator.Consumers;
 
 /// <summary>
-/// Endpoint config seam for <see cref="PauseAllConsumer"/> (ORCH-02 / D-08). Binds the NEW
-/// dedicated per-replica fan-out endpoint <c>"orchestrator-global-pauseresume"</c> — independent from
-/// the per-workflow <c>"orchestrator-pauseresume"</c> so Phase 48 can drop the old endpoint with zero
-/// entanglement (D-08). <c>ConcurrentMessageLimit = 1</c> serializes Pause/Resume on this replica so a
-/// duplicate replays against idempotent Quartz transitions — NO lock, NO stripe.
+/// Endpoint config seam for <see cref="PauseAllConsumer"/> (ORCH-02 / D-08). The endpoint name is now
+/// supplied PER-INSTANCE by <c>Program.cs</c> via
+/// <see cref="Orchestrator.Messaging.OrchestratorFanoutEndpoints"/>
+/// (<c>orchestrator-global-pauseresume-{instanceId}</c>) — independent from the per-workflow
+/// <c>orchestrator-pauseresume</c> so Phase 48 can drop the old endpoint with zero entanglement (D-08).
+/// The literal <c>EndpointName</c> was removed: in MassTransit 8.5.5 it bypassed the InstanceId
+/// formatter, so the exclusive/<c>Temporary</c> queues collided on <c>RESOURCE_LOCKED</c> at
+/// replicas&gt;1 (HA-07 blocker). <c>ConcurrentMessageLimit = 1</c> serializes Pause/Resume on this
+/// replica so a duplicate replays against idempotent Quartz transitions — NO lock, NO stripe.
 /// <para>
 /// <b>Phase-53 D-01:</b> this endpoint registers NO bus retry. A send that exhausts the in-code
 /// RetryLoop throws → RabbitMQ nack-requeue (broker redelivery); no <c>_error</c>, no dead-letter.
@@ -16,10 +20,8 @@ namespace Orchestrator.Consumers;
 /// </summary>
 public sealed class PauseAllConsumerDefinition : ConsumerDefinition<PauseAllConsumer>
 {
-    public PauseAllConsumerDefinition()
-    {
-        EndpointName = "orchestrator-global-pauseresume";   // NEW dedicated base name (D-08 — independent from orchestrator-pauseresume)
-    }
+    // Endpoint name supplied per-instance by Program.cs (OrchestratorFanoutEndpoints.GlobalPauseResumeBase)
+    // — NO literal EndpointName (it bypassed the InstanceId formatter → RESOURCE_LOCKED at replicas>1, HA-07).
 
     protected override void ConfigureConsumer(
         IReceiveEndpointConfigurator endpointConfigurator,

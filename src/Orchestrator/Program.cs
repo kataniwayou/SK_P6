@@ -10,6 +10,7 @@ using Orchestrator.Dispatch;
 using Orchestrator.Election;
 using Orchestrator.Hydration;
 using Orchestrator.L1;
+using Orchestrator.Messaging;
 using Orchestrator.Observability;
 using Orchestrator.Scheduling;
 using OpenTelemetry.Logs;      // ConfigureOpenTelemetryLoggerProvider (role enricher, D-09)
@@ -44,26 +45,31 @@ builder.Services.AddSingleton(new LeaderState(startAsLeader: !inCluster));
 builder.Services.AddBaseConsoleMessaging(builder.Configuration,
     x =>
     {
+        // 83-05 (HA-07): each fan-out endpoint gets an EXPLICIT per-instance NAME via
+        // OrchestratorFanoutEndpoints.PerInstance (NOT the InstanceId knob — in MassTransit 8.5.5 the
+        // literal EndpointName that the definitions used to pin bypassed the InstanceId formatter, so
+        // exclusive Temporary queues collided on RESOURCE_LOCKED at replicas>1). e.Temporary=true stays:
+        // a unique-per-pod name makes the exclusive/auto-delete queue correct (auto-cleans on pod death).
         x.AddConsumer<StartOrchestrationConsumer, StartOrchestrationConsumerDefinition>()
-            .Endpoint(e => { e.InstanceId = instanceId; e.Temporary = true; });
+            .Endpoint(e => { e.Name = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.LifecycleBase, instanceId); e.Temporary = true; });
         x.AddConsumer<StopOrchestrationConsumer, StopOrchestrationConsumerDefinition>()
-            .Endpoint(e => { e.InstanceId = instanceId; e.Temporary = true; });
+            .Endpoint(e => { e.Name = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.LifecycleBase, instanceId); e.Temporary = true; });   // SAME name as Start → co-located
         // PAUSE-02/03/04: Pause + Resume share their own dedicated per-replica fan-out endpoint
         // "orchestrator-pauseresume-{instanceId}" (ConcurrentMessageLimit=1, single retry ownership held
         // by the Pause definition) so they don't throttle Start/Stop/Result (RESEARCH §5b).
         x.AddConsumer<PauseWorkflowConsumer, PauseWorkflowConsumerDefinition>()
-            .Endpoint(e => { e.InstanceId = instanceId; e.Temporary = true; });
+            .Endpoint(e => { e.Name = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.PauseResumeBase, instanceId); e.Temporary = true; });
         x.AddConsumer<ResumeWorkflowConsumer, ResumeWorkflowConsumerDefinition>()
-            .Endpoint(e => { e.InstanceId = instanceId; e.Temporary = true; });
+            .Endpoint(e => { e.Name = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.PauseResumeBase, instanceId); e.Temporary = true; });   // SAME name as Pause → co-located
         // ORCH-02 / D-08: global pause/resume on a NEW per-replica fan-out endpoint
         // "orchestrator-global-pauseresume-{instanceId}" (SAME instanceId → one temp fan-out queue per
         // replica; ConcurrentMessageLimit=1, single retry ownership held by the PauseAll definition),
         // independent from "orchestrator-pauseresume" so Phase 48 can drop the old per-workflow endpoint
         // with zero entanglement.
         x.AddConsumer<PauseAllConsumer, PauseAllConsumerDefinition>()
-            .Endpoint(e => { e.InstanceId = instanceId; e.Temporary = true; });
+            .Endpoint(e => { e.Name = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.GlobalPauseResumeBase, instanceId); e.Temporary = true; });
         x.AddConsumer<ResumeAllConsumer, ResumeAllConsumerDefinition>()
-            .Endpoint(e => { e.InstanceId = instanceId; e.Temporary = true; });
+            .Endpoint(e => { e.Name = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.GlobalPauseResumeBase, instanceId); e.Temporary = true; });   // SAME name as PauseAll → co-located
         // ORCH-01 / D-07: the TypedResultConsumer<T> family — four shared competing-consumers (NO
         // InstanceId/Temporary), the inverse of the Start/Stop fan-out. All four co-locate on the stable
         // "orchestrator-result" endpoint; StepCompletedConsumerDefinition owns the single endpoint-level

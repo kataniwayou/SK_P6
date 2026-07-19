@@ -5,8 +5,11 @@ namespace Orchestrator.Consumers;
 /// <summary>
 /// Endpoint config seam for <see cref="StopOrchestrationConsumer"/>
 /// (MSG-ACK-03/04) — mirrors <see cref="StartOrchestrationConsumerDefinition"/>
-/// exactly. Same <c>EndpointName "orchestrator"</c> so <c>ConfigureEndpoints</c> groups both consumers
-/// onto one per-replica fan-out endpoint (A2).
+/// exactly. The endpoint name is now supplied PER-INSTANCE by <c>Program.cs</c> via
+/// <see cref="Orchestrator.Messaging.OrchestratorFanoutEndpoints"/> (<c>orchestrator-{instanceId}</c>,
+/// SAME name as the Start definition → co-located on one per-replica fan-out endpoint). The literal
+/// <c>EndpointName</c> was removed: in MassTransit 8.5.5 it bypassed the InstanceId formatter, so the
+/// exclusive/<c>Temporary</c> queues collided on <c>RESOURCE_LOCKED</c> at replicas&gt;1 (HA-07 blocker).
 /// <para>
 /// <b>Phase-53 D-01:</b> NO bus retry. A send that exhausts the in-code RetryLoop throws →
 /// RabbitMQ nack-requeue (broker redelivery); there is no <c>_error</c> and no dead-letter on this
@@ -17,10 +20,7 @@ namespace Orchestrator.Consumers;
 /// </summary>
 public sealed class StopOrchestrationConsumerDefinition : ConsumerDefinition<StopOrchestrationConsumer>
 {
-    public StopOrchestrationConsumerDefinition()
-    {
-        EndpointName = "orchestrator";   // SHARED base name (both defs)
-    }
-
+    // Endpoint name supplied per-instance by Program.cs (OrchestratorFanoutEndpoints) — NO literal
+    // EndpointName (the literal bypassed the InstanceId formatter → RESOURCE_LOCKED at replicas>1, HA-07).
     // Intentional no-op: no bus retry (Phase-53 D-01) — send-exhaust throws → broker redelivery.
 }
