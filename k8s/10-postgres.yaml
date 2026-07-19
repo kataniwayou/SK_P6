@@ -44,7 +44,7 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:17-alpine       # verbatim (public image — no imagePullPolicy override)
+          image: postgres:18-alpine       # verbatim (public image — no imagePullPolicy override)
           env:
             - name: POSTGRES_DB
               valueFrom:
@@ -65,7 +65,12 @@ spec:
             - containerPort: 5432
           volumeMounts:
             - name: data
-              mountPath: /var/lib/postgresql/data
+              # postgres:18+ Docker images store data in a major-version subdir
+              # (/var/lib/postgresql/18/docker) and require the volume mounted at
+              # /var/lib/postgresql — NOT the pre-18 /var/lib/postgresql/data
+              # (docker-library/postgres#1259). Mounting the old path makes PG 18
+              # refuse to start ("PostgreSQL data in ... (unused mount/volume)").
+              mountPath: /var/lib/postgresql
           # compose healthcheck 5s/5s/10/5s → readiness exec (creds resolve to postgres/stepsdb via .env)
           readinessProbe:
             exec:
