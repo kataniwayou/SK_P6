@@ -43,4 +43,4 @@ Milestone goal: run the orchestrator as N≥2 replicas with single-leader mutual
 | HA-04 | 82 | Complete |
 | HA-05 | 82 | Complete |
 | HA-06 | 82 | Complete |
-| HA-07 | 83 | Pending |
+| HA-07 | 83 | Complete |

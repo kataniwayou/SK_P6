@@ -3,16 +3,16 @@ gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 2
-status: verifying
+status: milestone_complete
 stopped_at: Completed 83-05-PLAN.md
 last_updated: "2026-07-19T04:55:26.000Z"
 last_activity: 2026-07-19
 progress:
   total_phases: 4
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 0
   completed_plans: 0
-  percent: 0
+  percent: 25
 ---
 
 # Project State
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Milestone: v10.0.0 (Orchestrator High Availability) — STARTED 2026-07-18. Goal: run the orchestrator as N≥2 replicas with single-leader mutual exclusion so horizontal scaling never produces duplicate workflow triggers, with fast failover and role-tagged observability. Only the elected leader performs scheduler-triggered entry-step sends (gate on `WorkflowFireJob`'s send loop, read from a single-writer volatile `LeaderState`); leader election via `KubernetesClient` `LeaderElector` over a `coordination.k8s.io/v1` Lease in a `BackgroundService`; `attributes.role` on every orchestrator log. 2 phases: 82 (leader election + gate + role logging + RBAC + replica bump), 83 (failover proof). Builds on v9.0.0 k8s deploy (80-81). Phases continue at **82**. Prior milestone v9.0.0 (Canonical Two-Consumer Recovery & L2 Delivery Proof, phases 69-81) is complete-but-unarchived — run /gsd-complete-milestone to archive it.
-Phase: 83 — EXECUTING
-Current Plan: 2
+Phase: 83
+Current Plan: Not started
 Total Plans: 4
 Plan: 4 of 4
-Status: Phase complete — ready for verification
+Status: Milestone complete
 Last activity: 2026-07-19
 
 > Phase 83 Plan 01 — ✅ COMPLETE 2026-07-18 (Wave 1: the hermetically-testable HA-07 decision core — the pure scorer every downstream Plan-02/03/04 verdict trusts). **3 atomic commits** (`d7c5981` feat: `EsIndexNames.RoleFieldPath = "attributes.role"` direct-keyword const for the Plan-02 role-flip term query; `bad08e1` test-RED: six failing `HaFireBucketScorerFacts`; `8cef46c` feat-GREEN: `HaFireBucketScorer.Score`). Requirement **HA-07** (hermetic core half). `HaFireBucketScorer` (tests/BaseApi.Tests/Observability/Analysis/HaFireBucketScorer.cs): a pure static classifier (mirrors `StructuralCohort`) folding the five HA-07 claims to a `Verdict` — `Bucket30s` wall-clock flooring + per-corrId earliest-timestamp bucketing (claims #1+#2, ≤1 distinct send-corrId/bucket), an election-window `[killBucket, recoveryBucket]` gap/backfill walk (claim #3), role-flip recovery ≤2×LeaseDuration=30s (claims #4+#5); `SendEvidenceRecord(CorrelationId, Timestamp)` struct + `HaFireVerdict` result record (REUSES the `AnalyzerReport.Verdict` enum, not redeclared). **Fail-closed anti-vacuous fold (exact order):** zero-sends → Inconclusive; `!zeroDuplicate` → Fail; `!roleFlipVisible` → Fail; `recovery<0` → Inconclusive; `recovery>30s` → Fail; `gapObserved && !notBackfilled` → Fail; `!gapObserved` → Inconclusive; else Pass (T-83-04a: an observability gap is NEVER a vacuous green). Six hermetic facts (no `RealStack` trait) green Docker-less: happy-Pass, split-brain-Fail, no-gap-Inconclusive, backfill-Fail, recovery-over-30s-Fail, zero-sends-Inconclusive. **2 deviations:** (1) Rule 1 — replaced RESEARCH Code Example 4's verbatim boundary arithmetic (which makes `notBackfilled` tautologically true → the required `BackfilledGapTick_IsFail` fact UNREACHABLE) with an election-window walk preserving the same intent; (2) Rule 3 — renamed a `recovery is {} r` pattern var to `rec` to clear a CS0136 clash with the `foreach r` loop var. **Wave-0 probe:** `_mapping/field/attributes.role` returned empty mappings (ES up, no `attributes.role` docs indexed yet — non-blocking, const correct per direct-path convention; Plan 04 live run confirms). Verification: 0-warning Debug+Release; HaFireBucketScorerFacts 6/6, StructuralCohortFacts 3/3, PassFailEngineFacts 30/30 (zero new hermetic regressions). Summary: `.planning/phases/83-orchestrator-ha-failover-proof/83-01-SUMMARY.md` (Self-Check PASSED). Plan 02 (`HaFailoverAnalyzerE2ETests` live verdict consuming `Score` + `RoleFieldPath`) next.
@@ -770,7 +770,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 
 **Velocity:**
 
-- Total plans completed: 284
+- Total plans completed: 289
 - Average duration: —
 - Total execution time: —
 
@@ -854,6 +854,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | 80 | 10 | - | - |
 | 81 | 4 | - | - |
 | 82 | 4 | - | - |
+| 83 | 5 | - | - |
 
 **Recent Trend:**
 
