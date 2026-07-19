@@ -115,8 +115,8 @@ kubectl -n skp get deploy orchestrator     # 3/3 READY
   docker tag orchestrator:local orchestrator:local-2
   kubectl -n skp set image deployment/orchestrator orchestrator=orchestrator:local-2
   ```
-- **Health checks:** Kubernetes uses `httpGet` readiness/liveness probes (no in-container tool). The
-  Compose stack (optional) uses the app's own dotnet self-probe: `dotnet <App>.dll --healthcheck`.
+- **Health checks:** Kubernetes uses `httpGet` readiness/liveness probes (no in-container tool) —
+  no wget/curl needed in the image.
 - **Tests (optional):** the RealStack test suite uses Testcontainers; `testcontainers/ryuk:0.11.0`
   and `postgres:17-alpine` are in `images.tar`. If ryuk misbehaves offline, set
   `TESTCONTAINERS_RYUK_DISABLED=true`. Hermetic tests need no Docker:

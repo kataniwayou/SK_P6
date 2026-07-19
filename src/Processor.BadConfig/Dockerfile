@@ -25,8 +25,7 @@ RUN dotnet publish "src/Processor.BadConfig/Processor.BadConfig.csproj" -c Relea
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-bookworm-slim AS runtime
 WORKDIR /app
-# Offline build: NO `apt-get install wget`. k8s uses httpGet probes; compose uses the app's dotnet
-# self-probe (`dotnet Processor.BadConfig.dll --healthcheck`) — no wget/curl needed.
+# Offline build: NO `apt-get install wget`. k8s uses httpGet probes (kubelet-side) — no wget/curl needed.
 COPY --from=build /publish .
 USER app
 ENV ASPNETCORE_URLS=http://+:8082

@@ -23,8 +23,7 @@ RUN dotnet publish "src/Keeper/Keeper.csproj" -c Release -o /publish --no-restor
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-bookworm-slim AS runtime
 WORKDIR /app
 COPY --from=build /publish .
-# Offline build: NO `apt-get install wget`. k8s uses httpGet probes; compose uses the app's dotnet
-# self-probe (`dotnet Keeper.dll --healthcheck`) — no wget/curl needed.
+# Offline build: NO `apt-get install wget`. k8s uses httpGet probes (kubelet-side) — no wget/curl needed.
 USER app
 ENV ASPNETCORE_URLS=http://+:8083
 EXPOSE 8083

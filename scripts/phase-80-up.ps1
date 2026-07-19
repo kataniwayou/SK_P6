@@ -3,16 +3,13 @@
 # ---------------------------------------------------------------------------
 # The single command that turns the k8s/ manifests into a running, harness-reachable stack:
 #
-#   1. Pitfall-5 guard: `docker compose down` so the compose stack does not hold the host ports
-#      (8080/9090/9200/15673/6380/5433/5673/4317) the port-forwards need — compose vs k8s are
-#      mutually exclusive on those loopback ports (threat T-80-18).
-#   2. `kubectl apply -k k8s/` — creates ns skp, secret, configmaps, and every workload.
-#   3. Phased Ready wait via `kubectl -n skp rollout status` — infra tiers then app tiers.
+#   1. `kubectl apply -k k8s/` — creates ns skp, secret, configmaps, and every workload.
+#   2. Phased Ready wait via `kubectl -n skp rollout status` — infra tiers then app tiers.
 #      rollout status is replica-aware (keeper/processor-sample ×2 handled automatically), so it
 #      REPLACES phase-65-up.ps1's hand-rolled NDJSON-per-replica parse entirely (RESEARCH Pattern 4).
-#   4. IMAGE CURRENCY (Pitfall 2 / D-05): `kubectl rollout restart` the 4 app Deployments so the
+#   3. IMAGE CURRENCY (Pitfall 2 / D-05): `kubectl rollout restart` the 4 app Deployments so the
 #      freshly built `:local` bits actually run — same tag + IfNotPresent ⇒ no auto-redeploy on rebuild.
-#   5. (Task 2) Start the 8 loopback-bound port-forwards + poll baseapi /health/ready before returning.
+#   4. Start the 8 loopback-bound port-forwards + poll baseapi /health/ready before returning.
 #
 # PRECONDITION: STEP-A0 build (scripts/phase-80-build.ps1) MUST have run BEFORE this script so the
 # rollout-restart lands pods on the CURRENT SourceHash (D-05) — the container assembly hash must match
@@ -37,19 +34,9 @@ function Write-Phase {
     Write-Host "[phase-80-up] $Message" -ForegroundColor $Color
 }
 
-    # ---- STEP 1: Pitfall-5 guard — tear the compose stack DOWN so it releases the forward ports ----
-    # compose publishes 8080/9090/9200/15673/6380/5433/5673/4317 on the host; a live compose stack
-    # would collide with the k8s port-forwards below (threat T-80-18). `down` is idempotent — a no-op
-    # when nothing is up. Non-fatal if compose isn't installed/running (guarded).
-    Write-Phase "STEP 1: docker compose down (Pitfall-5 host-port collision guard)..."
-    docker compose down 2>&1 | Out-String | Write-Host
-    if ($LASTEXITCODE -ne 0) {
-        Write-Phase "docker compose down returned $LASTEXITCODE (continuing — likely already down)." 'Yellow'
-    }
-
-    # ---- STEP 2: Assert the kube context is docker-desktop — HARD-FAIL on mismatch (exit 12) ----
+    # ---- STEP 1: Assert the kube context is docker-desktop — HARD-FAIL on mismatch (exit 12) ----
     # The whole threat model (T-80-16/T-80-17 and the dev Secret's emphatic "NEVER a real cluster")
-    # rests on this stack only ever touching the local single node. STEP 3 runs an UNCONDITIONAL
+    # rests on this stack only ever touching the local single node. STEP 2 runs an UNCONDITIONAL
     # `kubectl apply -k k8s/` against the CURRENT context — so a mis-pointed context would silently
     # create ns skp, the dev Secret, and every workload on a shared/real cluster. A soft warning scrolls
     # past in the harness's non-interactive `pwsh -File` run, so REFUSE outright unless the operator
@@ -67,17 +54,17 @@ function Write-Phase {
         Write-Phase "kube context = docker-desktop (OK)."
     }
 
-    # ---- STEP 3: Apply the manifests (kustomize) — fail loud on non-zero (exit 10) ----
-    Write-Phase "STEP 3: kubectl apply -k k8s/ ..."
+    # ---- STEP 2: Apply the manifests (kustomize) — fail loud on non-zero (exit 10) ----
+    Write-Phase "STEP 2: kubectl apply -k k8s/ ..."
     kubectl apply -k k8s/ 2>&1 | Out-String | Write-Host
     if ($LASTEXITCODE -ne 0) {
         Write-Phase "kubectl apply -k k8s/ failed (exit $LASTEXITCODE). Aborting." 'Red'
         exit 10
     }
 
-    # ---- STEP 4: Phased INFRA Ready wait — rollout status is readiness-gated + replica-aware ----
+    # ---- STEP 3: Phased INFRA Ready wait — rollout status is readiness-gated + replica-aware ----
     # Per-tier --timeout budgets absorb the cold starts (ES 240s, rabbitmq 180s — Pattern 4 / Pitfall 3).
-    Write-Phase "STEP 4: waiting for INFRA tiers Ready (rollout status)..."
+    Write-Phase "STEP 3: waiting for INFRA tiers Ready (rollout status)..."
     $infra = @(
         @{ target = 'statefulset/postgres';      timeout = '180s' },
         @{ target = 'statefulset/redis';         timeout = '120s' },
@@ -96,20 +83,20 @@ function Write-Phase {
     }
     Write-Phase "INFRA tiers Ready." 'Green'
 
-    # ---- STEP 5: IMAGE CURRENCY (Pitfall 2 / D-05) — force the 4 app Deployments onto fresh :local bits ----
+    # ---- STEP 4: IMAGE CURRENCY (Pitfall 2 / D-05) — force the 4 app Deployments onto fresh :local bits ----
     # `:local` + imagePullPolicy IfNotPresent means the SAME tag never triggers a redeploy after a rebuild.
     # A single `rollout restart` of all 4 app Deployments recreates their pods against the just-built images,
     # guaranteeing the running SourceHash == the seeder's host-built Processor.Sample.dll (threat T-80-19).
-    Write-Phase "STEP 5: kubectl rollout restart the 4 app Deployments (image/SourceHash currency)..."
+    Write-Phase "STEP 4: kubectl rollout restart the 4 app Deployments (image/SourceHash currency)..."
     kubectl -n skp rollout restart deployment/baseapi-service deployment/orchestrator deployment/keeper deployment/processor-sample
     if ($LASTEXITCODE -ne 0) {
         Write-Phase "rollout restart of the app Deployments failed (exit $LASTEXITCODE). Aborting." 'Red'
         exit 10
     }
 
-    # ---- STEP 6: Phased APP Ready wait — rollout status waits for the RESTARTED pods to be Available ----
+    # ---- STEP 5: Phased APP Ready wait — rollout status waits for the RESTARTED pods to be Available ----
     # keeper/processor-sample are replicas:2 — rollout status requires ALL replicas Available automatically.
-    Write-Phase "STEP 6: waiting for APP tiers Ready after restart (rollout status)..."
+    Write-Phase "STEP 5: waiting for APP tiers Ready after restart (rollout status)..."
     $apps = @(
         @{ target = 'deployment/baseapi-service';  timeout = '180s' },
         @{ target = 'deployment/orchestrator';     timeout = '120s' },
@@ -126,7 +113,7 @@ function Write-Phase {
     }
     Write-Phase "All 10 tiers Ready (6 infra + 4 app), app pods on fresh :local bits." 'Green'
 
-# ---- STEP 7: Start the EIGHT loopback port-forwards (D-14 + seeder finding) ----------------------
+# ---- STEP 6: Start the EIGHT loopback port-forwards (D-14 + seeder finding) ----------------------
 # `kubectl port-forward` is a blocking foreground process — run each as a tracked BACKGROUND process
 # (Start-Process -PassThru -WindowStyle Hidden, RESEARCH Pattern 5) so the script can return to the
 # harness with the forwards live.
@@ -152,18 +139,18 @@ $forwards = @(
     @{ svc = 'svc/otel-collector';  map = '4317:4317'   }    # OTLP — REQUIRED by the ~FanOutSeeder in-proc WebApi OTEL endpoint
 )
 
-# ---- STEP 7-pre: reap STALE port-forwards from a prior run (WR-02) --------------------------------
+# ---- STEP 6-pre: reap STALE port-forwards from a prior run (WR-02) --------------------------------
 # On a re-run WITHOUT a harness teardown, forwards from the previous run may still hold the loopback
 # ports. Each new forward whose port is still bound exits immediately, yet Start-Process -PassThru
 # still hands back its (already-dead) PID — which we then overwrite the PID file with, ORPHANING the
-# still-live prior forward. STEP 8 then gets a 200 from localhost:8080 via that OLD baseapi forward and
+# still-live prior forward. STEP 7 then gets a 200 from localhost:8080 via that OLD baseapi forward and
 # falsely reports "stack UP" while the non-8080 tunnels are dead. So stop any PIDs recorded by a prior
 # run BEFORE binding the new set (best-effort, mirrors the harness STEP Z teardown).
 $pidFile = Join-Path (Get-Location) '.k8s-portforward-pids'
 if (Test-Path $pidFile) {
     $stalePids = @(Get-Content $pidFile -ErrorAction SilentlyContinue | Where-Object { $_ -match '\S' })
     if ($stalePids.Count -gt 0) {
-        Write-Phase "STEP 7-pre: stopping $($stalePids.Count) stale port-forward PID(s) from a prior run (PIDs: $($stalePids -join ', '))..." 'Yellow'
+        Write-Phase "STEP 6-pre: stopping $($stalePids.Count) stale port-forward PID(s) from a prior run (PIDs: $($stalePids -join ', '))..." 'Yellow'
         foreach ($p in $stalePids) {
             # Recycled-PID guard (IN-05): only kill if the PID is STILL a live kubectl process. A prior
             # forward may have exited and had its PID recycled by the OS — force-killing it blindly could
@@ -177,7 +164,7 @@ if (Test-Path $pidFile) {
     Remove-Item $pidFile -ErrorAction SilentlyContinue
 }
 
-Write-Phase "STEP 7: starting $($forwards.Count) kubectl port-forwards (all bound --address 127.0.0.1)..."
+Write-Phase "STEP 6: starting $($forwards.Count) kubectl port-forwards (all bound --address 127.0.0.1)..."
 $pfProcs = foreach ($f in $forwards) {
     Write-Phase "  port-forward $($f.svc) $($f.map) --address 127.0.0.1"
     Start-Process kubectl -PassThru -WindowStyle Hidden `
@@ -190,11 +177,11 @@ $pfProcs | ForEach-Object { $_.Id } | Set-Content -Path $pidFile -Encoding ascii
 Write-Phase "port-forward PIDs ($(($pfProcs | ForEach-Object { $_.Id }) -join ', ')) written to $pidFile"
 Write-Phase "TEARDOWN HINT: Get-Content '$pidFile' | ForEach-Object { Stop-Process -Id \$_ -Force -ErrorAction SilentlyContinue }" 'Yellow'
 
-# ---- STEP 8: Bounded baseapi readiness poll — confirms the forward is live before hand-off ----------
+# ---- STEP 7: Bounded baseapi readiness poll — confirms the forward is live before hand-off ----------
 # A port-forward reports success on start even before the tunnel carries traffic (Pattern 5 reliability
 # caveat), so gate on a REAL 200 from baseapi /health/ready before returning. This gives reset/seed/POST
 # a clean hand-off. Bounded ~60s; fail loud (exit 11) on timeout.
-Write-Phase "STEP 8: polling http://localhost:8080/health/ready (bounded ~60s)..."
+Write-Phase "STEP 7: polling http://localhost:8080/health/ready (bounded ~60s)..."
 $deadline = (Get-Date).AddSeconds(60)
 $ready = $false
 do {

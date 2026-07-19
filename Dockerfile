@@ -27,8 +27,7 @@ RUN dotnet publish "src/BaseApi.Service/BaseApi.Service.csproj" -c Release -o /p
 FROM mcr.microsoft.com/dotnet/aspnet:8.0-bookworm-slim AS runtime
 WORKDIR /app
 # Offline build: NO `apt-get install wget` (needs the Debian apt network). k8s uses httpGet probes
-# (kubelet-side, no in-container tool). The compose healthcheck uses the app's own dotnet self-probe
-# (`dotnet <App>.dll --healthcheck`) — see compose.yaml / Program.cs, no wget/curl needed.
+# (kubelet-side, no in-container tool) — no wget/curl needed in the image.
 COPY --from=build /publish .
 USER app
 ENV ASPNETCORE_URLS=http://+:8080
