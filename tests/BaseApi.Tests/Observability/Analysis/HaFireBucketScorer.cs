@@ -116,7 +116,12 @@ internal static class HaFireBucketScorer
         // roleFlipUtc]) while keeping the backfill Fail path genuinely reachable.
         long killBucket = Bucket30s(killUtc);
         long recoveryBucket = roleFlipUtc is { } rfb ? Bucket30s(rfb) : killBucket;
-        long lastPreKill = byBucket.Keys.Where(b => b < killBucket).DefaultIfEmpty(long.MinValue).Max();
+        // `<=` not `<`: the phase-aligned kill fires ~3s BEFORE the next :00/:30 boundary, so killUtc floors to
+        // the SAME 30s bucket as the last pre-kill fire (that boundary's tick). `< killBucket` would exclude that
+        // fire → lastPreKill = MinValue → the walk is skipped and the genuine gap tick at killBucket+30 is never
+        // detected (gapObserved falsely false → a coverage-miss-shaped Inconclusive on every real run). The gap
+        // tick is the boundary AFTER the kill (killBucket+30), so the last pre-kill fire is AT or before killBucket.
+        long lastPreKill = byBucket.Keys.Where(b => b <= killBucket).DefaultIfEmpty(long.MinValue).Max();
 
         var gapBoundaries = new List<long>();
         bool backfillSeen = false;

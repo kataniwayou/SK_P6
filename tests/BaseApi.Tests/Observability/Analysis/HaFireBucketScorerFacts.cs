@@ -65,6 +65,36 @@ public sealed class HaFireBucketScorerFacts
     }
 
     /// <summary>
+    /// Realistic phase-aligned kill (the live-run signature — regression guard for the same-bucket bug): the
+    /// harness force-deletes the leader ~3s BEFORE a :00/:30 boundary, so <c>killUtc</c> floors to the SAME 30s
+    /// bucket (B0) as the last pre-kill fire, and the skipped election-gap tick is the NEXT boundary (B1). A
+    /// clean post-recovery fire follows in B2; the role flip lands 17s after the kill (≤ 2×LeaseDuration). The
+    /// gap MUST still be observed ⇒ <see cref="Verdict.Pass"/>. This reproduces the live INCONCLUSIVE regression
+    /// where <c>lastPreKill</c> was computed with <c>&lt; killBucket</c> (excluding the same-bucket pre-kill fire)
+    /// so the gap walk was skipped and a genuine gap tick went undetected.
+    /// </summary>
+    [Fact]
+    public void PhaseAlignedKill_KillSharesBucketWithLastPreKillFire_Pass()
+    {
+        var sends = new[]
+        {
+            Send("corr-pre",  At(0)),   // B0 — clean pre-kill fire at the boundary tick
+            // kill at At(27) is ALSO in B0 (3s before the At(30)=B1 boundary); B1 tick is the EMPTY election gap
+            Send("corr-post", At(60)),  // B2 — clean post-recovery fire
+        };
+
+        var v = HaFireBucketScorer.Score(sends, killUtc: At(27), roleFlipUtc: At(44)); // 17s recovery
+
+        Assert.True(v.ZeroDuplicate);
+        Assert.True(v.GapObserved);
+        Assert.True(v.NotBackfilled);
+        Assert.True(v.RoleFlipVisible);
+        Assert.True(v.BoundedRecovery);
+        Assert.Equal(TimeSpan.FromSeconds(17), v.Recovery);
+        Assert.Equal(Verdict.Pass, v.Verdict);
+    }
+
+    /// <summary>
     /// Split-brain / duplicate trigger: two DISTINCT send-correlationIds whose earliest @timestamps floor to
     /// the SAME 30s bucket (B0) — the operational signature of two simultaneous leaders firing one scheduled
     /// tick ⇒ <see cref="Verdict.Fail"/> (<see cref="HaFireVerdict.ZeroDuplicate"/> false), the fail-closed
