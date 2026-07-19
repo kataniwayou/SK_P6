@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v7.0.0
 milestone_name: Per-Replica Processor Liveness & Self-Watchdog
 current_plan: 2
-status: executing
-stopped_at: Completed 83-03-PLAN.md
-last_updated: "2026-07-18T21:39:36.595Z"
-last_activity: 2026-07-18
+status: verifying
+stopped_at: Completed 83-05-PLAN.md
+last_updated: "2026-07-19T04:55:26.000Z"
+last_activity: 2026-07-19
 progress:
   total_phases: 4
   completed_phases: 0
@@ -33,8 +33,8 @@ Phase: 83 — EXECUTING
 Current Plan: 2
 Total Plans: 4
 Plan: 4 of 4
-Status: Ready to execute
-Last activity: 2026-07-18
+Status: Phase complete — ready for verification
+Last activity: 2026-07-19
 
 > Phase 83 Plan 01 — ✅ COMPLETE 2026-07-18 (Wave 1: the hermetically-testable HA-07 decision core — the pure scorer every downstream Plan-02/03/04 verdict trusts). **3 atomic commits** (`d7c5981` feat: `EsIndexNames.RoleFieldPath = "attributes.role"` direct-keyword const for the Plan-02 role-flip term query; `bad08e1` test-RED: six failing `HaFireBucketScorerFacts`; `8cef46c` feat-GREEN: `HaFireBucketScorer.Score`). Requirement **HA-07** (hermetic core half). `HaFireBucketScorer` (tests/BaseApi.Tests/Observability/Analysis/HaFireBucketScorer.cs): a pure static classifier (mirrors `StructuralCohort`) folding the five HA-07 claims to a `Verdict` — `Bucket30s` wall-clock flooring + per-corrId earliest-timestamp bucketing (claims #1+#2, ≤1 distinct send-corrId/bucket), an election-window `[killBucket, recoveryBucket]` gap/backfill walk (claim #3), role-flip recovery ≤2×LeaseDuration=30s (claims #4+#5); `SendEvidenceRecord(CorrelationId, Timestamp)` struct + `HaFireVerdict` result record (REUSES the `AnalyzerReport.Verdict` enum, not redeclared). **Fail-closed anti-vacuous fold (exact order):** zero-sends → Inconclusive; `!zeroDuplicate` → Fail; `!roleFlipVisible` → Fail; `recovery<0` → Inconclusive; `recovery>30s` → Fail; `gapObserved && !notBackfilled` → Fail; `!gapObserved` → Inconclusive; else Pass (T-83-04a: an observability gap is NEVER a vacuous green). Six hermetic facts (no `RealStack` trait) green Docker-less: happy-Pass, split-brain-Fail, no-gap-Inconclusive, backfill-Fail, recovery-over-30s-Fail, zero-sends-Inconclusive. **2 deviations:** (1) Rule 1 — replaced RESEARCH Code Example 4's verbatim boundary arithmetic (which makes `notBackfilled` tautologically true → the required `BackfilledGapTick_IsFail` fact UNREACHABLE) with an election-window walk preserving the same intent; (2) Rule 3 — renamed a `recovery is {} r` pattern var to `rec` to clear a CS0136 clash with the `foreach r` loop var. **Wave-0 probe:** `_mapping/field/attributes.role` returned empty mappings (ES up, no `attributes.role` docs indexed yet — non-blocking, const correct per direct-path convention; Plan 04 live run confirms). Verification: 0-warning Debug+Release; HaFireBucketScorerFacts 6/6, StructuralCohortFacts 3/3, PassFailEngineFacts 30/30 (zero new hermetic regressions). Summary: `.planning/phases/83-orchestrator-ha-failover-proof/83-01-SUMMARY.md` (Self-Check PASSED). Plan 02 (`HaFailoverAnalyzerE2ETests` live verdict consuming `Score` + `RoleFieldPath`) next.
 
@@ -1119,6 +1119,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 83 P01 | 18min | 2 tasks | 3 files |
 | Phase 83 P02 | 18min | 2 tasks | 1 files |
 | Phase 83 P03 | 3min | 2 tasks | 1 files |
+| Phase 83 P05 | 4min | 2 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -1668,6 +1669,7 @@ Recent decisions affecting current work:
 - Phase 83: HA-07 verdict logic isolated as a pure HaFireBucketScorer (Docker-less-provable) before any live harness; fail-closed anti-vacuous fold (observability gaps -> Inconclusive, never a vacuous Pass)
 - 83-02: HA failover live verdict fact clones the analyzer ES/window/drain/write-then-assert scaffold and swaps only scoring — feeds two ES streams (exists-StepId leader sends + earliest post-kill role=leader flip) to the pure HaFireBucketScorer.Score, writes a string-Verdict phase-83-ha.json before asserting (exit 0/1/2)
 - 83-03: phase-aligned leader kill (~3s pre :00/:30 boundary) forces the cron tick into the ~11-17s election gap to deterministically prove HA-07 claim #3 without changing the locked */30 cron
+- 83-05: per-instance orchestrator fan-out endpoint names (base-instanceId) fixed the HA-07 replicas:3 RESOURCE_LOCKED blocker; removed literal EndpointName that bypassed the MassTransit 8.5.5 InstanceId formatter
 
 ### Roadmap Milestone Log
 
@@ -1779,8 +1781,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-18T21:39:29.133Z
-Stopped at: Completed 83-03-PLAN.md
+Last session: 2026-07-19T04:55:20.854Z
+Stopped at: Completed 83-05-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
