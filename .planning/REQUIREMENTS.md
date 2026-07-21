@@ -38,11 +38,11 @@ Milestone goal: add Kafka-sourced binary file import (and later export) to the p
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| DATA-01 | 84 | Not started |
-| DATA-02 | 84 | Not started |
-| DATA-03 | 84 | Not started |
-| DATA-04 | 84 | Not started |
-| DATA-05 | 84 | Not started |
+| DATA-01 | 84 | Complete |
+| DATA-02 | 84 | Complete |
+| DATA-03 | 84 | Complete |
+| DATA-04 | 84 | Complete |
+| DATA-05 | 84 | Complete |
 | KIMP-01 | 85 | Not started |
 | KIMP-02 | 85 | Not started |
 | KIMP-03 | 85 | Not started |

@@ -29,7 +29,7 @@
 
 ### Phases
 
-- [ ] **Phase 84: `byte[]` Data-Channel Widening** — Widen `DataResult.Data` from `string` to `byte[]` as the ground-truth type (JSON/UTF-8 an optional schema-driven lens, base64 gone); framework-only, decoupled from Kafka; acceptance = the existing 7-scenario fault-recovery sweep reproducing its all-PASS baseline.
+- [x] **Phase 84: `byte[]` Data-Channel Widening** — Widen `DataResult.Data` from `string` to `byte[]` as the ground-truth type (JSON/UTF-8 an optional schema-driven lens, base64 gone); framework-only, decoupled from Kafka; acceptance = the existing 7-scenario fault-recovery sweep reproducing its all-PASS baseline. **✅ COMPLETE 2026-07-21 — sweep 7/7 PASS live on k8s (byte84 images), DATA-01…05 satisfied, verification 8/8.**
 - [ ] **Phase 85: KafkaImporter Processor** — A Mode-2 entry-step processor that pull-consumes ≤N binary files per dispatch from a standalone Kafka container, mints an `executionId` per file, writes bytes directly to L2, and commits each Kafka offset per-message only after a confirmed store + hand-off (fail-loud).
 
 ### Phase Details
