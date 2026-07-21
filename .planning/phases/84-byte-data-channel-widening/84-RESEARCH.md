@@ -303,15 +303,14 @@ var incomingNumber = parsed.RootElement.GetProperty("number").GetInt32();
 
 **Both assumptions are cheap to convert to VERIFIED** via a single hermetic fact each; neither blocks planning.
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **OQ-1 — Does DATA-05 require `NextStepHandoff.Data` (OrchestratorInject's embedded field) to literally become `byte[]`, or is the UTF-8-lossless `string` round-trip sufficient for Phase 84?**
+1. **OQ-1 — [RESOLVED: keep `NextStepHandoff.Data` as `string`, out of scope for Phase 84]** Ruled by the orchestrator before planning and ratified in all three PLAN.md scope fences: `DataResult.Data` widens to `byte[]`; `NextStepHandoff.Data` (the orchestrator relocate blob) STAYS `string`. DATA-05 is satisfied in the no-loss sense (`KeeperInject` embeds the literal `byte[]` `DataResult`; the UTF-8 relocate is byte-for-byte lossless for the sweep). Literal byte[] widening of the orchestrator relocate is deferred to Phase 85 (when true binary must relocate through the orchestrator). Original question retained below for the record.
    - What we know: `KeeperInject` embeds `DataResult` → literally `byte[]` (DATA-05 satisfied directly). `OrchestratorInject` embeds `NextStepHandoff` (string). For all sweep content (UTF-8 JSON) the string relocate is byte-for-byte lossless, so the sweep passes either way. CONTEXT does NOT list `OrchestratorPrePipeline`/`RelocateTail`/`NextStepHandoff` as touch-points.
    - What's unclear: whether DATA-05's phrasing "OrchestratorInject carries byte[]" is a literal typing requirement or a "no-loss" requirement.
    - **Recommendation:** Keep `NextStepHandoff.Data` as `string` in Phase 84 (minimal blast radius, sweep-lossless, CONTEXT-aligned) and record the literal byte[] widening of the orchestrator relocate as a deferred item for whenever *true binary* must relocate *through* the orchestrator (Phase 85 / MANIP-01). The planner should confirm this ruling explicitly before wave 2, since it draws the exact scope line.
 
-2. **OQ-2 — D-02 accessor placement: extension in `Messaging.Contracts` vs. instance member on `DataResult` vs. static factory?**
-   - Recommendation: an extension method (`DataAsString`) in `Messaging.Contracts` keeps `DataResult` a pure data record and signals "edge conversion"; a `NewResult(StepOutcome, byte[])` overload on `BaseProcessor` covers the write side. Planner's discretion per CONTEXT.
+2. **OQ-2 — [RESOLVED: `DataAsString` extension in `Messaging.Contracts` + `NewResult(StepOutcome, byte[])` overload]** Adopted in Plan 01: an extension method (`DataAsString`) in `Messaging.Contracts` keeps `DataResult` a pure data record and signals "edge conversion"; a `NewResult(StepOutcome, byte[])` overload on `BaseProcessor` covers the write side (and the `string` overload UTF-8-encodes).
 
 ## Environment Availability
 
