@@ -1,9 +1,11 @@
 using BaseProcessor.Core.Identity;
 using BaseProcessor.Core.Processing;
+using MassTransit;
 using Messaging.Contracts;
 using Messaging.Contracts.Projections;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using Processor.Sample;
 using StackExchange.Redis;
 using Xunit;
 using BaseProcessorBase = BaseProcessor.Core.Processing.BaseProcessor;
@@ -27,6 +29,14 @@ public sealed class PrePipelineFacts
     private static ProcessorPipeline Build(
         IConnectionMultiplexer redis, IProcessorContext context, BaseProcessorBase processor,
         DispatchTestKit.CapturingSendProvider send)
+        => BuildWith(redis, context, processor, send);
+
+    /// <summary>D-05 anchor (RESEARCH plain-construct): build the pipeline through its public ctor with ANY
+    /// <see cref="ISendEndpointProvider"/> — e.g. the faulting <c>DispatchTestKit.SendFaultProvider</c> — so the
+    /// PB-02/D-05 nack fact can drive a DEFEATED Mode-2 spawn (send-exhaust) through the real pipeline.</summary>
+    private static ProcessorPipeline BuildWith(
+        IConnectionMultiplexer redis, IProcessorContext context, BaseProcessorBase processor,
+        ISendEndpointProvider send)
     {
         var tail = new OutputTail(redis, context, send, DispatchTestKit.Retry(3),
             DispatchTestKit.Options(300), DispatchTestKit.Metrics());
@@ -337,5 +347,52 @@ public sealed class PrePipelineFacts
         Assert.Equal((RedisValue)"{}", set.Value);
         Assert.Empty(send.SentKeeper);
         await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());   // C-2/D-08 parity
+    }
+
+    // ---- PB-02 / D-05: a DEFEATED Mode-2 spawn PROPAGATES (nack), it does NOT ack as a StepFailed ----
+
+    [Fact]
+    public async Task SpawnExhaust_Propagates_SpawnSendExhaustedException_Nack_NoStepFailed()   // PB-02 / D-05
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // A Guid.Empty SOURCE dispatch skips the gate/read (SourceStep.IsSource) and drives the real
+        // SampleProcessor entry fan-out (Open-Q 2). The redis is barely touched (no L2 input on a source).
+        var redis = DispatchTestKit.ReadWriteDeleteOkL2(new Dictionary<string, string>(), out _);
+        var processor = new SampleProcessor();
+        // Transient RedisConnectionException on the -post send ⇒ SpawnToPost exhausts its RetryLoop and throws
+        // SpawnSendExhaustedException (Plan 01) — the fail-loud signal this plan converts into a nack.
+        var faultingSend = new DispatchTestKit.SendFaultProvider();
+
+        var pipeline = BuildWith(redis, Ctx(), processor, faultingSend);
+
+        // The defeated spawn's dedicated exception RE-PROPAGATES out of RunAsync (the narrow catch's bare throw)
+        // → MassTransit nack-requeue. The THROW is the terminal signal (PB-02): the pipeline never reached the
+        // generic catch / OutputTail, so NO StepFailed was produced (it did NOT take the ack path).
+        await Assert.ThrowsAsync<SpawnSendExhaustedException>(() => pipeline.RunAsync(
+            DispatchTestKit.Dispatch(entryId: Guid.Empty, correlationId: Guid.NewGuid()), Guid.NewGuid(), ct));
+    }
+
+    // ---- D-03 (poison-safety negative control): a DETERMINISTIC seam fault STAYS on the ack path ----
+
+    [Fact]
+    public async Task DeterministicSeamFault_DoesNotEscape_OneStepFailed_Ack()   // D-03 negative control
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var entryId = Guid.NewGuid();
+        var messageId = Guid.NewGuid();
+        var redis = DispatchTestKit.ReadWriteDeleteOkL2(
+            new Dictionary<string, string> { [L2ProjectionKeys.ExecutionData(entryId)] = "{}" }, out _);
+        var processor = new DispatchTestKit.FakeProcessor(new InvalidOperationException("boom"));
+        var send = new DispatchTestKit.CapturingSendProvider();
+
+        // The narrow SpawnSendExhaustedException filter MUST NOT let a deterministic fault escape — an
+        // InvalidOperationException stays in the generic catch → StepFailed + ack (no throw, no nack-loop).
+        var ex = await Record.ExceptionAsync(() => Build(redis, Ctx(), processor, send).RunAsync(
+            DispatchTestKit.Dispatch(entryId, correlationId: Guid.NewGuid()), messageId, ct));
+        Assert.Null(ex);   // D-03: RunAsync did NOT throw — the deterministic fault did not nack
+
+        var failed = Assert.IsType<StepFailed>(Assert.Single(send.Sent));   // exactly one StepFailed (ack path)
+        Assert.Equal(messageId, failed.EntryId);
+        Assert.Empty(send.SentKeeper);
     }
 }
