@@ -182,6 +182,15 @@ public sealed class ProcessorPipeline(
                     LogHopExecuted(d, messageId, statusDr.Result.ToString());
                 return;   // C-2 parity: a seam-thrown failure does NOT delete the entry on this phase's model
             }
+            // PB-02/D-01/D-02/D-03: a Mode-2 SpawnToPost that exhausted its bounded RetryLoop on a TRANSIENT
+            // transport fault propagates a dedicated SpawnSendExhaustedException through the author seam. Catch
+            // it NARROWLY and RE-PROPAGATE (bare throw) so it ESCAPES the consumer → MassTransit default RabbitMQ
+            // nack-requeue (broker redelivery re-fires the whole seed — the exact SendKeeper :304 escape, no new
+            // redelivery/backoff config). It MUST sit ABOVE the generic catch so the defeated spawn is NOT routed
+            // to OutputTail+ack as a StepFailed. D-03 CRUX (do NOT widen): the generic catch below still handles
+            // deterministic faults (JsonException/ArgumentException/InvalidOperationException) → StepFailed+ack, or
+            // they would poison-loop forever on redelivery.
+            catch (SpawnSendExhaustedException) { throw; }
             catch (Exception ex)   // unexpected (incl. the deserialize JsonException, req 2) ⇒ failed, NO delete
             {
                 // WR-03: never put ex.Message on the StepFailed wire — a deserialize JsonException can carry a
