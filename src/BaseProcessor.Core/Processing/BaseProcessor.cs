@@ -1,3 +1,4 @@
+using System.Text;                        // Encoding (D-02 encode-on-write edge)
 using BaseConsole.Core.Resilience;       // RetryLoop / RetryOutcome
 using MassTransit;                        // ISendEndpointProvider / Send
 using Messaging.Contracts;                // DataResult / StepOutcome
@@ -149,7 +150,19 @@ public abstract class BaseProcessor
     /// the framework stamps the ambient WorkflowId/StepId/ProcessorId/CorrelationId + the carried MessageId
     /// (the L2[messageId] output key). ExecutionId is left Guid.Empty — Mode-1 callers may
     /// <c>with { ExecutionId = inbound }</c>; Mode-2 spawns pass the minted id to <see cref="SpawnToPost"/>.</summary>
+    /// <summary>D-02 (Phase 84) encode-on-write EDGE conversion: the author authors the payload as a UTF-8
+    /// string and the framework UTF-8-encodes it into the ground-truth <c>byte[]</c> <see cref="DataResult.Data"/>.
+    /// Convenience only — the stored type stays <c>byte[]</c>; this overload delegates to the
+    /// <c>byte[]</c> overload after <see cref="Encoding.UTF8"/> encoding. Keeps existing string-authoring
+    /// callers (Processor.Sample) byte-for-byte identical.</summary>
     protected DataResult NewResult(StepOutcome result, string data)
+        => NewResult(result, Encoding.UTF8.GetBytes(data));
+
+    /// <summary>D-01/D-02: build a <see cref="DataResult"/> from the ground-truth <c>byte[]</c> payload without
+    /// threading ids/messageId — the framework stamps the ambient WorkflowId/StepId/ProcessorId/CorrelationId
+    /// + the carried MessageId (the L2[messageId] output key). ExecutionId is left Guid.Empty — Mode-1 callers
+    /// may <c>with { ExecutionId = inbound }</c>; Mode-2 spawns pass the minted id to <see cref="SpawnToPost"/>.</summary>
+    protected DataResult NewResult(StepOutcome result, byte[] data)
     {
         var s = Seam;
         return new(s.WorkflowId, s.StepId, s.ProcessorId)
