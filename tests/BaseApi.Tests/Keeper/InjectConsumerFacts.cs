@@ -37,7 +37,7 @@ public sealed class InjectConsumerFacts
             ExecutionId = Guid.NewGuid(),
             MessageId = Guid.NewGuid(),
             Result = result,
-            Data = data,
+            Data = System.Text.Encoding.UTF8.GetBytes(data),
         };
 
     private static KeeperInject NewInject(DataResult dr) =>

@@ -310,7 +310,7 @@ public sealed class PrePipelineFacts
     private sealed class RealDeserProcessor : BaseProcessor<DeserConfig>
     {
         protected override Task<DataResult?> ProcessAsync(
-            string validatedData, DeserConfig? config, Guid executionId, CancellationToken ct)
+            byte[] validatedData, DeserConfig? config, Guid executionId, CancellationToken ct)
             => Task.FromResult<DataResult?>(null);   // never reached on a malformed payload
     }
 

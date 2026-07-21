@@ -44,7 +44,7 @@ internal static class DispatchTestKit
     /// </summary>
     public sealed class FakeProcessor : BaseProcessor<DummyConfig>
     {
-        private readonly Func<string, DummyConfig?, Guid, CancellationToken, Task<DataResult?>> _impl;
+        private readonly Func<byte[], DummyConfig?, Guid, CancellationToken, Task<DataResult?>> _impl;
 
         /// <summary>Returns the given <see cref="DataResult"/>? (or null) from the seam.</summary>
         public FakeProcessor(DataResult? toReturn)
@@ -80,7 +80,7 @@ internal static class DispatchTestKit
 
         /// <summary>True once the transform was actually invoked (proves the Pre guards short-circuited or not).</summary>
         public bool Invoked { get; private set; }
-        public string? LastInputData { get; private set; }
+        public byte[]? LastInputData { get; private set; }
         /// <summary>The inbound per-instance executionId the seam threaded in (Guid.Empty == entry/seed).</summary>
         public Guid LastExecutionId { get; private set; }
 
@@ -95,7 +95,7 @@ internal static class DispatchTestKit
         public DataResult NewResultPublic(StepOutcome outcome, string data) => NewResult(outcome, data);
 
         protected override Task<DataResult?> ProcessAsync(
-            string validatedData, DummyConfig? config, Guid executionId, CancellationToken ct)
+            byte[] validatedData, DummyConfig? config, Guid executionId, CancellationToken ct)
             => _impl(validatedData, config, executionId, ct);
     }
 
@@ -108,7 +108,7 @@ internal static class DispatchTestKit
             ExecutionId   = Guid.NewGuid(),
             MessageId     = messageId ?? Guid.NewGuid(),
             Result        = outcome,
-            Data          = data,
+            Data          = System.Text.Encoding.UTF8.GetBytes(data),
         };
 
     // ===== StringSetAsync received-call inspection (overload-agnostic) =====

@@ -60,7 +60,8 @@ public sealed class SampleProcessorFacts
 
         // ENTRY: executionId == Guid.Empty → Mode-2 fan-out.
         var payload = JsonSerializer.Serialize(new { number = 10, label = "Step_A1" }, ProcessorConfig.SerializerOptions);
-        var dr = await ((BaseProcessorBase)processor).ExecuteAsync("any-input", payload, Guid.Empty, ct);
+        var dr = await ((BaseProcessorBase)processor).ExecuteAsync(
+            System.Text.Encoding.UTF8.GetBytes("any-input"), payload, Guid.Empty, ct);
 
         Assert.Null(dr);                                            // seam returns null — Pre does nothing inline
         Assert.Equal(2, send.SentData.Count);                      // exactly two spawns to -post
@@ -93,7 +94,7 @@ public sealed class SampleProcessorFacts
         var inboundExec = Guid.NewGuid();
         var payload = JsonSerializer.Serialize(new { number = 3, label = "Step_B" }, ProcessorConfig.SerializerOptions);
         var dr = await ((BaseProcessorBase)processor).ExecuteAsync(
-            "{\"number\":7,\"label\":\"Step_B\"}", payload, inboundExec, ct);
+            System.Text.Encoding.UTF8.GetBytes("{\"number\":7,\"label\":\"Step_B\"}"), payload, inboundExec, ct);
 
         Assert.NotNull(dr);
         Assert.Equal(StepOutcome.Completed, dr!.Result);
@@ -117,7 +118,8 @@ public sealed class SampleProcessorFacts
         WireSeam(processor, db, send, Guid.NewGuid(), Guid.NewGuid());
 
         // empty payload → null config (baseNumber 0); still ENTRY (Guid.Empty) → two spawns.
-        var dr = await ((BaseProcessorBase)processor).ExecuteAsync("any-input", "", Guid.Empty, ct);
+        var dr = await ((BaseProcessorBase)processor).ExecuteAsync(
+            System.Text.Encoding.UTF8.GetBytes("any-input"), "", Guid.Empty, ct);
 
         Assert.Null(dr);
         Assert.Equal(2, send.SentData.Count);

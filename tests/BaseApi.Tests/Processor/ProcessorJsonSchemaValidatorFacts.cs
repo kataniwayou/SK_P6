@@ -1,3 +1,4 @@
+using System.Text;
 using BaseProcessor.Core.Validation;
 using Xunit;
 
@@ -15,21 +16,21 @@ public sealed class ProcessorJsonSchemaValidatorFacts
     [Fact]
     public void Null_Definition_Skips()
     {
-        Assert.True(ProcessorJsonSchemaValidator.TryValidate(null, "{}", out var errors));
+        Assert.True(ProcessorJsonSchemaValidator.TryValidate(null, Encoding.UTF8.GetBytes("{}"), out var errors));
         Assert.Empty(errors);
     }
 
     [Fact]
     public void Whitespace_Definition_Skips()
     {
-        Assert.True(ProcessorJsonSchemaValidator.TryValidate("   ", "{}", out var errors));
+        Assert.True(ProcessorJsonSchemaValidator.TryValidate("   ", Encoding.UTF8.GetBytes("{}"), out var errors));
         Assert.Empty(errors);
     }
 
     [Fact]
     public void Unparseable_Definition_Returns_Invalid()
     {
-        var ok = ProcessorJsonSchemaValidator.TryValidate("not-json", "{}", out var errors);
+        var ok = ProcessorJsonSchemaValidator.TryValidate("not-json", Encoding.UTF8.GetBytes("{}"), out var errors);
         Assert.False(ok);
         Assert.NotEmpty(errors);
     }
@@ -37,7 +38,7 @@ public sealed class ProcessorJsonSchemaValidatorFacts
     [Fact]
     public void Malformed_Data_Returns_Invalid()
     {
-        var ok = ProcessorJsonSchemaValidator.TryValidate("{\"type\":\"object\"}", "not-json", out var errors);
+        var ok = ProcessorJsonSchemaValidator.TryValidate("{\"type\":\"object\"}", Encoding.UTF8.GetBytes("not-json"), out var errors);
         Assert.False(ok);
         Assert.NotEmpty(errors);
     }
@@ -45,7 +46,7 @@ public sealed class ProcessorJsonSchemaValidatorFacts
     [Fact]
     public void Valid_Data_Passes()
     {
-        var ok = ProcessorJsonSchemaValidator.TryValidate("{\"type\":\"object\"}", "{\"a\":1}", out var errors);
+        var ok = ProcessorJsonSchemaValidator.TryValidate("{\"type\":\"object\"}", Encoding.UTF8.GetBytes("{\"a\":1}"), out var errors);
         Assert.True(ok);
         Assert.Empty(errors);
     }
@@ -54,7 +55,7 @@ public sealed class ProcessorJsonSchemaValidatorFacts
     public void Invalid_Data_Fails_With_Flattened_Errors()
     {
         var ok = ProcessorJsonSchemaValidator.TryValidate(
-            "{\"type\":\"object\",\"required\":[\"x\"]}", "{}", out var errors);
+            "{\"type\":\"object\",\"required\":[\"x\"]}", Encoding.UTF8.GetBytes("{}"), out var errors);
         Assert.False(ok);
         Assert.NotEmpty(errors);
     }
@@ -70,7 +71,7 @@ public sealed class ProcessorJsonSchemaValidatorFacts
     public void External_Ref_Evaluates_Closed_Ssrf()
     {
         var ok = ProcessorJsonSchemaValidator.TryValidate(
-            "{\"$ref\":\"http://example.com/schema.json\"}", "{}", out var errors);
+            "{\"$ref\":\"http://example.com/schema.json\"}", Encoding.UTF8.GetBytes("{}"), out var errors);
 
         Assert.False(ok);          // unresolvable external $ref -> business Failed, NOT a crash
         Assert.NotEmpty(errors);   // an error message is surfaced (lockdown held: no outbound fetch)

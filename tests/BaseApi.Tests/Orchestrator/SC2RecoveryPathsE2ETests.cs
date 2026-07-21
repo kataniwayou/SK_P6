@@ -201,7 +201,7 @@ public sealed class SC2RecoveryPathsE2ETests
                 ExecutionId = execId,
                 MessageId = messageId,
                 Result = StepOutcome.Completed,
-                Data = "inject-payload",
+                Data = System.Text.Encoding.UTF8.GetBytes("inject-payload"),
             };
             await endpoint.Send(new KeeperInject(wfId, stepId, procId)
             {
