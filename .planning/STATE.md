@@ -2,14 +2,14 @@
 gsd_state_version: 1.0
 milestone: v11.0.0
 milestone_name: Kafka Binary Import/Export
-status: "Roadmap created (2 phases: 84 byte[] widening, 85 KafkaImporter)"
+status: executing
 stopped_at: Phase 85 context gathered
-last_updated: "2026-07-21T19:41:57.177Z"
-last_activity: 2026-07-21 — v11.0.0 roadmap created (Phases 84-85, 11/11 requirements mapped)
+last_updated: "2026-07-21T20:12:27.117Z"
+last_activity: 2026-07-21 -- Phase 85 planning complete
 progress:
   total_phases: 6
   completed_phases: 1
-  total_plans: 3
+  total_plans: 7
   completed_plans: 3
   percent: 17
 ---
@@ -29,8 +29,8 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 
 Phase: Not started (roadmap complete — ready to plan Phase 84)
 Plan: —
-Status: Roadmap created (2 phases: 84 byte[] widening, 85 KafkaImporter)
-Last activity: 2026-07-21 — v11.0.0 roadmap created (Phases 84-85, 11/11 requirements mapped)
+Status: Ready to execute
+Last activity: 2026-07-21 -- Phase 85 planning complete
 Current focus: Phase 84 — byte[] data-channel widening (first phase of v11.0.0)
 
 ### Quick Tasks Completed

@@ -315,13 +315,15 @@ if (!SourceStep.IsSource(d.EntryId))
 | A1 | The real Mode-2 seed dispatch always carries `EntryId == Guid.Empty` (source), so the framework null-path delete SKIPS it and net-effect == today's no-op. | Pitfall 4 / D-04 | LOW. If a scheduler ever seeds a Mode-2 entry with a non-empty `EntryId`, the framework delete would fire (arguably more correct), changing behavior. Verified against `SampleProcessorFacts` (production author only returns null on `executionId == Guid.Empty`) and the pipeline source-bypass at `ProcessorPipeline.cs:86`. Planner: confirm the scheduler's entry dispatch `EntryId` is `Guid.Empty` if in doubt. |
 | A2 | Making `SpawnSendExhaustedException` `public` vs `internal` is cosmetic (test assembly sees both via `InternalsVisibleTo`). | Dedicated Exception | NONE — both compile; `public` chosen for `ProcessStatusException` parity. |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Unify or inline the null-path delete?** (Claude's discretion per D-04.)
+Both items were Claude's-discretion per 85-CONTEXT.md and are resolved in the plans; recorded here for traceability.
+
+1. **Unify or inline the null-path delete?** (Claude's discretion per D-04.) — **RESOLVED (85-03 Task 2):** extract/reuse the delete-then-escalate block per the recommendation below.
    - What we know: `db`/`limit`/`SendKeeper`/`BuildDelete(d)` are all in `RunAsync` scope; lines 222-227 are the exact block.
    - Recommendation: extract a private `DeleteEntryTail(d, db, limit, ct)` and call from both the Mode-1 tail and the null path — one behavior, DRY, and it reads as "framework-owned deletion" at both call sites. Defer to the planner.
 
-2. **Which `FakeProcessor` shape for the D-05 fact — real `SampleProcessor` or a Mode-2 `FakeProcessor`?**
+2. **Which `FakeProcessor` shape for the D-05 fact — real `SampleProcessor` or a Mode-2 `FakeProcessor`?** — **RESOLVED (85-02 Task 2):** use the real `SampleProcessor` with the `Guid.Empty` dispatch per the recommendation below.
    - What we know: `SampleProcessor` is the real author (spawns 2 then returns null); `FakeProcessor` supports a delegate that calls `SpawnToPost` (`DispatchTestKit.cs:69-89`).
    - Recommendation: use the real `SampleProcessor` for the D-05 nack fact (it exercises the true Mode-2 path) with the `Guid.Empty` dispatch; use a minimal `FakeProcessor` Mode-2 delegate if a tighter single-spawn assertion is wanted. Either proves the escape.
 
