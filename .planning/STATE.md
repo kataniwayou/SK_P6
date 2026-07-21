@@ -4,13 +4,13 @@ milestone: v11.0.0
 milestone_name: Kafka Binary Import/Export
 status: executing
 stopped_at: Phase 85 context gathered
-last_updated: "2026-07-21T21:01:04.631Z"
+last_updated: "2026-07-21T21:13:26.201Z"
 last_activity: 2026-07-21
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 7
-  completed_plans: 4
+  completed_plans: 5
   percent: 17
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Phase: 85 (processor-framework-boundary-hardening) — EXECUTING
-Plan: 2 of 4
+Plan: 3 of 4
 Status: Ready to execute
 Last activity: 2026-07-21
 Current focus: Phase 84 — byte[] data-channel widening (first phase of v11.0.0)
@@ -705,7 +705,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [██████░░░░] 57%
+Progress: [███████░░░] 71%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1086,6 +1086,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 83 P03 | 3min | 2 tasks | 1 files |
 | Phase 83 P05 | 4min | 2 tasks | 9 files |
 | Phase 85 P01 | 35min | 2 tasks | 4 files |
+| Phase 85 P02 | 18min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1637,6 +1638,7 @@ Recent decisions affecting current work:
 - 83-03: phase-aligned leader kill (~3s pre :00/:30 boundary) forces the cron tick into the ~11-17s election gap to deterministically prove HA-07 claim #3 without changing the locked */30 cron
 - 83-05: per-instance orchestrator fan-out endpoint names (base-instanceId) fixed the HA-07 replicas:3 RESOURCE_LOCKED blocker; removed literal EndpointName that bypassed the MassTransit 8.5.5 InstanceId formatter
 - [Phase ?]: PB-01: SpawnToPost fails loud on transient send-exhaust — fires OnSpawnDropped telemetry THEN throws SpawnSendExhaustedException (Exception-derived, ids-only ExecutionId+inner); deterministic faults still throw raw (D-03), IsTransientSendFault unchanged
+- [Phase 85]: PB-02: narrow catch (SpawnSendExhaustedException) { throw; } in ProcessorPipeline turns a defeated Mode-2 spawn into a nack-requeue; deterministic faults stay in the generic catch (StepFailed+ack, D-03 preserved)
 
 ### Roadmap Milestone Log
 
@@ -1748,7 +1750,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-21T20:55:57.122Z
+Last session: 2026-07-21T21:07:24.383Z
 Stopped at: Phase 85 context gathered
 Resume file: None
 

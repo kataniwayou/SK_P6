@@ -73,7 +73,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 85-02-PLAN.md — PB-02 nack: narrow `catch (SpawnSendExhaustedException){throw;}` between the ProcessStatusException and generic catches + D-05 nack fact + explicit D-03 negative control (PB-02)
+- [x] 85-02-PLAN.md — PB-02 nack: narrow `catch (SpawnSendExhaustedException){throw;}` between the ProcessStatusException and generic catches + D-05 nack fact + explicit D-03 negative control (PB-02)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
