@@ -23,26 +23,6 @@ namespace BaseApi.Tests.Processor;
 /// </summary>
 public sealed class BaseProcessorSeamFacts
 {
-    /// <summary>A send provider whose every Send (both the plain and the override overload) THROWS — the
-    /// send-exhaust surface for the SpawnToPost-swallow proof.</summary>
-    private sealed class SendFaultProvider : ISendEndpointProvider
-    {
-        public Task<ISendEndpoint> GetSendEndpoint(Uri address)
-        {
-            var endpoint = Substitute.For<ISendEndpoint>();
-            var boom = new RedisConnectionException(ConnectionFailureType.UnableToConnect, "stub: -post send unreachable");
-            endpoint.Send(Arg.Any<object>(), Arg.Any<CancellationToken>())
-                .Returns<Task>(_ => throw boom);
-            // The production override calls the EXTENSION Send(object, Action<SendContext>, ct) → the real
-            // virtual Send(object, IPipe<SendContext>, ct). Throw on the REAL method (the extension can't be stubbed).
-            endpoint.Send(Arg.Any<object>(), Arg.Any<IPipe<SendContext>>(), Arg.Any<CancellationToken>())
-                .Returns<Task>(_ => throw boom);
-            return Task.FromResult(endpoint);
-        }
-
-        public ConnectHandle ConnectSendObserver(ISendObserver observer) => throw new NotSupportedException();
-    }
-
     private static DispatchTestKit.FakeProcessor WireSeam(
         DispatchTestKit.FakeProcessor processor, IDatabase db, ISendEndpointProvider send,
         Guid entryId, Action<Guid> onSpawnDropped, Func<Task> escalateDelete)
@@ -61,10 +41,10 @@ public sealed class BaseProcessorSeamFacts
     }
 
     [Fact]
-    public async Task SpawnToPost_SendExhaust_Swallows_FiresDropHook_NoThrow_NoKeeper()
+    public async Task SpawnToPost_SendExhaust_FiresDropHook_ThenThrows_NoKeeper()
     {
         var ct = TestContext.Current.CancellationToken;
-        var send = new SendFaultProvider();
+        var send = new DispatchTestKit.SendFaultProvider();   // transient RedisConnectionException ∈ IsTransientSendFault
         var db = Substitute.For<IDatabase>();
         var droppedExecIds = new List<Guid>();
         var escalated = false;
@@ -75,13 +55,37 @@ public sealed class BaseProcessorSeamFacts
             escalateDelete: () => { escalated = true; return Task.CompletedTask; });
 
         var spawnExec = Guid.NewGuid();
-        // SWALLOW: a send-exhaust must NOT throw out of SpawnToPost.
-        await processor.SpawnToPostAsync(
-            processor.NewResultPublic(StepOutcome.Completed, "{\"n\":1}"), spawnExec);
+        // PB-01/D-01: a TRANSIENT send-exhaust must FAIL LOUD — throw the dedicated escape signal.
+        var ex = await Assert.ThrowsAsync<SpawnSendExhaustedException>(() =>
+            processor.SpawnToPostAsync(
+                processor.NewResultPublic(StepOutcome.Completed, "{\"n\":1}"), spawnExec));
 
         var dropped = Assert.Single(droppedExecIds);
-        Assert.Equal(spawnExec, dropped);          // the drop hook carries the minted spawn execId (T-70-10: id only)
+        Assert.Equal(spawnExec, dropped);          // SC-1: the drop hook fired FIRST, carrying the minted spawn execId (T-70-10: id only)
+        Assert.Equal(spawnExec, ex.ExecutionId);   // the exception carries the same spawn execId (ids-only)
         Assert.False(escalated);                   // a spawn drop NEVER escalates to a keeper
+    }
+
+    [Fact]
+    public async Task SpawnToPost_DeterministicSendFault_Throws_RawException_NotDedicatedType()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // A NON-transient boom (∉ IsTransientSendFault) — must surface RAW, not the dedicated type (D-03 preserved).
+        var send = new DispatchTestKit.SendFaultProvider(new ArgumentException("stub: deterministic -post send fault"));
+        var db = Substitute.For<IDatabase>();
+        var droppedExecIds = new List<Guid>();
+
+        var processor = new DispatchTestKit.FakeProcessor((DataResult?)null);
+        WireSeam(processor, db, send, Guid.NewGuid(),
+            onSpawnDropped: id => droppedExecIds.Add(id),
+            escalateDelete: () => Task.CompletedTask);
+
+        // The deterministic fault surfaces as the RAW ArgumentException — NOT SpawnSendExhaustedException.
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            processor.SpawnToPostAsync(
+                processor.NewResultPublic(StepOutcome.Completed, "{\"n\":1}"), Guid.NewGuid()));
+
+        Assert.Empty(droppedExecIds);   // a deterministic fault does NOT fire the transient drop telemetry
     }
 
     [Fact]

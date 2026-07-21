@@ -388,4 +388,30 @@ internal static class DispatchTestKit
 
         public ConnectHandle ConnectSendObserver(ISendObserver observer) => throw new NotSupportedException();
     }
+
+    /// <summary>A send provider whose every resolved endpoint's <c>Send</c> (BOTH the plain object overload AND
+    /// the Phase-70 envelope-override <c>Send(object, IPipe&lt;SendContext&gt;, ct)</c> the extension forwards to)
+    /// THROWS a configurable <paramref name="boom"/> — the send-exhaust surface for the PB-01 fail-loud proof.
+    /// Defaults to a TRANSIENT <see cref="RedisConnectionException"/> (∈ <c>IsTransientSendFault</c>) so the
+    /// exhaust lands on the new dedicated-throw branch; pass a NON-transient boom (e.g. an
+    /// <see cref="ArgumentException"/>) to exercise the deterministic raw-throw negative control.</summary>
+    public sealed class SendFaultProvider(Exception? boom = null) : ISendEndpointProvider
+    {
+        private readonly Exception _boom =
+            boom ?? new RedisConnectionException(ConnectionFailureType.UnableToConnect, "stub: -post send unreachable");
+
+        public Task<ISendEndpoint> GetSendEndpoint(Uri address)
+        {
+            var endpoint = Substitute.For<ISendEndpoint>();
+            endpoint.Send(Arg.Any<object>(), Arg.Any<CancellationToken>())
+                .Returns<Task>(_ => throw _boom);
+            // The production override calls the EXTENSION Send(object, Action<SendContext>, ct) → the real
+            // virtual Send(object, IPipe<SendContext>, ct). Throw on the REAL method (the extension can't be stubbed).
+            endpoint.Send(Arg.Any<object>(), Arg.Any<IPipe<SendContext>>(), Arg.Any<CancellationToken>())
+                .Returns<Task>(_ => throw _boom);
+            return Task.FromResult(endpoint);
+        }
+
+        public ConnectHandle ConnectSendObserver(ISendObserver observer) => throw new NotSupportedException();
+    }
 }
