@@ -2,7 +2,6 @@ using System.Text;                        // Encoding (D-02 encode-on-write edge
 using BaseConsole.Core.Resilience;       // RetryLoop / RetryOutcome
 using MassTransit;                        // ISendEndpointProvider / Send
 using Messaging.Contracts;                // DataResult / StepOutcome
-using Messaging.Contracts.Projections;    // L2ProjectionKeys
 using StackExchange.Redis;                // IDatabase
 
 namespace BaseProcessor.Core.Processing;
@@ -18,14 +17,16 @@ namespace BaseProcessor.Core.Processing;
 /// overrides ONLY the typed transform; it never sees this <c>internal</c> seam (BPC-02).
 /// <para>
 /// Phase 70 (D-03/D-05/D-06): the seam now returns <see cref="DataResult"/>? (one-or-null), and the
-/// base exposes the two protected author helpers <see cref="SpawnToPost"/> (Mode-2 spawn to the
+/// base exposes the single protected author helper <see cref="SpawnToPost"/> (Mode-2 spawn to the
 /// <c>-post</c> queue, FAIL-LOUD on transient send-exhaust — PB-01/D-01: fire the drop-telemetry hook
-/// then THROW <see cref="SpawnSendExhaustedException"/>) and <see cref="DeleteEntry"/> (delete L2[entryId],
-/// escalate to the DELETE keeper on exhaust — D-08), plus the <see cref="NewResult(StepOutcome, byte[])"/>
+/// then THROW <see cref="SpawnSendExhaustedException"/>), plus the <see cref="NewResult(StepOutcome, byte[])"/>
 /// factory (and its D-02 <see cref="NewResult(StepOutcome, string)"/> encode-on-write overload) that stamps
-/// the ambient ids + carried messageId so the author writes no id/envelope plumbing. The framework
-/// populates the per-dispatch state below (via <c>ProcessorPipeline.SetSeamState</c>) BEFORE invoking the
-/// seam; the author never sets it.
+/// the ambient ids + carried messageId so the author writes no id/envelope plumbing. Phase 85 (PB-03):
+/// entry/source deletion is FRAMEWORK-OWNED — the pipeline issues the L2[entryId] delete + DELETE-keeper
+/// escalation on BOTH completion paths (the Mode-1 inline tail AND the Mode-2 null-return path), so the
+/// concrete processor no longer sees an author-owned entry-delete helper; its only Mode-2 job is "spawn N + return
+/// null". The framework populates the per-dispatch state below (via <c>ProcessorPipeline.SetSeamState</c>)
+/// BEFORE invoking the seam; the author never sets it.
 /// </para>
 /// </summary>
 public abstract class BaseProcessor
@@ -33,14 +34,14 @@ public abstract class BaseProcessor
     // ---- Framework-populated per-dispatch state (set by ProcessorPipeline before invoking the seam). ----
     // CR-01: the author registers this type as a SINGLETON (the documented contract for a stateless
     // transform — BaseProcessorServiceCollectionExtensions:96), but the per-dispatch seam state is NOT
-    // stateless: every consume writes the inbound entryId/messageId/ids + the EscalateDelete closure that
-    // captures THAT consume's dispatch. Storing these as plain instance fields on the shared singleton races
-    // under concurrent consumes (no ConcurrentMessageLimit on the entry/-post endpoints), so consume B could
-    // clobber consume A's entryId and A's DeleteEntry/NewResult/SpawnToPost would act on B's lineage
-    // (wrong-key write, wrong entry delete — exactly the silent-loss class the SPEC forbids). The fix:
-    // hold the per-dispatch state in an AsyncLocal so each consume's async flow sees its OWN isolated copy.
-    // The registration stays Singleton and the author-facing API (SetSeamState/SpawnToPost/DeleteEntry/
-    // NewResult) is unchanged — only the backing store moved off the shared instance.
+    // stateless: every consume writes the inbound messageId/ids + the OnSpawnDropped hook that captures THAT
+    // consume's dispatch. Storing these as plain instance fields on the shared singleton races under
+    // concurrent consumes (no ConcurrentMessageLimit on the entry/-post endpoints), so consume B could
+    // clobber consume A's ids and A's NewResult/SpawnToPost would act on B's lineage (wrong-key write —
+    // exactly the silent-loss class the SPEC forbids). The fix: hold the per-dispatch state in an AsyncLocal
+    // so each consume's async flow sees its OWN isolated copy. The registration stays Singleton and the
+    // author-facing API (SetSeamState/SpawnToPost/NewResult) is unchanged — only the backing store moved off
+    // the shared instance.
     private readonly AsyncLocal<SeamState?> _seam = new();
 
     /// <summary>CR-01: the per-dispatch seam state held in an <see cref="AsyncLocal{T}"/> so concurrent
@@ -52,7 +53,6 @@ public abstract class BaseProcessor
         public IDatabase? Db;
         public ISendEndpointProvider? SendProvider;
         public int RetryLimit;
-        public Guid EntryId;       // inbound source entryId (DeleteEntry operand)
         public Guid ProcessorId;   // bound processor id (the -post queue name)
 
         // Ambient ids carried onto NewResult (so the author writes no id/envelope plumbing).
@@ -61,9 +61,10 @@ public abstract class BaseProcessor
         public Guid StepId;
         public Guid CorrelationId;
 
-        // Escalation hooks the pipeline supplies (Func<Task> — no sync-over-async).
-        public Action<Guid>? OnSpawnDropped;   // metric+warn hook (swallow telemetry)
-        public Func<Task>? EscalateDelete;     // pipeline-provided DELETE escalation (keeper send)
+        // Telemetry hook the pipeline supplies for the Mode-2 spawn-drop (metric + warn). PB-03: the DELETE
+        // escalation hook is gone — entry deletion (and its keeper escalation) is now framework-owned in the
+        // pipeline null-return path, not an author-callable helper.
+        public Action<Guid>? OnSpawnDropped;   // metric+warn hook (spawn-drop telemetry)
     }
 
     /// <summary>The current consume's seam state — throws if a helper is called before
@@ -143,17 +144,6 @@ public abstract class BaseProcessor
         return false;
     }
 
-    /// <summary>D-08: delete L2[entryId] (the inbound source) with a bounded <see cref="RetryLoop"/>,
-    /// escalating to the redefined DELETE keeper state (delete-only, no orchestrator send) on exhaust.
-    /// The author writes no RetryLoop/keeper code.</summary>
-    protected async Task DeleteEntry()
-    {
-        var s = Seam;
-        var del = await RetryLoop.ExecuteAsync(
-            () => s.Db!.KeyDeleteAsync(L2ProjectionKeys.ExecutionData(s.EntryId)), s.RetryLimit, CancellationToken.None);
-        if (!del.Succeeded && s.EscalateDelete is { } escalate) await escalate();   // → KeeperDelete (delete-only)
-    }
-
     /// <summary>Factory the author uses to build a <see cref="DataResult"/> without threading ids/messageId:
     /// the framework stamps the ambient WorkflowId/StepId/ProcessorId/CorrelationId + the carried MessageId
     /// (the L2[messageId] output key). ExecutionId is left Guid.Empty — Mode-1 callers may
@@ -188,8 +178,8 @@ public abstract class BaseProcessor
     /// (the author only sees the typed <c>ProcessAsync</c>).</summary>
     internal void SetSeamState(
         IDatabase db, ISendEndpointProvider sendProvider, int retryLimit,
-        Guid entryId, Guid processorId, Guid messageId, Guid workflowId, Guid stepId, Guid correlationId,
-        Action<Guid> onSpawnDropped, Func<Task> escalateDelete)
+        Guid processorId, Guid messageId, Guid workflowId, Guid stepId, Guid correlationId,
+        Action<Guid> onSpawnDropped)
     {
         // CR-01: publish a FRESH state object onto the AsyncLocal for THIS consume's async flow. A fresh
         // instance (never mutated in place) means a sibling consume that already captured its own _seam.Value
@@ -199,19 +189,17 @@ public abstract class BaseProcessor
             Db = db,
             SendProvider = sendProvider,
             RetryLimit = retryLimit,
-            EntryId = entryId,
             ProcessorId = processorId,
             MessageId = messageId,
             WorkflowId = workflowId,
             StepId = stepId,
             CorrelationId = correlationId,
             OnSpawnDropped = onSpawnDropped,
-            EscalateDelete = escalateDelete,
         };
     }
 
     /// <summary>CR-01: clear THIS consume's seam state once the seam returns (the pipeline calls this in a
     /// finally). AsyncLocal already isolates concurrent consumes; clearing additionally prevents a stale
-    /// captured EscalateDelete closure from outliving its dispatch on a pooled thread.</summary>
+    /// captured hook/ids from outliving its dispatch on a pooled thread.</summary>
     internal void ClearSeamState() => _seam.Value = null;
 }
