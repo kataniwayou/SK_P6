@@ -31,8 +31,9 @@ namespace BaseProcessor.Core.Processing;
 ///   exactly ONE <c>StepFailed</c> and returns WITH NO entry delete (C-2 / req 2 — the entry is left to its
 ///   TTL).</item>
 ///   <item><b>Seam</b> (req 3): the author <c>ProcessAsync</c> returns ONE <see cref="DataResult"/> or
-///   <c>null</c>. On <c>null</c> the author already handled spawn+handoff (Mode-2) — the Pre consumer writes,
-///   sends, and deletes NOTHING.</item>
+///   <c>null</c>. On <c>null</c> the author already handled spawn+handoff (Mode-2) — the Pre consumer writes
+///   and sends NOTHING, but PB-03 the FRAMEWORK still runs the shared entry-delete tail (delete L2[entryId] →
+///   DELETE keeper on exhaust; skipped for a Guid.Empty source), so the author owns no delete code.</item>
 ///   <item><b>Inline tail</b> (req 4): the shared <see cref="OutputTail"/> (write L2[messageId]=data on
 ///   Completed → INJECT on write-exhaust → send Step* by result), THEN <c>delete L2[entryId]</c>
 ///   (delete-exhaust → DELETE keeper).</item>
@@ -208,11 +209,19 @@ public sealed class ProcessorPipeline(
                 return;
             }
 
-            // req 3: Mode-2 spawn handled everything; skip the tail (no write/send/delete). D-09: this IS an
+            // req 3: Mode-2 spawn handled the write+send; skip the OutputTail (no write/send). D-09: this IS an
             // executed entry hop — log it with the outcome "Completed" and d.ExecutionId passed EXPLICITLY (it is
             // Guid.Empty for the entry step; the ambient scope OMITS empty GUIDs, so the all-zeros marker must be
-            // an explicit placeholder arg to surface in ES).
-            if (dr is null) { LogHopExecuted(d, messageId, nameof(StepOutcome.Completed)); return; }
+            // an explicit placeholder arg to surface in ES). PB-03/D-04: entry deletion is now framework-owned on
+            // THIS path too — after the per-hop record, run the SAME delete-then-escalate tail as Mode-1. The
+            // !IsSource guard inside DeleteEntryTail skips a Guid.Empty source seed (net-effect identical to the
+            // old no-op author DeleteEntry, Pitfall 4). D-01 ordering: a spawn-exhaust threw before we got here.
+            if (dr is null)
+            {
+                LogHopExecuted(d, messageId, nameof(StepOutcome.Completed));
+                await DeleteEntryTail(d, db, limit, ct);
+                return;
+            }
 
             // req 4: inline tail = shared OutputTail (write completed-only → INJECT on exhaust → send by result),
             // THEN delete L2[entryId] (exhaust → DELETE). Carry the carried messageId onto the DataResult so the
@@ -226,16 +235,28 @@ public sealed class ProcessorPipeline(
             // Step* wire). Emitted AFTER the !proceed guard so an INJECT-escalated hop does NOT log here.
             LogHopExecuted(d, messageId, resolvedOutcome.ToString());
 
-            // A source step (Guid.Empty) has NO L2 input key to reclaim — skip the delete tail for it
-            // (pre-Phase-70 "Forward — source-delete tail … Skipped on a Guid.Empty source step").
-            if (!SourceStep.IsSource(d.EntryId))
-            {
-                var del = await RetryLoop.ExecuteAsync(
-                    () => db.KeyDeleteAsync(L2ProjectionKeys.ExecutionData(d.EntryId)), limit, ct);
-                if (!del.Succeeded) await SendKeeper(BuildDelete(d), limit, ct);   // delete-exhaust → DELETE (req 4)
-            }
+            // req 4 tail: framework-owned entry delete (source-skip + delete-exhaust → DELETE escalation).
+            await DeleteEntryTail(d, db, limit, ct);
         }
         finally { processor.ClearSeamState(); }   // CR-01: per-consume AsyncLocal cleanup
+    }
+
+    /// <summary>PB-03/req 4/D-08: the framework-owned entry-delete tail, shared by BOTH completion paths — the
+    /// Mode-1 inline tail (after the OutputTail write+send) AND the Mode-2 null-return path (after the succeeded
+    /// spawns). A SOURCE step (<c>Guid.Empty</c>, <see cref="SourceStep.IsSource"/>) has NO L2 input key to
+    /// reclaim, so it is SKIPPED — the net delete effect for a Guid.Empty seed is IDENTICAL to the old author
+    /// <c>DeleteEntry</c> no-op (D-04/Pitfall 4). Otherwise delete <c>L2[entryId]</c> under a bounded
+    /// <see cref="RetryLoop"/>; a delete-exhaust escalates to the delete-only DELETE keeper (<see cref="BuildDelete"/>).
+    /// The concrete processor writes no delete/keeper code — deletion capability moved INLINE to the framework.
+    /// Ordering safety (D-01): a Mode-2 spawn that exhausts THROWS (Plan 01) and is nack-rethrown by the narrow
+    /// catch (Plan 02) before RunAsync ever reaches the null-return path, so this delete only runs once every
+    /// spawn landed.</summary>
+    private async Task DeleteEntryTail(EntryStepDispatch d, IDatabase db, int limit, CancellationToken ct)
+    {
+        if (SourceStep.IsSource(d.EntryId)) return;   // source seed: no L2 input key to reclaim (skip)
+        var del = await RetryLoop.ExecuteAsync(
+            () => db.KeyDeleteAsync(L2ProjectionKeys.ExecutionData(d.EntryId)), limit, ct);
+        if (!del.Succeeded) await SendKeeper(BuildDelete(d), limit, ct);   // delete-exhaust → DELETE (req 4)
     }
 
     /// <summary>FW-01/D-05/D-06/D-08/D-10 + D1/LOG-01: emit the framework's own per-hop execution record — ONE
@@ -269,15 +290,14 @@ public sealed class ProcessorPipeline(
     }
 
     /// <summary>Populate the framework-owned per-dispatch state on the <see cref="BaseProcessor"/> the
-    /// author calls into (this.SpawnToPost / this.DeleteEntry / this.NewResult). The two escalation hooks are
-    /// closures over THIS pipeline's <see cref="SendKeeper"/> / logger / metrics so the author writes no
-    /// RetryLoop/keeper code: the spawn-drop hook logs the swallow (executionId only — never the payload,
-    /// T-70-10) + counts it; the delete-escalation hook fires the DELETE keeper send.</summary>
+    /// author calls into (this.SpawnToPost / this.NewResult). The single spawn-drop hook is a closure over THIS
+    /// pipeline's logger / metrics so the author writes no telemetry code: it logs the drop (executionId only —
+    /// never the payload, T-70-10) + counts it on the SpawnDropped signal. PB-03: there is no delete-escalation
+    /// hook anymore — the entry delete + its DELETE-keeper escalation moved inline to <see cref="DeleteEntryTail"/>.</summary>
     private void SetSeamState(EntryStepDispatch d, Guid messageId, IDatabase db, int limit)
     {
         processor.SetSeamState(
             db, sendProvider, limit,
-            entryId: d.EntryId,
             processorId: context.Id!.Value,
             messageId: messageId,
             workflowId: d.WorkflowId,
@@ -291,8 +311,9 @@ public sealed class ProcessorPipeline(
                 // dedup rate stays readable and the spawn-drop rate is observable under its real name.
                 metrics.SpawnDropped.Add(1,
                     new KeyValuePair<string, object?>("ProcessorId", context.Id!.Value.ToString("D")));
-            },
-            escalateDelete: () => SendKeeper(BuildDelete(d), limit, CancellationToken.None));
+            });
+        // PB-03: no entryId / escalateDelete wiring here anymore — the entry delete + its DELETE-keeper
+        // escalation moved INLINE to DeleteEntryTail (called from both completion paths in RunAsync).
     }
 
     // ---- Send owners: every send wrapped in RetryLoop; send-exhaustion PROPAGATES (throw → broker redelivery, no _error). ----

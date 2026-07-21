@@ -15,8 +15,8 @@ namespace Processor.Sample;
 ///   <item><b>ENTRY/seed</b> (<c>executionId == Guid.Empty</c>, Mode-2): seeds the TWO FIXED values
 ///   <c>100</c> and <c>200</c> (deterministic — NO random), then SPAWNS two completed
 ///   <see cref="DataResult"/>s to the Post-Process queue via <c>SpawnToPost</c> with DISTINCT
-///   freshly-minted executionIds (D-09, swallow), DELETES the inbound entry via <c>DeleteEntry</c>,
-///   and RETURNS NULL — the framework writes/sends/deletes nothing inline (req 3).</item>
+///   freshly-minted executionIds (D-09; FAIL-LOUD on transient exhaust), and RETURNS NULL. PB-03: the
+///   framework owns the entry delete on the null-return path — the author issues no delete (req 3).</item>
 ///   <item><b>DOWNSTREAM</b> (<c>executionId != Guid.Empty</c>, Mode-1): accumulates ONE number
 ///   (<c>incomingNumber + baseNumber</c>, deterministic — NO random), and RETURNS ONE completed
 ///   <see cref="DataResult"/> REUSING the inbound executionId — the framework's inline tail runs
@@ -24,9 +24,9 @@ namespace Processor.Sample;
 /// </list>
 /// Per D4/LOG-04 the concrete processor emits NO author logs: the framework's per-hop record and
 /// result-send record carry the full execution evidence, and the verdict never depends on a
-/// concrete-processor log. The author writes NO RetryLoop/keeper/envelope code — <c>SpawnToPost</c> /
-/// <c>DeleteEntry</c> own resilience, and <c>NewResult</c> stamps
-/// the ambient ids + carried messageId.
+/// concrete-processor log. The author writes NO RetryLoop/keeper/envelope code — <c>SpawnToPost</c> owns
+/// spawn resilience (fail-loud on transient exhaust), the framework owns the entry delete (PB-03), and
+/// <c>NewResult</c> stamps the ambient ids + carried messageId.
 /// </para>
 /// </summary>
 /// <remarks>
@@ -57,7 +57,8 @@ public sealed class SampleProcessor : BaseProcessor<SampleConfig>
         if (executionId == Guid.Empty)
         {
             // ENTRY/seed (Mode-2): seed 2 fixed numbers, spawn 2 to Post (distinct minted execIds,
-            // swallow on exhaust), delete the inbound entry, return null. No author log (D4/LOG-04).
+            // FAIL-LOUD on transient send-exhaust), return null. PB-03: the framework owns the entry delete
+            // (pipeline null-return tail) — the author issues NO delete. No author log (D4/LOG-04).
             // D-01/D-02: seed the two FIXED execution values (100, 200). Every step's payload number = 1
             // (seeder data change, Plan 04) so each downstream hop increments by exactly +1, making the L2
             // value at each step deterministically seed + hop-count. Synthetic deterministic proof values
@@ -69,8 +70,7 @@ public sealed class SampleProcessor : BaseProcessor<SampleConfig>
                 var data = JsonSerializer.Serialize(new { number, label }, ProcessorConfig.SerializerOptions);
                 await this.SpawnToPost(this.NewResult(StepOutcome.Completed, data), Guid.NewGuid());   // mint per spawn (D-09)
             }
-            await this.DeleteEntry();
-            return null;   // req 3: spawn handled everything — skip the framework inline tail
+            return null;   // req 3: spawns handled the fan-out — framework owns the entry delete (PB-03 null-path tail)
         }
 
         // DOWNSTREAM (Mode-1): REUSE the inbound executionId, accumulate deterministically (NO random).
