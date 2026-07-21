@@ -1,15 +1,15 @@
 # Steps API
 
-## Current Milestone: v11.0.0 Kafka Binary Import/Export
+## Current Milestone: v11.0.0 Framework Data-Channel & Processor Boundary Hardening
 
-**Goal:** Add Kafka-sourced binary file import (and later export) to the pipeline, built on a foundational widening of the framework data channel from `string` to `byte[]`.
+**Goal:** Widen the framework data channel from `string` to `byte[]` (Phase 84, shipped), then harden the processor↔framework boundary so a fan-out hand-off can never silently drop a seeded execution and entry-lifecycle ownership lives entirely in the base (Phase 85). Kafka-sourced binary import/export is deferred to a future milestone — the `byte[]` channel is its prerequisite, now in place.
 
 **Target features:**
-- **`byte[]` data-channel widening** (Phase 84, foundational, framework-only): `DataResult.Data` becomes `byte[]` — the ground-truth type — with JSON/UTF-8 as an optional schema-driven lens (schema present → decode UTF-8 and validate as JSON; schema absent → opaque bytes). Base64 eliminated end-to-end. Verified **solely by the existing 7-scenario fault-recovery sweep** reproducing its all-PASS baseline (byte-for-byte equivalence of the existing string/JSON path is the whole acceptance bar).
-- **KafkaImporter processor** (Phase 85): a Mode-2 entry step triggered by the scheduler with `executionId == Guid.Empty`; pull-per-dispatch consume of ≤N messages (each a binary file), mint an `executionId` per file, write bytes directly to L2, hand off a reference (data never rides the bus), and **commit the Kafka offset per-message only after that file's store + hand-off is confirmed** (fail-loud hand-off replacing `SpawnToPost`'s best-effort swallow). Kafka runs as a standalone container (not in the k8s cluster), reached via `host.docker.internal:9092`.
-- **Later:** a file-manipulator step, then a **KafkaExporter** terminal step (L2 → ZIP → produce to topic).
+- **`byte[]` data-channel widening** (Phase 84 ✅ shipped 2026-07-21, framework-only): `DataResult.Data` becomes `byte[]` — the ground-truth type — with JSON/UTF-8 as an optional schema-driven lens (schema present → decode UTF-8 and validate as JSON; schema absent → opaque bytes). Base64 eliminated end-to-end. Verified **solely by the existing 7-scenario fault-recovery sweep** reproducing its all-PASS baseline (proven live on k8s, 7/7).
+- **Processor↔framework boundary hardening** (Phase 85): make the fan-out hand-off fail-loud so a seeded execution is never silently dropped, and move entry-lifecycle ownership fully into the base. `SpawnToPost` signals its outcome (no swallow-as-success); the pipeline nack-requeues the entry on a spawn send-exhaustion (ack only when all spawns succeed); entry deletion becomes framework-owned on all paths and the concrete `DeleteEntry` surface is removed. Net: the concrete processor's only job is *interpret input → business logic → return `DataResult`*. Framework-only + `Processor.Sample`; no Kafka.
+- **Deferred to a future Kafka milestone:** a `KafkaImporter` Mode-2 entry step (pull binary files from a standalone Kafka container, per-message commit built on Phase-85's fail-loud primitive), a file-manipulator step (needs `NextStepHandoff.Data` widened for binary through the orchestrator), and a `KafkaExporter` terminal step.
 
-**Requirements:** defined in REQUIREMENTS.md. **Phases:** continue from 83 (byte[] widening = 84; KafkaImporter = 85; manipulator/exporter later). Builds on the v10.0.0 k8s deployment.
+**Requirements:** DATA-01…05 (Phase 84, complete), PB-01…03 (Phase 85). See REQUIREMENTS.md. **Phases:** 84 (byte[] widening, done), 85 (boundary hardening). Builds on the v10.0.0 k8s deployment.
 
 ## Current State
 
