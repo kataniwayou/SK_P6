@@ -14,7 +14,7 @@ Milestone goal: widen the framework data channel from `string` to `byte[]` (Phas
 
 ### PB — Processor↔Framework Boundary Hardening — Phase 85
 
-- [ ] **PB-01**: `SpawnToPost` is **fail-loud** — it signals its spawn outcome to the caller (a transient send-exhaustion is reported via return value or a propagating exception), instead of swallowing the exhaustion as silent success. The drop telemetry hook (`OnSpawnDropped`) and the deterministic-fault throw are preserved.
+- [x] **PB-01**: `SpawnToPost` is **fail-loud** — it signals its spawn outcome to the caller (a transient send-exhaustion is reported via return value or a propagating exception), instead of swallowing the exhaustion as silent success. The drop telemetry hook (`OnSpawnDropped`) and the deterministic-fault throw are preserved.
 - [ ] **PB-02**: A Mode-2 fan-out entry is acked **only when every spawn succeeded**; a spawn send-exhaustion nack-requeues the entry dispatch (broker redelivery) rather than acking, so no seeded execution is silently lost. This replaces the old best-effort "the scheduler re-fires the whole entry" swallow with an at-least-once broker guarantee.
 - [ ] **PB-03**: Entry/source deletion is owned by the **framework on every completion path** (the Mode-1 inline tail *and* the Mode-2 null-return path), with the keeper DELETE escalation preserved. The concrete-processor `DeleteEntry` API, the `SampleProcessor` call to it, and the seam plumbing that existed solely for it (`SeamState.EntryId`, the `EscalateDelete` hook) are removed — the concrete processor no longer deletes entries.
 

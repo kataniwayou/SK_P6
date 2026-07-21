@@ -69,7 +69,7 @@
 Plans:
 **Wave 1**
 
-- [ ] 85-01-PLAN.md — PB-01 fail-loud SpawnToPost: add SpawnSendExhaustedException + flip transient-exhaust swallow→telemetry-then-throw; invert the seam fact + deterministic-negative fact (PB-01)
+- [x] 85-01-PLAN.md — PB-01 fail-loud SpawnToPost: add SpawnSendExhaustedException + flip transient-exhaust swallow→telemetry-then-throw; invert the seam fact + deterministic-negative fact (PB-01)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 

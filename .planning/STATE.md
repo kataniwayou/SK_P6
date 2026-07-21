@@ -4,13 +4,13 @@ milestone: v11.0.0
 milestone_name: Kafka Binary Import/Export
 status: executing
 stopped_at: Phase 85 context gathered
-last_updated: "2026-07-21T20:12:27.117Z"
-last_activity: 2026-07-21 -- Phase 85 planning complete
+last_updated: "2026-07-21T21:01:04.631Z"
+last_activity: 2026-07-21
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 7
-  completed_plans: 3
+  completed_plans: 4
   percent: 17
 ---
 
@@ -20,17 +20,17 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase --phase — 83
+**Current focus:** Phase 85 — processor-framework-boundary-hardening
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
 
 ## Current Position
 
-Phase: Not started (roadmap complete — ready to plan Phase 84)
-Plan: —
+Phase: 85 (processor-framework-boundary-hardening) — EXECUTING
+Plan: 2 of 4
 Status: Ready to execute
-Last activity: 2026-07-21 -- Phase 85 planning complete
+Last activity: 2026-07-21
 Current focus: Phase 84 — byte[] data-channel widening (first phase of v11.0.0)
 
 ### Quick Tasks Completed
@@ -705,7 +705,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [░░░░░░░░░░] 0%
+Progress: [██████░░░░] 57%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1085,6 +1085,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 83 P02 | 18min | 2 tasks | 1 files |
 | Phase 83 P03 | 3min | 2 tasks | 1 files |
 | Phase 83 P05 | 4min | 2 tasks | 9 files |
+| Phase 85 P01 | 35min | 2 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1635,6 +1636,7 @@ Recent decisions affecting current work:
 - 83-02: HA failover live verdict fact clones the analyzer ES/window/drain/write-then-assert scaffold and swaps only scoring — feeds two ES streams (exists-StepId leader sends + earliest post-kill role=leader flip) to the pure HaFireBucketScorer.Score, writes a string-Verdict phase-83-ha.json before asserting (exit 0/1/2)
 - 83-03: phase-aligned leader kill (~3s pre :00/:30 boundary) forces the cron tick into the ~11-17s election gap to deterministically prove HA-07 claim #3 without changing the locked */30 cron
 - 83-05: per-instance orchestrator fan-out endpoint names (base-instanceId) fixed the HA-07 replicas:3 RESOURCE_LOCKED blocker; removed literal EndpointName that bypassed the MassTransit 8.5.5 InstanceId formatter
+- [Phase ?]: PB-01: SpawnToPost fails loud on transient send-exhaust — fires OnSpawnDropped telemetry THEN throws SpawnSendExhaustedException (Exception-derived, ids-only ExecutionId+inner); deterministic faults still throw raw (D-03), IsTransientSendFault unchanged
 
 ### Roadmap Milestone Log
 
@@ -1746,9 +1748,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-21T19:41:57.160Z
+Last session: 2026-07-21T20:55:57.122Z
 Stopped at: Phase 85 context gathered
-Resume file: .planning/phases/85-processor-framework-boundary-hardening/85-CONTEXT.md
+Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
 **Phase 29 (Structured Execution-Scope Logging):** 5/5 plans complete — close gate GATE_EXIT=0 (405 Passed ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held; live scopeProof passes on a `processor-sample` Completed log); LOG-01..06 all complete. Awaiting orchestrator phase verification + `phase.complete`. Milestone v3.5.0 = 17/17 plans across phases 25-29.
