@@ -1,17 +1,15 @@
 # Steps API
 
-## Current Milestone: v10.0.0 Orchestrator High Availability
+## Current Milestone: v11.0.0 Kafka Binary Import/Export
 
-**Goal:** Run the orchestrator as N≥2 replicas with single-leader mutual exclusion so horizontal scaling never produces duplicate workflow triggers, with fast failover and role-tagged observability.
+**Goal:** Add Kafka-sourced binary file import (and later export) to the pipeline, built on a foundational widening of the framework data channel from `string` to `byte[]`.
 
 **Target features:**
-- Leader election over a `coordination.k8s.io/v1` Lease via the `KubernetesClient` `LeaderElector` (`RunAndTryToHoldLeadershipForeverAsync`) hosted in a `BackgroundService`; single-writer volatile `LeaderState` snapshot (all replicas start as followers).
-- Leader-only gate on `WorkflowFireJob`'s entry-step send loop (the sole duplication source — each replica's Quartz fires the same cron and mints a fresh random correlationId); `RelocateTail`/step-advancement stays ungated so in-flight workflows never stall on failover.
-- `attributes.role = leader|follower` on every orchestrator log via an OTel `LogRecord` enricher (mirrors `ProcessorIdLogEnricher`).
-- RBAC for `leases` in `skp` + orchestrator Deployment scaled to N≥2; new `KubernetesClient` dependency.
-- Failover proof: kill the leader mid-run, prove zero duplicate triggers (distinct per-fire correlationIds) + bounded single-leader recovery.
+- **`byte[]` data-channel widening** (Phase 84, foundational, framework-only): `DataResult.Data` becomes `byte[]` — the ground-truth type — with JSON/UTF-8 as an optional schema-driven lens (schema present → decode UTF-8 and validate as JSON; schema absent → opaque bytes). Base64 eliminated end-to-end. Verified **solely by the existing 7-scenario fault-recovery sweep** reproducing its all-PASS baseline (byte-for-byte equivalence of the existing string/JSON path is the whole acceptance bar).
+- **KafkaImporter processor** (Phase 85): a Mode-2 entry step triggered by the scheduler with `executionId == Guid.Empty`; pull-per-dispatch consume of ≤N messages (each a binary file), mint an `executionId` per file, write bytes directly to L2, hand off a reference (data never rides the bus), and **commit the Kafka offset per-message only after that file's store + hand-off is confirmed** (fail-loud hand-off replacing `SpawnToPost`'s best-effort swallow). Kafka runs as a standalone container (not in the k8s cluster), reached via `host.docker.internal:9092`.
+- **Later:** a file-manipulator step, then a **KafkaExporter** terminal step (L2 → ZIP → produce to topic).
 
-**Requirements:** HA-01..HA-07 (REQUIREMENTS.md). **Phases:** 82 (leader election), 83 (failover proof). Builds on v9.0.0 (k8s deploy, phases 80-81, complete-but-unarchived).
+**Requirements:** defined in REQUIREMENTS.md. **Phases:** continue from 83 (byte[] widening = 84; KafkaImporter = 85; manipulator/exporter later). Builds on the v10.0.0 k8s deployment.
 
 ## Current State
 
