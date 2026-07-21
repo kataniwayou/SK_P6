@@ -38,8 +38,9 @@ internal static class DispatchTestKit
     /// A test-double <see cref="BaseProcessor{DummyConfig}"/> whose typed Pre <c>ProcessAsync</c> seam either
     /// returns a configurable <see cref="DataResult"/>? (recording the validatedData/executionId it was called
     /// with), throws (the throw ctor serves BOTH the <c>ProcessStatusException</c> family AND the
-    /// unexpected-exception case), or runs a caller-supplied delegate that may call <c>this.SpawnToPost</c> /
-    /// <c>this.DeleteEntry</c> and return null (a Mode-2 fake). The framework deserializes the dispatch payload
+    /// unexpected-exception case), or runs a caller-supplied delegate that may call <c>this.SpawnToPost</c>
+    /// and return null (a Mode-2 fake). PB-03: entry deletion is framework-owned, so the double exposes no
+    /// delete helper. The framework deserializes the dispatch payload
     /// into a <see cref="DummyConfig"/> before invoking the seam — the double is deserialize-inert (no field).
     /// </summary>
     public sealed class FakeProcessor : BaseProcessor<DummyConfig>
@@ -67,8 +68,9 @@ internal static class DispatchTestKit
             };
 
         /// <summary>A Mode-2 fake: the delegate receives THIS processor so it can call <c>SpawnToPost</c> /
-        /// <c>DeleteEntry</c> / <c>NewResult</c> (the framework wired the seam state before the call) and
-        /// return a <see cref="DataResult"/>? (typically null after a spawn).</summary>
+        /// <c>NewResult</c> (the framework wired the seam state before the call) and return a
+        /// <see cref="DataResult"/>? (typically null after a spawn). PB-03: the entry delete is framework-owned
+        /// (pipeline null-path tail) — the delegate no longer deletes.</summary>
         public FakeProcessor(Func<FakeProcessor, Guid, Task<DataResult?>> impl)
             => _impl = (validatedData, config, executionId, ct) =>
             {
@@ -87,9 +89,6 @@ internal static class DispatchTestKit
         /// <summary>Author-callable wrapper over the protected <c>SpawnToPost</c> so a Mode-2 fact delegate can
         /// spawn to the <c>-post</c> queue through the framework-wired seam state.</summary>
         public Task SpawnToPostAsync(DataResult result, Guid executionId) => SpawnToPost(result, executionId);
-
-        /// <summary>Author-callable wrapper over the protected <c>DeleteEntry</c>.</summary>
-        public Task DeleteEntryAsync() => DeleteEntry();
 
         /// <summary>Author-callable wrapper over the protected <c>NewResult</c> factory.</summary>
         public DataResult NewResultPublic(StepOutcome outcome, string data) => NewResult(outcome, data);

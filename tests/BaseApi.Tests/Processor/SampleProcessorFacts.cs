@@ -16,9 +16,10 @@ namespace BaseApi.Tests.Processor;
 /// payload into a <see cref="SampleConfig"/> and invokes the typed transform — exactly as the pipeline does):
 /// <list type="bullet">
 ///   <item><b>ENTRY</b> (<c>executionId == Guid.Empty</c>, Mode-2): spawns EXACTLY TWO completed
-///   <see cref="DataResult"/>s to the <c>-post</c> queue with DISTINCT executionIds, DELETES the inbound entry,
-///   and the seam returns NULL (the Pre consumer writes/sends/deletes nothing inline). Seeds the TWO FIXED
-///   deterministic values <c>100</c> and <c>200</c> (Phase 73, D-01).</item>
+///   <see cref="DataResult"/>s to the <c>-post</c> queue with DISTINCT executionIds and the seam returns NULL.
+///   PB-03: the author issues NO entry delete at the seam level — deletion is framework-owned (the pipeline
+///   null-return tail, covered in PrePipelineFacts). Seeds the TWO FIXED deterministic values <c>100</c> and
+///   <c>200</c> (Phase 73, D-01).</item>
 ///   <item><b>DOWNSTREAM</b> (<c>executionId != Guid.Empty</c>, Mode-1): returns ONE completed
 ///   <see cref="DataResult"/> reusing the inbound executionId (the inline tail runs it), no spawn, no delete,
 ///   producing <c>7 + 3 = 10</c>.</item>
@@ -33,30 +34,27 @@ public sealed class SampleProcessorFacts
 {
     private static void WireSeam(
         BaseProcessorBase processor, IDatabase db, DispatchTestKit.CapturingSendProvider send,
-        Guid entryId, Guid processorId)
+        Guid processorId)
         => processor.SetSeamState(
             db, send, retryLimit: 3,
-            entryId: entryId,
             processorId: processorId,
             messageId: Guid.NewGuid(),
             workflowId: Guid.NewGuid(),
             stepId: Guid.NewGuid(),
             correlationId: Guid.NewGuid(),
-            onSpawnDropped: _ => { },
-            escalateDelete: () => Task.CompletedTask);
+            onSpawnDropped: _ => { });
 
     [Fact]
-    public async Task Entry_Spawns_Two_Distinct_ExecIds_DeletesEntry_ReturnsNull()
+    public async Task Entry_Spawns_Two_Distinct_ExecIds_NoAuthorDelete_ReturnsNull()
     {
         var ct = TestContext.Current.CancellationToken;
         var processor = new SampleProcessor();
 
-        var entryId = Guid.NewGuid();
         var processorId = Guid.NewGuid();
         var db = Substitute.For<IDatabase>();
         db.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
         var send = new DispatchTestKit.CapturingSendProvider();
-        WireSeam(processor, db, send, entryId, processorId);
+        WireSeam(processor, db, send, processorId);
 
         // ENTRY: executionId == Guid.Empty → Mode-2 fan-out.
         var payload = JsonSerializer.Serialize(new { number = 10, label = "Step_A1" }, ProcessorConfig.SerializerOptions);
@@ -75,8 +73,9 @@ public sealed class SampleProcessorFacts
             .OrderBy(n => n)
             .ToArray();
         Assert.Equal(new[] { 100, 200 }, seededNumbers);
-        // the inbound entry was deleted (Mode-2 DeleteEntry).
-        await db.Received(1).KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
+        // PB-03: at the seam level (author-only, no pipeline) the author issues NO entry delete — deletion is
+        // framework-owned on the pipeline null-return path (proven in PrePipelineFacts), not here.
+        await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());
     }
 
     [Fact]
@@ -85,11 +84,10 @@ public sealed class SampleProcessorFacts
         var ct = TestContext.Current.CancellationToken;
         var processor = new SampleProcessor();
 
-        var entryId = Guid.NewGuid();
         var db = Substitute.For<IDatabase>();
         db.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
         var send = new DispatchTestKit.CapturingSendProvider();
-        WireSeam(processor, db, send, entryId, Guid.NewGuid());
+        WireSeam(processor, db, send, Guid.NewGuid());
 
         var inboundExec = Guid.NewGuid();
         var payload = JsonSerializer.Serialize(new { number = 3, label = "Step_B" }, ProcessorConfig.SerializerOptions);
@@ -103,7 +101,7 @@ public sealed class SampleProcessorFacts
         Assert.Equal(10, doc.RootElement.GetProperty("number").GetInt32());   // 7 + 3, NO random
 
         Assert.Empty(send.SentData);                               // no spawn (Mode-1)
-        await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());   // no DeleteEntry inline
+        await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());   // Mode-1 seam issues no delete
     }
 
     [Fact]
@@ -115,7 +113,7 @@ public sealed class SampleProcessorFacts
         var db = Substitute.For<IDatabase>();
         db.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(true);
         var send = new DispatchTestKit.CapturingSendProvider();
-        WireSeam(processor, db, send, Guid.NewGuid(), Guid.NewGuid());
+        WireSeam(processor, db, send, Guid.NewGuid());
 
         // empty payload → null config (baseNumber 0); still ENTRY (Guid.Empty) → two spawns.
         var dr = await ((BaseProcessorBase)processor).ExecuteAsync(

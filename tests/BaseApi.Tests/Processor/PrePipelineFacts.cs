@@ -19,7 +19,8 @@ namespace BaseApi.Tests.Processor;
 ///   entry → return WITHOUT processing.</item>
 ///   <item>req 2 — read L2[entryId]: a fault → REINJECT; an input-schema failure → exactly one StepFailed AND
 ///   <b>NO entry delete</b> (C-2 — the entry is left to its TTL).</item>
-///   <item>req 3 — seam returns null (Mode-2 handled spawn) → NO write, NO send, NO delete.</item>
+///   <item>req 3 — seam returns null (Mode-2 handled spawn) → NO write, NO send; PB-03: the FRAMEWORK deletes
+///   L2[entryId] on the null path (skipped for a Guid.Empty source; delete-exhaust → DELETE keeper).</item>
 ///   <item>req 4 — completed → write OutputData(messageId) once + StepCompleted + delete L2[entryId];
 ///   delete-exhaust → DELETE; write-exhaust → INJECT (no StepCompleted, no entry delete).</item>
 /// </list>
@@ -134,23 +135,62 @@ public sealed class PrePipelineFacts
     // ---- req 3 ----
 
     [Fact]
-    public async Task SeamReturnsNull_NoWrite_NoSend_NoDelete()
+    public async Task SeamReturnsNull_Source_NoWrite_NoSend_NoDelete()   // PB-03/D-04: Guid.Empty source → IsSource skip
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // A Guid.Empty SOURCE dispatch skips the gate/read (SourceStep.IsSource) and drives Mode-2. The
+        // framework null-path delete is guarded by !SourceStep.IsSource, so a source seed deletes NOTHING —
+        // net-effect IDENTICAL to the old no-op author DeleteEntry on a Guid.Empty seed (Pitfall 4).
+        var redis = DispatchTestKit.ReadWriteDeleteOkL2(new Dictionary<string, string>(), out var db);
+        var processor = new DispatchTestKit.FakeProcessor((DataResult?)null);   // Mode-2 handled everything
+        var send = new DispatchTestKit.CapturingSendProvider();
+
+        await Build(redis, Ctx(), processor, send).RunAsync(
+            DispatchTestKit.Dispatch(entryId: Guid.Empty, correlationId: Guid.NewGuid()), Guid.NewGuid(), ct);
+
+        Assert.True(processor.Invoked);             // the seam ran (and returned null)
+        Assert.Empty(send.Sent);                    // NO Step* send
+        Assert.Empty(send.SentKeeper);              // NO DELETE keeper (source skip, not an exhaust)
+        Assert.Empty(DispatchTestKit.ReceivedStringSets(db));                                    // NO output write
+        await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());   // NO entry delete (IsSource skip)
+    }
+
+    [Fact]
+    public async Task SeamReturnsNull_NonSource_FrameworkDeletesEntry()   // PB-03: the null-path delete is framework-owned
     {
         var ct = TestContext.Current.CancellationToken;
         var entryId = Guid.NewGuid();
         var redis = DispatchTestKit.ReadWriteDeleteOkL2(
             new Dictionary<string, string> { [L2ProjectionKeys.ExecutionData(entryId)] = "{}" }, out var db);
-        var processor = new DispatchTestKit.FakeProcessor((DataResult?)null);   // Mode-2 handled everything
+        var processor = new DispatchTestKit.FakeProcessor((DataResult?)null);   // Mode-2 returns null
+        var send = new DispatchTestKit.CapturingSendProvider();
+        var d = DispatchTestKit.Dispatch(entryId, correlationId: Guid.NewGuid());
+
+        await Build(redis, Ctx(), processor, send).RunAsync(d, Guid.NewGuid(), ct);
+
+        Assert.True(processor.Invoked);             // the seam ran (and returned null)
+        Assert.Empty(send.Sent);                    // still no inline Step* on the null path
+        Assert.Empty(send.SentKeeper);              // delete succeeded → no DELETE escalation
+        // PB-03: the FRAMEWORK deletes L2[entryId] on the Mode-2 null-return path (the author issues no delete).
+        await db.Received(1).KeyDeleteAsync(
+            (RedisKey)L2ProjectionKeys.ExecutionData(d.EntryId), Arg.Any<CommandFlags>());
+    }
+
+    [Fact]
+    public async Task SeamReturnsNull_NonSource_DeleteExhaust_EscalatesDelete()   // PB-03: the DELETE escalation moved to the null path
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var entryId = Guid.NewGuid();
+        var redis = DispatchTestKit.ReadOkDeleteFaultL2(
+            new Dictionary<string, string> { [L2ProjectionKeys.ExecutionData(entryId)] = "{}" }, out _);
+        var processor = new DispatchTestKit.FakeProcessor((DataResult?)null);   // Mode-2 returns null
         var send = new DispatchTestKit.CapturingSendProvider();
 
         await Build(redis, Ctx(), processor, send).RunAsync(
             DispatchTestKit.Dispatch(entryId, correlationId: Guid.NewGuid()), Guid.NewGuid(), ct);
 
-        Assert.True(processor.Invoked);             // the seam ran (and returned null)
-        Assert.Empty(send.Sent);                    // NO Step* send
-        Assert.Empty(send.SentKeeper);
-        Assert.Empty(DispatchTestKit.ReceivedStringSets(db));                                    // NO output write
-        await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>());   // NO entry delete
+        Assert.Empty(send.Sent);                                    // no inline Step* on the null path
+        Assert.Single(send.SentKeeper.OfType<KeeperDelete>());      // delete-exhaust → exactly one DELETE (escalation now on the null path)
     }
 
     // ---- req 4 ----
