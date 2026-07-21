@@ -20,7 +20,7 @@ public sealed class BadConfigProcessor(ILogger<BadConfigProcessor> logger) : Bas
 {
     /// <inheritdoc/>
     protected override Task<DataResult?> ProcessAsync(
-        string validatedData, BadConfig? config, Guid executionId, CancellationToken ct)
+        byte[] validatedData, BadConfig? config, Guid executionId, CancellationToken ct)
     {
         // Dead path — Gate A withholds the queue bind so this is never invoked. Trivial completed result
         // (Phase 70: one-or-null seam; framework stamps ids/messageId via NewResult).

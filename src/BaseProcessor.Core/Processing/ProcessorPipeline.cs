@@ -82,10 +82,10 @@ public sealed class ProcessorPipeline(
         // processing (no result, no fault) — silently breaking every source round-trip. Restored here to the
         // pre-Phase-70 "Forward — Pre" contract ("a SourceStep.IsSource Guid.Empty dispatch skips the L2 read
         // with empty validatedData"). Downstream (non-source) steps still gate+read their relocated L2 input.
-        string validatedData;
+        byte[] validatedData;
         if (SourceStep.IsSource(d.EntryId))
         {
-            validatedData = string.Empty;
+            validatedData = Array.Empty<byte>();
         }
         else
         {
@@ -126,7 +126,7 @@ public sealed class ProcessorPipeline(
                 }
                 var raw = await db.StringGetAsync(L2ProjectionKeys.ExecutionData(d.EntryId));
                 if (raw.IsNullOrEmpty) throw new KeyAbsentException();   // A2: unify absent/empty with a Redis fault
-                return raw.ToString();
+                return (byte[])raw!;   // Phase 84 D-01: RedisValue→byte[] explicit; ground-truth payload stays binary
             }, limit, ct);
             if (!read.Succeeded) { await SendKeeper(BuildReinject(d, messageId), limit, ct); return; }
             validatedData = read.Value!;

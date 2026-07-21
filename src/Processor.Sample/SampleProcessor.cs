@@ -37,7 +37,7 @@ public sealed class SampleProcessor : BaseProcessor<SampleConfig>
 {
     /// <inheritdoc/>
     protected override async Task<DataResult?> ProcessAsync(
-        string validatedData, SampleConfig? config, Guid executionId, CancellationToken ct)
+        byte[] validatedData, SampleConfig? config, Guid executionId, CancellationToken ct)
     {
         // TEST-ONLY fault hook (env-gated, DEFAULT OFF). When PROCESSOR_STEP_DELAY_MS > 0, hold each hop
         // mid-consume BEFORE any log/spawn/result so this fast pipeline exposes a catchable in-flight window:

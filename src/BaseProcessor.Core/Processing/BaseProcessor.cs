@@ -20,7 +20,8 @@ namespace BaseProcessor.Core.Processing;
 /// Phase 70 (D-03/D-05/D-06): the seam now returns <see cref="DataResult"/>? (one-or-null), and the
 /// base exposes the two protected author helpers <see cref="SpawnToPost"/> (Mode-2 spawn to the
 /// <c>-post</c> queue, SWALLOW on send-exhaust — D-07) and <see cref="DeleteEntry"/> (delete L2[entryId],
-/// escalate to the DELETE keeper on exhaust — D-08), plus the <see cref="NewResult"/> factory that stamps
+/// escalate to the DELETE keeper on exhaust — D-08), plus the <see cref="NewResult(StepOutcome, byte[])"/>
+/// factory (and its D-02 <see cref="NewResult(StepOutcome, string)"/> encode-on-write overload) that stamps
 /// the ambient ids + carried messageId so the author writes no id/envelope plumbing. The framework
 /// populates the per-dispatch state below (via <c>ProcessorPipeline.SetSeamState</c>) BEFORE invoking the
 /// seam; the author never sets it.
@@ -81,7 +82,7 @@ public abstract class BaseProcessor
     /// <see cref="DataResult"/> (downstream) or <c>null</c> (the author handled spawn+handoff — D-05).
     /// </summary>
     internal abstract Task<DataResult?> ExecuteAsync(
-        string validatedData, string payload, Guid executionId, CancellationToken ct);
+        byte[] validatedData, string payload, Guid executionId, CancellationToken ct);
 
     /// <summary>D-06/D-07/D-09: send a <see cref="DataResult"/> to the Post-Process queue
     /// (<c>queue:{processorId:D}-post</c>), overriding the outbound envelope MessageId with the result's

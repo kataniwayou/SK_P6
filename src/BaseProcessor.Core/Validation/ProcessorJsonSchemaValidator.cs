@@ -23,11 +23,13 @@ public static class ProcessorJsonSchemaValidator
     public static EvaluationOptions DefaultOptions { get; } = new() { OutputFormat = OutputFormat.List };
 
     /// <summary>
-    /// D-06: null/whitespace <paramref name="definition"/> -> true (skip validation). An unparseable
-    /// definition -> false (never a crash). Otherwise evaluates <paramref name="data"/> and returns
-    /// IsValid; on failure, <paramref name="errors"/> carries the flattened messages.
+    /// D-06: null/whitespace <paramref name="definition"/> -> true (skip validation — Phase 84 D-04: opaque
+    /// bytes are NEVER decoded without a schema). An unparseable definition -> false (never a crash).
+    /// Otherwise decodes <paramref name="data"/> as UTF-8 JSON via <c>JsonDocument.Parse(byte[])</c> and
+    /// returns IsValid; bad UTF-8 OR bad JSON both raise <see cref="JsonException"/> → business Failed
+    /// (D-04, no new error surface). On failure, <paramref name="errors"/> carries the flattened messages.
     /// </summary>
-    public static bool TryValidate(string? definition, string data, out IReadOnlyList<string> errors)
+    public static bool TryValidate(string? definition, byte[] data, out IReadOnlyList<string> errors)
     {
         errors = Array.Empty<string>();
 
@@ -43,11 +45,11 @@ public static class ProcessorJsonSchemaValidator
         }
 
         JsonDocument doc;
-        try { doc = JsonDocument.Parse(data); }
+        try { doc = JsonDocument.Parse(data); }   // D-04: byte[] ⇒ ReadOnlyMemory<byte> UTF-8 overload
         catch (JsonException)
         {
-            errors = new[] { "Data is not valid JSON." };
-            return false;  // malformed data -> business Failed, never a crash
+            errors = new[] { "Data is not valid JSON/UTF-8." };
+            return false;  // malformed UTF-8 OR JSON -> business Failed, never a crash (D-04)
         }
 
         using (doc)

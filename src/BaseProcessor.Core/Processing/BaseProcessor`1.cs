@@ -18,7 +18,7 @@ public abstract class BaseProcessor<TConfig> : BaseProcessor
     where TConfig : ProcessorConfig   // reference-type/marker constraint → null representable (D-04, Pattern 4)
 {
     internal sealed override Task<DataResult?> ExecuteAsync(
-        string validatedData, string payload, Guid executionId, CancellationToken ct)
+        byte[] validatedData, string payload, Guid executionId, CancellationToken ct)
     {
         TConfig? config = string.IsNullOrWhiteSpace(payload)              // D-04 guard BEFORE deserialize
             ? null
@@ -28,13 +28,15 @@ public abstract class BaseProcessor<TConfig> : BaseProcessor
 
     /// <summary>
     /// The typed In-Process transform seam (D-02). The author overrides ONLY this. Receives the
-    /// input-schema-validated L2 blob (<paramref name="validatedData"/>, still a raw string — input typing
-    /// is out of scope) and the framework-deserialized <paramref name="config"/> (null when the payload was
+    /// input-schema-validated L2 blob (<paramref name="validatedData"/>, the ground-truth <c>byte[]</c>
+    /// payload — Phase 84 D-01; JSON/UTF-8 is an optional schema lens over it, decode via
+    /// <c>System.Text.Json.JsonDocument.Parse(byte[])</c> or the D-02 string edge helpers) and the
+    /// framework-deserialized <paramref name="config"/> (null when the payload was
     /// empty/whitespace/absent). <paramref name="executionId"/> is the inbound dispatch's per-instance id:
     /// <c>Guid.Empty</c> means ENTRY/seed (mint fresh ids per spawned execution); a non-empty value means
     /// DOWNSTREAM (reuse it unchanged to preserve the instance lineage). May THROW a
     /// <c>ProcessStatusException</c> to abort the batch.
     /// </summary>
     protected abstract Task<DataResult?> ProcessAsync(
-        string validatedData, TConfig? config, Guid executionId, CancellationToken ct);
+        byte[] validatedData, TConfig? config, Guid executionId, CancellationToken ct);
 }
