@@ -19,7 +19,8 @@ namespace BaseProcessor.Core.Processing;
 /// <para>
 /// Phase 70 (D-03/D-05/D-06): the seam now returns <see cref="DataResult"/>? (one-or-null), and the
 /// base exposes the two protected author helpers <see cref="SpawnToPost"/> (Mode-2 spawn to the
-/// <c>-post</c> queue, SWALLOW on send-exhaust — D-07) and <see cref="DeleteEntry"/> (delete L2[entryId],
+/// <c>-post</c> queue, FAIL-LOUD on transient send-exhaust — PB-01/D-01: fire the drop-telemetry hook
+/// then THROW <see cref="SpawnSendExhaustedException"/>) and <see cref="DeleteEntry"/> (delete L2[entryId],
 /// escalate to the DELETE keeper on exhaust — D-08), plus the <see cref="NewResult(StepOutcome, byte[])"/>
 /// factory (and its D-02 <see cref="NewResult(StepOutcome, string)"/> encode-on-write overload) that stamps
 /// the ambient ids + carried messageId so the author writes no id/envelope plumbing. The framework
@@ -87,8 +88,9 @@ public abstract class BaseProcessor
     /// <summary>D-06/D-07/D-09: send a <see cref="DataResult"/> to the Post-Process queue
     /// (<c>queue:{processorId:D}-post</c>), overriding the outbound envelope MessageId with the result's
     /// MessageId (req 11). The author mints the distinct <paramref name="executionId"/> per spawn (D-09).
-    /// Bounded <see cref="RetryLoop"/> then SWALLOW on send-exhaust (no throw, no keeper) — the scheduler
-    /// re-fires the whole entry (Mode-2 is best-effort).</summary>
+    /// Bounded <see cref="RetryLoop"/> then, on a TRANSIENT send-exhaust, fire the <c>OnSpawnDropped</c>
+    /// telemetry hook and THROW <see cref="SpawnSendExhaustedException"/> (PB-01/D-01 fail-loud) so the exhaust
+    /// propagates → nack-requeue instead of being silently swallowed. A DETERMINISTIC fault still throws raw.</summary>
     protected async Task SpawnToPost(DataResult result, Guid executionId)
     {
         var s = Seam;
@@ -113,7 +115,12 @@ public abstract class BaseProcessor
         // would fail identically on every re-fire and be silently lost forever, so let it surface →
         // ProcessAsync faults → broker redelivery (and a real stack trace), instead of a warn+counter.
         if (!IsTransientSendFault(sent.Error)) throw sent.Error!;
-        s.OnSpawnDropped?.Invoke(spawn.ExecutionId);   // SWALLOW (log+counter); scheduler re-fires
+        // PB-01/D-01: fail-loud on a TRANSIENT send-exhaust. Fire the telemetry hook FIRST (SC-1 ordering —
+        // the drop counter/warn must still fire), THEN throw the dedicated escape signal so the exhaust
+        // propagates through ProcessAsync → ProcessorPipeline (Plan 02) → nack-requeue, instead of being
+        // silently swallowed as best-effort success.
+        s.OnSpawnDropped?.Invoke(spawn.ExecutionId);   // telemetry PRESERVED — MUST fire before the throw
+        throw new SpawnSendExhaustedException(spawn.ExecutionId, sent.Error!);   // transient → fail-loud (D-01)
     }
 
     /// <summary>WR-01: is this an exhausted-send fault we may SWALLOW (transient transport/Redis), as opposed
