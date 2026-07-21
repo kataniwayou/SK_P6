@@ -77,7 +77,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 85-03-PLAN.md — PB-03 framework-owned delete: remove DeleteEntry/EntryId/EscalateDelete + SampleProcessor call; move delete-then-escalate onto the null path (IsSource skip); flip/remove/re-express the DeleteEntry tests in lockstep (PB-03)
+- [x] 85-03-PLAN.md — PB-03 framework-owned delete: remove DeleteEntry/EntryId/EscalateDelete + SampleProcessor call; move delete-then-escalate onto the null path (IsSource skip); flip/remove/re-express the DeleteEntry tests in lockstep (PB-03)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
