@@ -58,7 +58,12 @@
   2. A Mode-2 entry step acks its dispatch only when every spawn succeeded; a spawn send-exhaustion nack-requeues the entry (broker redelivery) so the whole seed re-fires — no seeded execution is silently dropped. A hermetic fact proves a defeated spawn nack-requeues rather than acks. (PB-02)
   3. Entry/source deletion is framework-owned on every completion path (Mode-1 + Mode-2 null-return) with the keeper DELETE escalation preserved; the concrete `DeleteEntry` API, its `SampleProcessor` call, and its seam plumbing (`EntryId`, `EscalateDelete`) are removed — entry deletion still happens, via the base. (PB-03)
   4. The existing 7-scenario fault-recovery sweep still reproduces its all-PASS baseline (no happy-path regression — `Processor.Sample` is what the sweep drives). [verification gate, alongside the PB-02 fail-loud hermetic fact]
-**Plans**: TBD
+**Plans**: 4 plans (waves 1-4)
+Plans:
+- [ ] 85-01-PLAN.md — PB-01 fail-loud SpawnToPost: add SpawnSendExhaustedException + flip transient-exhaust swallow→telemetry-then-throw; invert the seam fact + deterministic-negative fact (PB-01)
+- [ ] 85-02-PLAN.md — PB-02 nack: narrow `catch (SpawnSendExhaustedException){throw;}` between the ProcessStatusException and generic catches + D-05 nack fact + explicit D-03 negative control (PB-02)
+- [ ] 85-03-PLAN.md — PB-03 framework-owned delete: remove DeleteEntry/EntryId/EscalateDelete + SampleProcessor call; move delete-then-escalate onto the null path (IsSource skip); flip/remove/re-express the DeleteEntry tests in lockstep (PB-03)
+- [ ] 85-04-PLAN.md — SC-4 terminal gate: full hermetic suite green + detached 7-scenario phase-68 sweep reproducing all-PASS (Missing==0, Duplicates==0); operator-confirmed (PB-01, PB-02, PB-03)
 
 ## ✅ v7.0.0 Per-Replica Processor Liveness & Self-Watchdog (CLOSED 2026-06-14 — audit-override; full record [milestones/v7.0.0-ROADMAP.md](milestones/v7.0.0-ROADMAP.md))
 
