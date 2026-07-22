@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v11.0.0
 milestone_name: Kafka Binary Import/Export
-status: executing
-stopped_at: Completed 85-03-PLAN.md
-last_updated: "2026-07-21T21:34:19.737Z"
+status: milestone_complete
+stopped_at: Milestone complete (Phase 85 was final phase)
+last_updated: 2026-07-22T06:16:07.587Z
 last_activity: 2026-07-21
 progress:
   total_phases: 6
   completed_phases: 1
   total_plans: 7
-  completed_plans: 6
+  completed_plans: 7
   percent: 17
 ---
 
@@ -20,17 +20,17 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase 85 — processor-framework-boundary-hardening
+**Current focus:** Milestone complete
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
 
 ## Current Position
 
-Phase: 85 (processor-framework-boundary-hardening) — EXECUTING
-Plan: 4 of 4
-Status: Ready to execute
-Last activity: 2026-07-21
+Phase: 85
+Plan: Not started
+Status: Milestone complete
+Last activity: 2026-07-22
 Current focus: Phase 84 — byte[] data-channel widening (first phase of v11.0.0)
 
 ### Quick Tasks Completed
@@ -734,7 +734,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 
 **Velocity:**
 
-- Total plans completed: 289
+- Total plans completed: 293
 - Average duration: —
 - Total execution time: —
 
@@ -819,6 +819,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | 81 | 4 | - | - |
 | 82 | 4 | - | - |
 | 83 | 5 | - | - |
+| 85 | 4 | - | - |
 
 **Recent Trend:**
 

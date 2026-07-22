@@ -81,7 +81,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 85-04-PLAN.md — SC-4 terminal gate: full hermetic suite green + detached 7-scenario phase-68 sweep reproducing all-PASS (Missing==0, Duplicates==0); operator-confirmed (PB-01, PB-02, PB-03)
+- [x] 85-04-PLAN.md — SC-4 terminal gate: full hermetic suite green + detached 7-scenario phase-68 sweep reproducing all-PASS (Missing==0, Duplicates==0); operator-confirmed (PB-01, PB-02, PB-03)
 
 ## ✅ v7.0.0 Per-Replica Processor Liveness & Self-Watchdog (CLOSED 2026-06-14 — audit-override; full record [milestones/v7.0.0-ROADMAP.md](milestones/v7.0.0-ROADMAP.md))
 
