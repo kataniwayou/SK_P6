@@ -77,13 +77,14 @@ public sealed class SampleProcessor : BaseProcessor<SampleConfig>
                 }
                 catch (SpawnSendExhaustedException ex)
                 {
-                    // EXPERIMENT (Option B, illustrative — NOT the shipped contract): take per-execution
-                    // ownership of the exhaust outcome instead of letting it propagate. ex.ExecutionId names
-                    // the one spawn whose hand-off failed; we DROP it and CONTINUE, so the seed acks rather
-                    // than nack-requeuing the whole batch. This intentionally REVERTS the PB-01/02 framework
-                    // no-loss nack for the Mode-2 fan-out — the dropped execution is LOST unless the source
-                    // (here: the scheduler seed, which does NOT re-drive it) commits/redelivers per message.
-                    _ = ex.ExecutionId;   // read-only: identifies the failed spawn (no author log — D4/LOG-04)
+                    // Option-C (catch + PROPAGATE): the author DETECTS the per-spawn exhaust (ex.ExecutionId
+                    // names the failed spawn — the per-message decision hook), then RE-THROWS the SAME
+                    // exception so it escapes ProcessAsync → ProcessorPipeline's narrow SpawnSendExhaustedException
+                    // catch → RabbitMQ nack-requeue → the whole seed is redelivered + retried (no-loss recovery
+                    // restored). Bare `throw;` preserves the type; a new/wrapped exception would miss the narrow
+                    // catch and fall to the generic catch → StepFailed+ack (NO redelivery).
+                    _ = ex.ExecutionId;   // per-message detection point (no author log — D4/LOG-04)
+                    throw;
                 }
             }
             return null;   // req 3: spawns handled the fan-out — framework owns the entry delete (PB-03 null-path tail)
