@@ -67,8 +67,24 @@ public sealed class SampleProcessor : BaseProcessor<SampleConfig>
 
             foreach (var number in numbers)
             {
-                var data = JsonSerializer.Serialize(new { number, label }, ProcessorConfig.SerializerOptions);
-                await this.SpawnToPost(this.NewResult(StepOutcome.Completed, data), Guid.NewGuid());   // mint per spawn (D-09)
+                var execId = Guid.NewGuid();   // mint per spawn (D-09)
+                var data   = JsonSerializer.Serialize(new { number, label }, ProcessorConfig.SerializerOptions);
+                try
+                {
+                    await this.SpawnToPost(this.NewResult(StepOutcome.Completed, data), execId);
+                    // SUCCESS: this spawn is durably enqueued on the -post queue. A Kafka author would
+                    // commit THIS message's offset here (per-message exactly-ish), keeping earlier successes.
+                }
+                catch (SpawnSendExhaustedException ex)
+                {
+                    // EXPERIMENT (Option B, illustrative — NOT the shipped contract): take per-execution
+                    // ownership of the exhaust outcome instead of letting it propagate. ex.ExecutionId names
+                    // the one spawn whose hand-off failed; we DROP it and CONTINUE, so the seed acks rather
+                    // than nack-requeuing the whole batch. This intentionally REVERTS the PB-01/02 framework
+                    // no-loss nack for the Mode-2 fan-out — the dropped execution is LOST unless the source
+                    // (here: the scheduler seed, which does NOT re-drive it) commits/redelivers per message.
+                    _ = ex.ExecutionId;   // read-only: identifies the failed spawn (no author log — D4/LOG-04)
+                }
             }
             return null;   // req 3: spawns handled the fan-out — framework owns the entry delete (PB-03 null-path tail)
         }
