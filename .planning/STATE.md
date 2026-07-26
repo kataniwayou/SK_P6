@@ -4,7 +4,7 @@ milestone: v12.0.0
 milestone_name: Resilience & Health-Probe Hardening
 status: executing
 stopped_at: Completed 86-05-PLAN.md
-last_updated: "2026-07-26T16:28:34.846Z"
+last_updated: "2026-07-26T16:35:18.861Z"
 last_activity: 2026-07-26
 progress:
   total_phases: 3
@@ -1094,6 +1094,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 86 P02 | 44min | 3 tasks | 5 files |
 | Phase 86 P05 | 80min | 2 tasks | 6 files |
 | Phase 86 P03 | 20min | 3 tasks | 3 files |
+| Phase 86 P04 | ~12min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1654,6 +1655,8 @@ Recent decisions affecting current work:
 - [Phase ?]: 86-05: baseapi /health/ready latches Postgres+Redis (sticky, restart-only); bus stays Degraded/unlatched; D-06 superseded
 - [Phase ?]: 86-05: dead-Redis WebApplicationFactory fixtures must inject via env-var (in-memory config silently loses to appsettings.Development localhost:6380 live)
 - [Phase ?]: 86-03: LoopLivenessHealthCheck resolves heartbeat+TimeProvider from the OUTER provider at check time; k=3 strict->= staleness boundary
+- [Phase 86]: 86-04: readiness latch threshold from ConsoleHealth:ReadinessLatchThreshold (default 5, matches k8s keeper readiness failureThreshold)
+- [Phase 86]: 86-04: RedisReadyHealthCheck bounds PingAsync via linked-CTS WaitAsync (~2s) — StackExchange.Redis 2.13.1 PingAsync has no CancellationToken overload
 
 ### Roadmap Milestone Log
 
