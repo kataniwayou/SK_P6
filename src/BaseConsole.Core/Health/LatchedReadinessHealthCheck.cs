@@ -31,8 +31,17 @@ namespace BaseConsole.Core.Health;
 /// </summary>
 public sealed class LatchedReadinessHealthCheck : IHealthCheck
 {
+    // Static-literal latched message (T-86-06): no dependency detail is ever surfaced.
+    private const string LatchedMessage =
+        "readiness latched (sustained dependency failure — restart required)";
+
     private readonly IHealthCheck _inner;
     private readonly int _failureThreshold;
+
+    // Per-process sticky state: MUST persist across probe polls, so this instance is a per-process
+    // singleton constructed ONCE by the caller (never per request — RESEARCH Pitfall 4).
+    private int _consecutiveFailures;
+    private volatile bool _latched;
 
     public LatchedReadinessHealthCheck(IHealthCheck inner, int failureThreshold)
     {
@@ -40,12 +49,33 @@ public sealed class LatchedReadinessHealthCheck : IHealthCheck
         _failureThreshold = failureThreshold;
     }
 
-    public Task<HealthCheckResult> CheckHealthAsync(
+    public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
-        // RED skeleton: pass-through, NO latch. _failureThreshold is captured for the 86-04 latch logic.
-        _ = _failureThreshold;
-        return _inner.CheckHealthAsync(context, cancellationToken);
+        // Once latched, never call the inner check again — the pod stays NotReady until an operator
+        // restart, defeating MassTransit/Redis auto-reconnect self-heal (HLTH-05, T-86-07).
+        if (_latched)
+        {
+            return HealthCheckResult.Unhealthy(LatchedMessage);
+        }
+
+        var result = await _inner.CheckHealthAsync(context, cancellationToken).ConfigureAwait(false);
+
+        if (result.Status == HealthStatus.Unhealthy)
+        {
+            // Count CONSECUTIVE failed evaluations; latch once the threshold is reached.
+            if (Interlocked.Increment(ref _consecutiveFailures) >= _failureThreshold)
+            {
+                _latched = true;
+                return HealthCheckResult.Unhealthy(LatchedMessage);
+            }
+
+            return result;
+        }
+
+        // Any non-Unhealthy result resets the consecutive counter — a transient blip does not latch.
+        Interlocked.Exchange(ref _consecutiveFailures, 0);
+        return result;
     }
 }
