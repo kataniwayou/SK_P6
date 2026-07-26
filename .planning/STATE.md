@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v11.0.0
-milestone_name: Kafka Binary Import/Export
-status: milestone_complete
-stopped_at: Milestone complete (Phase 85 was final phase)
-last_updated: 2026-07-22T06:16:07.587Z
-last_activity: 2026-07-21
+milestone: v12.0.0
+milestone_name: Resilience & Health-Probe Hardening
+status: in_progress
+stopped_at: Phase 86 planning
+last_updated: 2026-07-26T00:00:00.000Z
+last_activity: 2026-07-26
 progress:
-  total_phases: 6
-  completed_phases: 1
-  total_plans: 7
-  completed_plans: 7
-  percent: 17
+  total_phases: 1
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
