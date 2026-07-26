@@ -1,3 +1,4 @@
+using BaseConsole.Core.Health;
 using MassTransit;
 using Messaging.Contracts;
 using Microsoft.Extensions.Hosting;
@@ -26,10 +27,19 @@ public sealed class BitHealthLoop(
     RecoveryEndpointHandle endpointHandle,
     IOptions<ProbeOptions> opts,
     ILogger<BitHealthLoop> logger,
-    TimeProvider clock,
-    IKeeperLivenessState liveness,
+    ILivenessHeartbeat heartbeat,
+    IStartupGate startupGate,
     KeeperMetrics metrics) : BackgroundService
 {
+    // T-86-12 (Phase 86): a bounded budget for each edge bus-op. A dead broker can make
+    // Start().Ready / Publish / Stop hang indefinitely inside the tick; each is wrapped in
+    // WaitAsync(EdgeOpTimeout) so a single stuck edge cannot freeze the tick. Because the
+    // liveness beat now fires FIRST (top of tick, before any infra I/O), even a tick whose
+    // bounded edge-op times out still leaves a fresh beat — 3s ≪ the 15s (k=3 · 5s) stale
+    // window, and a healthy edge issues at most two bounded ops (≤6s) < 15s, so a hung broker
+    // can no longer starve the beat and trip a false /health/live restart.
+    private static readonly TimeSpan EdgeOpTimeout = TimeSpan.FromSeconds(3);
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // D-06: null = no prior tick, so the first probe is always treated as a transition (D-12). When that first
@@ -39,22 +49,33 @@ public sealed class BitHealthLoop(
         // This is locked by the GREEN BitHealthLoopTests "first healthy tick → 1 ResumeAll" assertion — do NOT
         // suppress it (WR-02: resolved-by-documentation, behavior intentionally unchanged).
         bool? prevHealthy = null;
+        bool firstBeat = true;
         var delay = TimeSpan.FromSeconds(opts.Value.DelaySeconds);  // OQ-2: reuse Probe:DelaySeconds
 
         while (!stoppingToken.IsCancellationRequested)
         {
+            // HLTH-03 / T-86-12 (Phase 86): beat the shared liveness watchdog FIRST — unconditionally, at the TOP of
+            // the tick, BEFORE ProbeOnceAsync and before any bounded edge bus-op. This is the fix for the original
+            // keeper bug: the old beat sat AFTER ProbeOnceAsync and the edge block, so a wedged probe or a hung
+            // broker edge-op froze the tick and starved the stamp → a false /health/live stale → a false restart.
+            // Beating first guarantees a fresh stamp on every iteration the loop reaches, independent of any infra I/O.
+            heartbeat.Beat();
+
+            // HLTH-06 (Phase 86): the keeper marks its startup gate ready on its FIRST beat (the base
+            // StartupCompletionService was removed from Program.cs), so /health/startup flips ready once the BIT loop
+            // is actually ticking rather than at bare host start. Idempotent latch; guarded to a single call.
+            if (firstBeat)
+            {
+                startupGate.MarkReady();
+                firstBeat = false;
+            }
+
             var healthy = await probe.ProbeOnceAsync(stoppingToken);   // RedisException → false INSIDE; non-Redis propagates
 
             // REQ-4 / D-11: keeper_l2_probe heartbeat — UNCONDITIONAL, once per tick (one per ProbeOnceAsync
             // call) regardless of healthy/unhealthy, OUTSIDE the edge guard, label-less. rate(keeper_l2_probe_total
-            // [5m]) > 0 proves the Keeper is actively probing L2. Same every-tick placement as liveness.Update.
+            // [5m]) > 0 proves the Keeper is actively probing L2.
             metrics.L2Probe.Add(1);
-
-            // Keeper self-watchdog stamp (260614-b5c): UNCONDITIONAL — every tick, OUTSIDE the edge guard,
-            // regardless of healthy/unhealthy. A hang in ProbeOnceAsync OR in the trailing Task.Delay below
-            // stops advancing this timestamp, so KeeperLivenessWatchdogHealthCheck flips /health/live stale.
-            // Only the stamp reads the clock; the trailing Task.Delay stays real-time.
-            liveness.Update(clock.GetUtcNow().UtcDateTime);
 
             if (prevHealthy != healthy)                                // EDGE: transition (or first tick) only
             {
@@ -64,33 +85,39 @@ public sealed class BitHealthLoop(
                     {
                         gate.Open();
                         // D-04 / KEEP-04: resume keeper-recovery consumption (drain). Start(ct) returns a
-                        // ReceiveEndpointHandle (NOT a Task) in 8.5.5; await its .Ready so a resume failure also
-                        // lands in the WR-01 catch and leaves prevHealthy un-advanced. Null-guarded for the brief
-                        // startup window before RecoveryEndpointBinder sets the handle (accepted residual T-52-11).
+                        // ReceiveEndpointHandle (NOT a Task) in 8.5.5; await its .Ready — BOUNDED via WaitAsync so a
+                        // wedged broker times out (→ WR-01 catch, prevHealthy un-advanced, idempotent retry) instead
+                        // of freezing the tick. Null-guarded for the brief startup window before RecoveryEndpointBinder
+                        // sets the handle (accepted residual T-52-11).
                         if (endpointHandle.Handle is { } h)
-                            await h.ReceiveEndpoint.Start(stoppingToken).Ready;
-                        await bus.Publish(new ResumeAll { CorrelationId = NewId.NextGuid() }, stoppingToken);
+                            await h.ReceiveEndpoint.Start(stoppingToken).Ready.WaitAsync(EdgeOpTimeout, stoppingToken);
+                        await bus.Publish(new ResumeAll { CorrelationId = NewId.NextGuid() }, stoppingToken)
+                            .WaitAsync(EdgeOpTimeout, stoppingToken);
                         logger.LogInformation("L2 healthy — gate OPEN, recovery endpoint STARTED, ResumeAll broadcast");
                     }
                     else
                     {
                         gate.Close();
                         // D-04 / KEEP-04: stop keeper-recovery consumption (basic.cancel) so ops accumulate
-                        // non-destructively on the broker while the gate is closed. Null-guarded (T-52-11).
+                        // non-destructively on the broker while the gate is closed. BOUNDED via WaitAsync (T-86-12).
+                        // Null-guarded (T-52-11).
                         if (endpointHandle.Handle is { } h)
-                            await h.ReceiveEndpoint.Stop(stoppingToken);
-                        await bus.Publish(new PauseAll { CorrelationId = NewId.NextGuid() }, stoppingToken);
+                            await h.ReceiveEndpoint.Stop(stoppingToken).WaitAsync(EdgeOpTimeout, stoppingToken);
+                        await bus.Publish(new PauseAll { CorrelationId = NewId.NextGuid() }, stoppingToken)
+                            .WaitAsync(EdgeOpTimeout, stoppingToken);
                         logger.LogWarning("L2 unhealthy — gate CLOSED, recovery endpoint STOPPED, PauseAll broadcast");
                     }
                     prevHealthy = healthy;                              // advance the edge ONLY after the broadcast actually went out
                 }
-                catch (OperationCanceledException) { break; }          // graceful shutdown — NOT a publish failure
+                catch (OperationCanceledException) { break; }          // graceful shutdown — NOT a publish/timeout failure
                 catch (Exception ex)
                 {
-                    // WR-01 (D-06): a transient bus.Publish failure (broker blip) must NOT fault ExecuteAsync and
-                    // permanently kill the standing health gate. prevHealthy is intentionally NOT advanced here, so
-                    // the next tick re-broadcasts the same edge. gate.Open()/Close() are idempotent, so a half-applied
-                    // transition (gate moved, broadcast failed) self-corrects on the retry.
+                    // WR-01 (D-06) / T-86-12: a transient bus.Publish failure (broker blip) OR a bounded edge-op
+                    // TimeoutException must NOT fault ExecuteAsync and permanently kill the standing health gate.
+                    // prevHealthy is intentionally NOT advanced here, so the next tick re-broadcasts the same edge.
+                    // gate.Open()/Close() are idempotent, so a half-applied transition (gate moved, broadcast failed
+                    // or timed out) self-corrects on the retry. The top-of-tick beat already stamped, so a timed-out
+                    // edge-op never starves liveness.
                     logger.LogError(ex, "BIT transition broadcast failed — will retry next tick");
                 }
             }
