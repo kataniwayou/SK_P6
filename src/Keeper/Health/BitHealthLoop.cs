@@ -31,13 +31,13 @@ public sealed class BitHealthLoop(
     IStartupGate startupGate,
     KeeperMetrics metrics) : BackgroundService
 {
-    // T-86-12 (Phase 86): a bounded budget for each edge bus-op. A dead broker can make
-    // Start().Ready / Publish / Stop hang indefinitely inside the tick; each is wrapped in
-    // WaitAsync(EdgeOpTimeout) so a single stuck edge cannot freeze the tick. Because the
-    // liveness beat now fires FIRST (top of tick, before any infra I/O), even a tick whose
-    // bounded edge-op times out still leaves a fresh beat — 3s ≪ the 15s (k=3 · 5s) stale
-    // window, and a healthy edge issues at most two bounded ops (≤6s) < 15s, so a hung broker
-    // can no longer starve the beat and trip a false /health/live restart.
+    // T-86-12 (Phase 86): a bounded budget for BOTH the per-tick L2 probe AND each edge bus-op. A dead
+    // broker can make Start().Ready / Publish / Stop hang indefinitely inside the tick, and a wedged Redis
+    // can make ProbeOnceAsync hang; each is wrapped in WaitAsync(EdgeOpTimeout) so a single stuck op cannot
+    // freeze the tick. Because the liveness beat now fires FIRST (top of tick, before any infra I/O), even a
+    // tick whose bounded probe or edge-op times out still leaves a fresh beat — 3s ≪ the 15s (k=3 · 5s)
+    // stale window, and a healthy tick issues the probe plus at most two bounded edge ops (≤9s) < 15s, so a
+    // hung broker OR a wedged Redis can no longer starve the beat and trip a false /health/live restart.
     private static readonly TimeSpan EdgeOpTimeout = TimeSpan.FromSeconds(3);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -70,7 +70,28 @@ public sealed class BitHealthLoop(
                 firstBeat = false;
             }
 
-            var healthy = await probe.ProbeOnceAsync(stoppingToken);   // RedisException → false INSIDE; non-Redis propagates
+            // WR-01 / T-86-12 (Phase 86): the probe runs UNCONDITIONALLY every tick, before the edge block.
+            // A wedged Redis connection could make ProbeOnceAsync block far longer than k×interval (15s), and
+            // because the NEXT Beat() only fires after this returns, an unbounded probe would starve the beat →
+            // a false /health/live stale → a false restart (the exact bug this phase fixes, relocated one call
+            // earlier than the edge-op bound covered). So bound the probe with the SAME WaitAsync(EdgeOpTimeout)
+            // budget used for the edge bus-ops. A timeout reads as L2 unhealthy (false) for this tick — caught
+            // and logged like the edge ops, never crashing the loop. (RedisException → false INSIDE
+            // ProbeOnceAsync; a non-Redis throw still PROPAGATES — a genuine bug must not masquerade as "down".)
+            bool healthy;
+            try
+            {
+                healthy = await probe.ProbeOnceAsync(stoppingToken).WaitAsync(EdgeOpTimeout, stoppingToken);
+            }
+            catch (OperationCanceledException) { break; }              // graceful shutdown — NOT a probe failure
+            catch (TimeoutException ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "L2 probe exceeded the {Timeout}s bound — treating as L2 unhealthy this tick (beat already stamped)",
+                    EdgeOpTimeout.TotalSeconds);
+                healthy = false;
+            }
 
             // REQ-4 / D-11: keeper_l2_probe heartbeat — UNCONDITIONAL, once per tick (one per ProbeOnceAsync
             // call) regardless of healthy/unhealthy, OUTSIDE the edge guard, label-less. rate(keeper_l2_probe_total
