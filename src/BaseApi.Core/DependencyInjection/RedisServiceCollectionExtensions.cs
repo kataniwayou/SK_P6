@@ -29,10 +29,14 @@ namespace BaseApi.Core.DependencyInjection;
 /// </para>
 ///
 /// <para>
-/// CONTEXT D-06: This extension does NOT register a Redis health check.
-/// INFRA-REDIS-06 soft dependency: Redis down implies <c>/health/live</c> AND
-/// <c>/health/ready</c> both return 200; only <c>/api/v1/orchestration/{start,stop}</c>
-/// fail with 500 + RFC 7807 (Phase 15 wires the error mapping).
+/// CONTEXT D-06 (SUPERSEDED by Phase 86 — HLTH-04/05/08): the old claim that "this extension does
+/// NOT register a Redis health check" and "Redis down ⇒ /health/ready 200" no longer holds. Redis is
+/// now a REQUIRED, LATCHED readiness dependency: <c>AddBaseApiHealth</c> registers
+/// <see cref="Health.ApiRedisReadyHealthCheck"/> (tagged "ready") wrapped in a per-process
+/// <see cref="Health.ApiLatchedReadinessHealthCheck"/>, so a sustained Redis outage flips
+/// <c>/health/ready</c> to Unhealthy (503) and stays latched until restart (no self-heal).
+/// <c>/health/live</c> is unaffected. This extension itself still only wires the multiplexer +
+/// options; the readiness check lives in <c>HealthServiceCollectionExtensions</c>.
 /// </para>
 ///
 /// <para>

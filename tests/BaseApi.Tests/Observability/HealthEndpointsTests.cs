@@ -1,5 +1,4 @@
 using System.Net;
-using System.Net.Sockets;
 using BaseApi.Core.Health;
 using BaseApi.Tests.Composition;
 using BaseApi.Tests.Observability.Helpers;
@@ -206,15 +205,26 @@ public sealed class HealthEndpointsTests
     }
 
     [Fact]
-    public async Task HealthReady_200_When_Redis_Unreachable()  // INFRA-REDIS-06 + TEST-REDIS-05
+    public async Task HealthReady_503_When_Redis_Unreachable()  // HLTH-04/05/08 (Phase 86 — supersedes D-06)
     {
+        // Phase 86 (HLTH-04/05/08): D-06 is SUPERSEDED. Redis is now a REQUIRED, latched readiness
+        // dependency (ApiRedisReadyHealthCheck wrapped in ApiLatchedReadinessHealthCheck, tagged "ready"),
+        // so an unreachable Redis flips /health/ready to 503 — it no longer returns 200. /health/live is
+        // unaffected (see HealthLive_200_When_Redis_Unreachable). The first failing probe already reports
+        // Unhealthy; the latch additionally makes a SUSTAINED failure sticky until restart.
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new HealthDeadRedisFixture();
         await factory.InitializeAsync();
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync("/health/ready", ct);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+
+        var body = await response.Content.ReadAsStringAsync(ct);
+        Assert.Contains("\"status\":\"Unhealthy\"", body);
+        // Info-disclosure guard (T-86-09): the Redis failure body must not leak secrets.
+        Assert.DoesNotContain("Password=", body);
+        Assert.DoesNotContain("password=", body);
     }
 
     [Fact]
@@ -340,30 +350,29 @@ public sealed class HealthEndpointsTests
     }
 
     /// <summary>
-    /// Phase 12 TEST-REDIS-05 + D-13: dead-Redis variant proving /health/live AND
-    /// /health/ready BOTH return 200 when Redis is unreachable. Soft-dep contract
-    /// INFRA-REDIS-06; Phase 5 HEALTH-01..05 contracts byte-immutable per D-06.
+    /// Dead-Redis variant proving <c>/health/live</c> stays 200 while (Phase 86) <c>/health/ready</c>
+    /// now flips to 503 when Redis is unreachable — Redis is a required, latched readiness dep
+    /// (HLTH-04/05/08, supersedes the old INFRA-REDIS-06 soft-dep / D-06 "ready 200 on Redis down").
+    /// Live Postgres is kept (skipPostgresFixture=false) so ONLY Redis is the failing ready dependency.
     ///
     /// <para>
-    /// Dead-Redis port = host's 6379 (D-13 — guaranteed unbound by Plan 12-02's
-    /// compose 6380:6379 mapping). Live Postgres is kept (skipPostgresFixture=false)
-    /// so /health/ready can pass on the Postgres-only ready-tag side.
-    /// </para>
-    ///
-    /// <para>
-    /// <b>Pitfall 3 defense:</b> a developer running a host-side Redis daemon on the
-    /// default 6379 would make this fixture pass for the WRONG reason (their Redis
-    /// happens to be DOWN at test time, not because compose maps 6380:6379). The
-    /// ctor pre-flight TCP-connects to localhost:6379 and throws on bound port,
-    /// surfacing the D-01 regression loudly.
+    /// <b>Env-var-in-ctor (mirrors <see cref="HealthDeadPostgresFixture"/>):</b> the dead Redis
+    /// connection string is injected via <c>ConnectionStrings__Redis</c> set in the ctor BEFORE the
+    /// host builds — the ONLY reliably-winning source. The prior in-memory-only override
+    /// (<c>ConfigureAppConfiguration</c>) was silently losing to <c>appsettings.Development.json</c>
+    /// (<c>Redis=localhost:6380</c>, which is LIVE when the compose/k8s Redis is port-forwarded), so the
+    /// dead-Redis premise never actually held once Redis became a probed readiness dep. The endpoint is
+    /// an unresolvable hostname (RFC 6761 <c>.invalid</c> TLD) so the failure is env-independent;
+    /// abortConnect=false keeps boot non-blocking and connectTimeout=2000 + the check's own ~2s cap bound
+    /// the probe. Captured+restored on dispose; <c>[Collection("Observability")]</c> serialization
+    /// prevents env-var nesting races (same discipline as the Postgres/Rabbit fixtures).
     /// </para>
     /// </summary>
     private sealed class HealthDeadRedisFixture : Phase8WebAppFactory
     {
-        // D-13 — 6379 is unbound on host since compose maps 6380:6379. connectTimeout=2000
-        // caps the boot-side wait so the factory boots quickly even with Redis unreachable.
         private const string DeadRedisConnectionString =
-            "localhost:6379,abortConnect=false,connectTimeout=2000";
+            "redis-dead.invalid:6379,abortConnect=false,connectTimeout=2000";
+        private readonly string? _priorEnvValue;
 
         public HealthDeadRedisFixture()
             : base(
@@ -372,42 +381,22 @@ public sealed class HealthEndpointsTests
                 skipRedisFixture: true,
                 redisConnectionStringOverride: DeadRedisConnectionString)
         {
-            AssertDeadRedisPortIsUnbound();
-        }
-
-        /// <summary>
-        /// RESEARCH Pitfall 3 mitigation — fail loudly if a developer's host-side Redis
-        /// is bound on 6379 (would make the dead-port test pass for the wrong reason).
-        /// </summary>
-        private static void AssertDeadRedisPortIsUnbound()
-        {
-            using var client = new TcpClient();
+            _priorEnvValue = Environment.GetEnvironmentVariable("ConnectionStrings__Redis");
             try
             {
-                // Synchronous, short-timeout probe (~200ms). Connection should fail
-                // with SocketError.ConnectionRefused — if it SUCCEEDS, a host-side
-                // Redis is bound on 6379 and the dead-port assumption is broken.
-                var task = client.ConnectAsync("localhost", 6379);
-                if (task.Wait(TimeSpan.FromMilliseconds(500)) && client.Connected)
-                {
-                    throw new InvalidOperationException(
-                        "compose D-01 regression detected: host port 6379 is bound. " +
-                        "Plan 12-02 should map redis to 6380:6379 so the host's 6379 " +
-                        "remains unbound — defending the HealthDeadRedisFixture dead-port " +
-                        "assumption (RESEARCH Pitfall 3). Refusing to run dead-Redis " +
-                        "acceptance fact against a live Redis daemon on 6379.");
-                }
+                Environment.SetEnvironmentVariable("ConnectionStrings__Redis", DeadRedisConnectionString);
             }
-            catch (AggregateException ae) when (
-                ae.InnerException is SocketException se &&
-                se.SocketErrorCode == SocketError.ConnectionRefused)
+            catch
             {
-                // Expected — port is unbound. Continue.
+                Environment.SetEnvironmentVariable("ConnectionStrings__Redis", _priorEnvValue);
+                throw;
             }
-            catch (SocketException se) when (se.SocketErrorCode == SocketError.ConnectionRefused)
-            {
-                // Expected — port is unbound. Continue.
-            }
+        }
+
+        public override async ValueTask DisposeAsync()
+        {
+            Environment.SetEnvironmentVariable("ConnectionStrings__Redis", _priorEnvValue);
+            await base.DisposeAsync();
         }
     }
 
