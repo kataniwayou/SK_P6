@@ -4,14 +4,14 @@ milestone: v12.0.0
 milestone_name: Resilience & Health-Probe Hardening
 status: executing
 stopped_at: Completed 85-03-PLAN.md
-last_updated: "2026-07-26T14:12:47.333Z"
+last_updated: "2026-07-26T15:03:33.286Z"
 last_activity: 2026-07-26
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 16
-  completed_plans: 8
-  percent: 50
+  completed_plans: 9
+  percent: 56
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Phase: 86 (console-webapi-health-liveness-refactor) — EXECUTING
-Plan: 2 of 9
+Plan: 3 of 9
 Status: Ready to execute
 Last activity: 2026-07-26
 Current focus: Phase 86 — console/webapi health-liveness refactor (v12.0.0, first phase)
@@ -706,7 +706,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [█████░░░░░] 50%
+Progress: [██████░░░░] 56%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1091,6 +1091,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 85 P02 | 18min | 2 tasks | 2 files |
 | Phase 85 P03 | 40min | 3 tasks | 7 files |
 | Phase 86 P01 | 30 | 3 tasks | 9 files |
+| Phase 86 P02 | 44min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1646,6 +1647,8 @@ Recent decisions affecting current work:
 - [Phase 85]: PB-03: entry deletion is framework-owned via a shared ProcessorPipeline.DeleteEntryTail called from both the Mode-1 tail and the Mode-2 null-return path; the concrete DeleteEntry API/SeamState.EntryId/EscalateDelete are removed and SampleProcessor no longer deletes — Shrinks the concrete-processor surface to interpret-input/business-logic/return-or-spawn; the Guid.Empty source net-effect and DELETE-keeper escalation are both preserved (guarded by !SourceStep.IsSource; escalation moved inline to SendKeeper(BuildDelete))
 - [Phase 86]: 86-01: RED skeletons use explicit ctors (not primary) — captured-but-unread params trip CS9113 under warnings-as-errors; exact locked ctor signatures preserved
 - [Phase 86]: 86-01: k=3 staleness grace (was x2) for LoopLivenessHealthCheck; no-secret guard reused from LivenessWatchdogHealthCheckTests
+- [Phase ?]: 86-02: Processor readiness reads IProcessorContext.IsHealthy at check time via OUTER provider (Pattern 4); never reads Id/definition props (WR-03).
+- [Phase ?]: 86-02: HLTH-02 broker-down-never-throws locked by driving the real ProcessorStartupOrchestrator loop with a non-OCE RedisConnectionException injected via IRequestClient.GetResponse; asserts caught+logged+retried, ExecuteAsync never faults.
 
 ### Roadmap Milestone Log
 
@@ -1757,7 +1760,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-26T14:12:27.166Z
+Last session: 2026-07-26T15:00:32.603Z
 Stopped at: Completed 85-03-PLAN.md
 Resume file: None
 
