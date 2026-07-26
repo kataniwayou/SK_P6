@@ -115,6 +115,16 @@ All eight HLTH requirements (HLTH-01..08) demonstrably satisfied. **Phase 86 goa
 - startupProbe grep: 1 per manifest (verified).
 - Live proof: RESTARTS 0 across all four outage-generation pods over 4+ minutes; `/health/live` 200 + `/health/ready` 503 confirmed from pod logs; broker error caught+logged; recovery confirmed.
 
+## Re-proof against code-review-fixed bits (2026-07-26, tag `p86fix-8af3adc`)
+
+After the `/gsd:code-review 86 --fix --all` pass (CR-01 readiness sanitization, WR-01 probe bound, WR-02 config-derived interval, WR-05 applied-then-reverted, doc fixes), the four images were rebuilt at HEAD `8af3adc` and re-deployed (`kubectl set image`, unique tag `p86fix-8af3adc`; processor's new SourceHash `dfa47c78…` registered). The broker-unreachable experiment was re-run to confirm the fixes did not regress crash-loop immunity:
+
+- **Outage 20:49:27Z → ~20:54:26Z (~5 min):** all four outage-generation pods stayed **RESTARTS 0** (baseapi Ready/soft-bus; keeper/orchestrator/processor NotReady). `/health/live` 200 throughout (keeper, processor ×12, orchestrator ×6); `/health/ready` 503. Broker errors caught+logged (`BrokerUnreachableException … will retry next tick`).
+- **CR-01 confirmed LIVE:** under the sustained outage the keeper's readiness health-check message is the **static** `'readiness latched (sustained dependency failure — restart required)'` — no raw exception/connection-string detail leaks into the readiness surface, and the no-self-heal latch is visibly engaged.
+- **Recovery:** `RabbitMq__Host=rabbitmq` reverted → all four rolled out Ready, RESTARTS 0, on `p86fix-8af3adc`.
+
+The headline outcome holds on the fixed bits, and the CR-01 info-disclosure fix is verified end-to-end in a live outage.
+
 ## Notes for the orchestrator
 - **DB side-effect (intentional, benign):** a second `processors` row was registered for the new Phase-86 SourceHash (`3ee59bf5…`, name `sample-proc-p86-e24cb5a`). The old-SourceHash row (`2424735…`) is now orphaned (no pods run old bits) and harmless. This is the correct registration for the deployed bits.
 - **Cluster left healthy:** all four services on `p86-e24cb5a`, Ready, RESTARTS 0, `RabbitMq__Host=rabbitmq`.
