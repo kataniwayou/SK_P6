@@ -1,4 +1,5 @@
 using BaseApi.Tests.Composition;
+using BaseConsole.Core.Health;
 using BaseProcessor.Core.Configuration;
 using BaseProcessor.Core.Liveness;
 using Messaging.Contracts.Projections;
@@ -49,13 +50,20 @@ public sealed class LivenessHeartbeatFacts : IClassFixture<RedisFixture>
         FakeProcessorContext context,
         IOptions<ProcessorLivenessOptions> options,
         FakeTimeProvider clock,
-        out ProcessorLivenessState l1)
+        out ProcessorLivenessState l1,
+        out ILivenessHeartbeat heartbeat,
+        out IStartupGate gate)
     {
         l1 = new ProcessorLivenessState();
+        // Phase 86 (HLTH-03): the shared loop-liveness holder + one-shot startup gate the heartbeat now drives.
+        // Both share the SAME FakeTimeProvider clock the beat stamps against (deterministic, no real sleeping).
+        heartbeat = new LivenessHeartbeat(clock);
+        gate = new StartupGate();
         var writer = new ProcessorLivenessWriter(
             _redis.Multiplexer, l1, options, NullLogger<ProcessorLivenessWriter>.Instance);
         return new ProcessorLivenessHeartbeat(
-            writer, context, options, clock, InstanceId, NullLogger<ProcessorLivenessHeartbeat>.Instance);
+            writer, context, options, clock, heartbeat, gate, InstanceId,
+            NullLogger<ProcessorLivenessHeartbeat>.Instance);
     }
 
     [Fact]
@@ -68,14 +76,16 @@ public sealed class LivenessHeartbeatFacts : IClassFixture<RedisFixture>
         _redis.Track(L2ProjectionKeys.InstanceIndex(testProcessorId)); // index SET (member-via-key cleanup)
         var db = _redis.Multiplexer.GetDatabase();
 
-        // Not-yet-Healthy replica: IsHealthy false, no Id. The beat must no-op (LIVE-04 / T-60-08).
+        // Not-yet-Healthy replica: IsHealthy false, no Id. The L2 WRITE must no-op (LIVE-04 / T-60-08) — but
+        // the shared liveness beat must STILL fire unconditionally above the gate (Phase 86 / HLTH-03).
         var context = new FakeProcessorContext { IsHealthy = false, Id = null };
         var clock = new FakeTimeProvider();
 
-        var heartbeat = NewHeartbeat(context, Options(interval: 5, ttl: 30), clock, out var l1);
+        var heartbeat = NewHeartbeat(
+            context, Options(interval: 5, ttl: 30), clock, out var l1, out var beat, out var gate);
 
         await heartbeat.StartAsync(ct);
-        // Advance past one+ interval so the loop runs its no-op tick.
+        // Advance past one+ interval so the loop runs its no-op-WRITE tick.
         clock.Advance(TimeSpan.FromSeconds(6));
         await Task.Delay(50, ct);
         await heartbeat.StopAsync(ct);
@@ -85,6 +95,12 @@ public sealed class LivenessHeartbeatFacts : IClassFixture<RedisFixture>
         // The index SET never got a member, and L1 was never updated.
         Assert.False(await db.KeyExistsAsync(L2ProjectionKeys.InstanceIndex(testProcessorId)));
         Assert.Null(l1.Current);
+
+        // Phase 86 (HLTH-03 / T-86-14): despite IsHealthy == false, the loop BEAT the shared heartbeat
+        // (unconditional beat ABOVE the gate) so /health/live stays healthy → no false restart on a cold boot.
+        Assert.NotNull(beat.Current);
+        // Phase 86 (HLTH-06): the first beat marked the startup gate ready (the loop is actually running).
+        Assert.True(gate.IsReady);
     }
 
     [Fact]
@@ -106,11 +122,16 @@ public sealed class LivenessHeartbeatFacts : IClassFixture<RedisFixture>
         };
         var clock = new FakeTimeProvider();
         // Heartbeat interval 10 => active interval baked into the entry; derived TTL = max(20, 30) = 30 (D-13).
-        var heartbeat = NewHeartbeat(context, Options(interval: 10, ttl: 30), clock, out var l1);
+        var heartbeat = NewHeartbeat(
+            context, Options(interval: 10, ttl: 30), clock, out var l1, out var beat, out var gate);
 
         await heartbeat.StartAsync(ct);
         // Drive one beat: the first iteration writes immediately (before the first Task.Delay).
         await Task.Delay(50, ct);
+
+        // Phase 86 (HLTH-03/06): a Healthy replica also beats the shared heartbeat + marks ready on first beat.
+        Assert.NotNull(beat.Current);
+        Assert.True(gate.IsReady);
 
         // Key exists (LIVE-01) — a single whole-value SET (LIVE-06).
         Assert.True(await db.KeyExistsAsync(key));

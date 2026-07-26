@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using BaseConsole.Core.Health;
 using BaseProcessor.Core.Configuration;
 using BaseProcessor.Core.Liveness;
 using Microsoft.Extensions.Logging;
@@ -60,8 +61,10 @@ public sealed class LivenessResilienceFacts
         var writer = new ProcessorLivenessWriter(
             redis, new ProcessorLivenessState(), options, writerLogger);
 
+        // Phase 86 (HLTH-03): the heartbeat now also takes the shared ILivenessHeartbeat + IStartupGate; a
+        // dead-Redis fault must NOT stop the unconditional beat (real holder + gate, same fake clock).
         var heartbeat = new ProcessorLivenessHeartbeat(
-            writer, context, options, clock, "pod-resilience",
+            writer, context, options, clock, new LivenessHeartbeat(clock), new StartupGate(), "pod-resilience",
             NullLogger<ProcessorLivenessHeartbeat>.Instance);
 
         await heartbeat.StartAsync(ct);
