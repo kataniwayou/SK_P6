@@ -56,10 +56,15 @@ builder.Services.AddHostedService<Keeper.Health.BitHealthLoop>();
 // HLTH-03/06 (Phase 86): opt into the SHARED loop-liveness watchdog (BaseConsole.Core), replacing the retired
 // keeper-specific KeeperLivenessWatchdogHealthCheck + IKeeperLivenessState + KeeperLivenessState. Registers the
 // singleton ILivenessHeartbeat (BitHealthLoop Beat()s it at the top of each tick) + a "live"-tagged
-// HealthCheckDescriptor that EmbeddedHealthEndpointService auto-folds onto /health/live. intervalSeconds: 5 matches
-// Probe:DelaySeconds so a silently-stalled BIT loop goes stale at 15s (k=3) → /health/live Unhealthy. IStartupGate
-// is already registered by AddBaseConsole (AddBaseConsoleHealth); TimeProvider.System is TryAdd'd by both.
-builder.Services.AddConsoleLivenessWatchdog(intervalSeconds: 5);
+// HealthCheckDescriptor that EmbeddedHealthEndpointService auto-folds onto /health/live. The watchdog interval
+// MUST match the BIT loop's real tick cadence so a silently-stalled BIT loop goes stale at k=3 × interval →
+// /health/live Unhealthy. WR-02: derive it from the SAME bound Probe:DelaySeconds the BitHealthLoop itself reads
+// (IOptions<ProbeOptions>.DelaySeconds) rather than a separately-maintained literal, so a config override cannot
+// desync the staleness math from the tick period. Falls back to the ProbeOptions default (5) when unset.
+// IStartupGate is already registered by AddBaseConsole (AddBaseConsoleHealth); TimeProvider.System is TryAdd'd by both.
+var probeDelaySeconds = builder.Configuration.GetSection("Probe").Get<ProbeOptions>()?.DelaySeconds
+                        ?? new ProbeOptions().DelaySeconds;
+builder.Services.AddConsoleLivenessWatchdog(intervalSeconds: probeDelaySeconds);
 
 // KEEP-04 / D-04 (OQ-1): the keeper-recovery endpoint is RUNTIME-BOUND via ConnectReceiveEndpoint
 // (RecoveryEndpointBinder), NOT static AddConsumer auto-config — a statically-configured 8.5.5 endpoint

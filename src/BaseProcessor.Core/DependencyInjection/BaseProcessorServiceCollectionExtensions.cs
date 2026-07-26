@@ -146,11 +146,17 @@ public static class BaseProcessorServiceCollectionExtensions
         //       watchdog (BaseConsole.Core) instead of the retired processor-specific LivenessWatchdogHealthCheck.
         //       AddConsoleLivenessWatchdog registers the shared ILivenessHeartbeat holder (the Phase-86
         //       ProcessorLivenessHeartbeat Beat()s it every tick) + a "live"-tagged descriptor folding the
-        //       LoopLivenessHealthCheck onto /health/live (stale at k=3 × 10s = 30s). interval=10 matches
-        //       ProcessorLivenessOptions.IntervalSeconds. The retired LivenessWatchdogHealthCheck descriptor is
-        //       GONE; IProcessorLivenessState + ProcessorLivenessWriter (6a / 6a' below) are KEPT — they back
-        //       the SEPARATE L2 healthy-write gate, NOT liveness (Pitfall 6).
-        services.AddConsoleLivenessWatchdog(intervalSeconds: 10);
+        //       LoopLivenessHealthCheck onto /health/live (stale at k=3 × interval). WR-02: derive the interval
+        //       from the SAME bound Processor:Interval the ProcessorLivenessHeartbeat itself reads
+        //       (IOptions<ProcessorLivenessOptions>.IntervalSeconds) rather than a separately-maintained literal,
+        //       so a config override cannot desync the staleness math from the real tick cadence. Falls back to
+        //       the ProcessorLivenessOptions default (10) when unset. The retired LivenessWatchdogHealthCheck
+        //       descriptor is GONE; IProcessorLivenessState + ProcessorLivenessWriter (6a / 6a' below) are KEPT —
+        //       they back the SEPARATE L2 healthy-write gate, NOT liveness (Pitfall 6).
+        var livenessIntervalSeconds =
+            cfg.GetSection("Processor").Get<ProcessorLivenessOptions>()?.IntervalSeconds
+            ?? new ProcessorLivenessOptions().IntervalSeconds;
+        services.AddConsoleLivenessWatchdog(intervalSeconds: livenessIntervalSeconds);
 
         // 6a'''. Phase 86 (HLTH-04): the processor identity+schema READINESS check, folded onto /health/ready via
         //        the generic descriptor seam ("ready" tag). The factory bridges the OUTER provider so the check
