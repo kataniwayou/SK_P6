@@ -13,9 +13,10 @@ using Keeper;
 // Thin-shell composition root (KEEP-01). Generic Host — Host.CreateApplicationBuilder, NOT
 // WebApplication. BaseConsole.Core supplies all infra (metrics-only OTel, Redis soft-dep,
 // embedded health, the MassTransit bus + correlation pipeline). Keeper mirrors Orchestrator
-// MINUS the scheduler/L1/hydration/metrics runtime block and MINUS the default-readiness-service
-// removal — Keeper has no hydration, so readiness flips on bus-start (D-06): the base library's
-// default readiness service is KEPT here, not stripped.
+// MINUS the scheduler/L1/hydration/metrics runtime block. Phase 86 (HLTH-06): Keeper now ALSO
+// strips the base library's StartupCompletionService (mirroring Orchestrator/Processor — see the
+// removal block below) so its startup gate flips on the BitHealthLoop's FIRST beat, NOT at bare
+// host start — /health/startup reflects the BIT loop actually ticking (D-06).
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.AddBaseConsoleObservability(builder.Configuration);   // metrics-only OTel (no tracer)
