@@ -45,19 +45,27 @@ public sealed class ApiRedisReadyHealthCheck : IHealthCheck
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
-        // Resolve the multiplexer AT CHECK TIME (never captured at registration — Pitfall 4). Unresolved
-        // (null) ⇒ Unhealthy, so readiness never reports a stale-Healthy state before Redis is up.
-        var mux = _outer.GetService<IConnectionMultiplexer>();
-        if (mux is null)
-        {
-            return HealthCheckResult.Unhealthy("Redis not started");
-        }
-
         try
         {
+            // ONE bounded budget for the WHOLE check (WR-05): both the first-time multiplexer RESOLUTION and
+            // the ping share this deadline. The IConnectionMultiplexer singleton factory does a SYNCHRONOUS,
+            // blocking ConnectionMultiplexer.Connect on first resolution (no pre-warm hosted service). BaseApi
+            // — unlike Keeper/Processor — has no boot loop that touches Redis, so THIS check may well be the
+            // first component to resolve it; bounding the resolution too (offloaded via Task.Run so the blocking
+            // connect can never hang the probe) closes that gap.
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             cts.CancelAfter(TimeSpan.FromSeconds(2)); // bounded — a dead Redis can never hang the probe
-            await mux.GetDatabase().PingAsync().WaitAsync(cts.Token);
+
+            // Resolve the multiplexer AT CHECK TIME (never captured at registration — Pitfall 4). Unresolved
+            // (null) ⇒ Unhealthy, so readiness never reports a stale-Healthy state before Redis is up.
+            var mux = await Task.Run(() => _outer.GetService<IConnectionMultiplexer>())
+                .WaitAsync(cts.Token).ConfigureAwait(false);
+            if (mux is null)
+            {
+                return HealthCheckResult.Unhealthy("Redis not started");
+            }
+
+            await mux.GetDatabase().PingAsync().WaitAsync(cts.Token).ConfigureAwait(false);
             return HealthCheckResult.Healthy();
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)

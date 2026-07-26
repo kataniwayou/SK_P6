@@ -47,36 +47,43 @@ public sealed class RedisReadyHealthCheck : IHealthCheck
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
-        // Resolve the multiplexer from the OUTER provider AT CHECK TIME (never captured at registration —
-        // RESEARCH Pitfall 4). A not-yet-connected / absent Redis reads as null → Unhealthy, so readiness
-        // never reports a stale-Healthy state (HLTH-04).
-        var mux = _outer.GetService<IConnectionMultiplexer>();
-        if (mux is null)
-        {
-            return HealthCheckResult.Unhealthy("Redis not started");
-        }
-
         try
         {
-            // StackExchange.Redis 2.13.1 PingAsync has no CancellationToken overload — bound it via a
-            // linked CTS + WaitAsync so a hung Redis cannot hang the probe (T-86-08).
+            // ONE bounded budget for the WHOLE check (WR-05 / T-86-08): both the first-time multiplexer
+            // RESOLUTION and the ping share this deadline. The IConnectionMultiplexer singleton factory does a
+            // SYNCHRONOUS, blocking ConnectionMultiplexer.Connect on first resolution (no pre-warm hosted
+            // service — D-17). If this check is the first component in the process to resolve it, that connect
+            // could block PAST this window before the ping deadline even started; bounding the resolution too
+            // (offloaded via Task.Run so the blocking connect can never hang the probe) closes that gap.
             using var timeout = new CancellationTokenSource(PingTimeout);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
 
+            // Resolve the multiplexer from the OUTER provider AT CHECK TIME (never captured at registration —
+            // RESEARCH Pitfall 4). A not-yet-connected / absent Redis reads as null → Unhealthy, so readiness
+            // never reports a stale-Healthy state (HLTH-04).
+            var mux = await Task.Run(() => _outer.GetService<IConnectionMultiplexer>())
+                .WaitAsync(linked.Token).ConfigureAwait(false);
+            if (mux is null)
+            {
+                return HealthCheckResult.Unhealthy("Redis not started");
+            }
+
+            // StackExchange.Redis 2.13.1 PingAsync has no CancellationToken overload — bound it via the same
+            // linked CTS + WaitAsync so a hung Redis cannot hang the probe (T-86-08).
             await mux.GetDatabase().PingAsync().WaitAsync(linked.Token).ConfigureAwait(false);
             return HealthCheckResult.Healthy();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Genuine shutdown cancellation is a pass-through per the existing never-throw idiom — a bounded
-            // ping timeout (the linked timeout token) is NOT this branch and falls through to Unhealthy.
+            // resolution/ping timeout (the linked timeout token) is NOT this branch and falls through to Unhealthy.
             throw;
         }
         catch
         {
-            // ANY fault (connect fault, ping timeout, Redis exception) → Unhealthy, never thrown out.
-            // Info-disclosure guard (T-86-06): STATIC literal only — the connection string and the raw
-            // exception detail are NEVER placed in the message or Data.
+            // ANY fault (resolution connect fault/timeout, ping timeout, Redis exception) → Unhealthy, never
+            // thrown out. Info-disclosure guard (T-86-06): STATIC literal only — the connection string and the
+            // raw exception detail are NEVER placed in the message or Data.
             return HealthCheckResult.Unhealthy("Redis unreachable");
         }
     }
