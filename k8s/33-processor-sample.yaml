@@ -75,6 +75,17 @@ spec:
             # NOTE: both processor fault hooks are OMITTED ENTIRELY (absent ⇒ code :-0 default ⇒ OFF).
           ports:
             - containerPort: 8082                # kubelet-probed pod-local; NO Service
+          # startup-gate probe holds off readiness/liveness until boot completes (first beat)
+          # — a ~150s grace window (30×5s) comfortably covers a ~40s rabbitmq cold start
+          # so a slow boot never CrashLoops (HLTH-07 / T-86-17 / Pitfall 5).
+          startupProbe:
+            httpGet:
+              path: /health/startup
+              port: 8082
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
           # readiness is HARD-on-broker — gates Ready only after the bus is reachable
           readinessProbe:
             httpGet:

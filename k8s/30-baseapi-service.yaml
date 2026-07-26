@@ -85,6 +85,17 @@ spec:
                   key: RABBITMQ_DEFAULT_PASS
           ports:
             - containerPort: 8080
+          # startup-gate probe holds off readiness/liveness until boot completes (migrations)
+          # — a ~150s grace window (30×5s) comfortably covers a ~40s rabbitmq cold start
+          # so a slow boot never CrashLoops (HLTH-07 / T-86-17 / Pitfall 5).
+          startupProbe:
+            httpGet:
+              path: /health/startup
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
           # readiness gates traffic on the bus-aware /health/ready (SOFT-on-CRUD)
           readinessProbe:
             httpGet:
