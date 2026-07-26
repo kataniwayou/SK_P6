@@ -30,7 +30,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 Phase: 85
 Plan: Not started
 Status: Milestone complete
-Last activity: 2026-07-22
+Last activity: 2026-07-26 - Completed quick task 260726-f7x: scheduler-fire resilience (WorkflowFireJob logs+reschedules on entry-step send fault)
 Current focus: Phase 84 — byte[] data-channel widening (first phase of v11.0.0)
 
 ### Quick Tasks Completed
@@ -42,6 +42,7 @@ Current focus: Phase 84 — byte[] data-channel widening (first phase of v11.0.0
 | 260614-b5c | Add minimal keeper self-watchdog: timestamp-only L1 record stamped every BitHealthLoop tick + staleness health check folded into /health/live (detects a silently-stalled BIT loop); no ProcessorLivenessEntry reuse, no Data payload, no BaseConsole.Core change | 2026-06-14 | d755df4 | Verified | [260614-b5c-add-minimal-keeper-self-watchdog-timesta](./quick/260614-b5c-add-minimal-keeper-self-watchdog-timesta/) |
 | 260615-dbf | Unify L2[messageId] slot-array index TTL to the ExecutionDataTtl const, drop slot-array jitter (delete SlotArrayOptions + SlotTtl RNG; both index EXPIRE calls + the data SET now share one const); closes the Phase 68 TEST-06 desync root cause | 2026-06-15 | 981ddd6 |  | [260615-dbf-unify-l2-slot-array-index-ttl-to-executi](./quick/260615-dbf-unify-l2-slot-array-index-ttl-to-executi/) |
 | 260615-kgz | Per-(correlationId,executionId) multi-execution scoring: orchestrator propagates ExecutionId unchanged (was NewId.NextGuid regen); processor seam gains executionId → SampleProcessor seeds 2 at entry / accumulates 1 downstream, each log carries StepLabel+ExecutionId; analyzer keys traces by (correlationId,executionId) + spawn-aware OBS-03 | 2026-06-15 | 1a5009b |  | [260615-kgz-per-correlationid-executionid-multi-exec](./quick/260615-kgz-per-correlationid-executionid-multi-exec/) |
+| 260726-f7x | scheduler-fire resilience: WorkflowFireJob per-entry-step try/catch (cancellation-aware) logs + continues on an entry-step `DispatchAsync` send fault so Execute still reaches the L1 liveness refresh + `RescheduleAsync` — a failed fire no longer skips the reschedule and breaks the self-rescheduling non-durable Quartz one-shot chain (workflow keeps firing next tick). StepDispatcher/RelocateTail continuation path unchanged (still throw → nack → broker redelivery); doc comments realigned. New hermetic proof WorkflowFireJobResilienceTests (3/3) | 2026-07-26 | 71a2756 |  | [260726-f7x-scheduler-fire-resilience-workflowfirejo](./quick/260726-f7x-scheduler-fire-resilience-workflowfirejo/) |
 
 ### Roadmap Evolution
 
