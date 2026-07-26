@@ -25,7 +25,8 @@ findings:
   warning: 6
   info: 3
   total: 10
-status: issues_found
+status: fixed
+fixed_at: 2026-07-26T00:00:00Z
 ---
 
 # Phase 86: Code Review Report
@@ -187,6 +188,37 @@ This appears to be an *intentional* behavior change — `k8s/33-processor-sample
 **File:** `src/BaseApi.Core/Health/ApiLatchedReadinessHealthCheck.cs:46-56`
 **Issue:** `_consecutiveFailures` is correctly mutated via `Interlocked.Increment`/`Interlocked.Exchange` (no torn reads), but if `CheckHealthAsync` is ever invoked concurrently (e.g. an external monitoring probe polling `/health/ready` at the same time as kubelet), an interleaving where a stale-Healthy inner result's `Exchange(0)` lands after a genuinely-failing evaluation's `Increment` can transiently erase progress toward the latch threshold. In the standard single-kubelet-prober deployment model this is not exploitable (probes are sequential), so this is informational only.
 **Fix:** none required under the current single-prober assumption; worth a comment noting the assumption if multiple concurrent probers are ever introduced.
+
+---
+
+## Fixes Applied
+
+All 10 findings (1 Critical, 6 Warning, 3 Info) addressed. `--fix --all`. Each fix committed
+atomically (or as a tightly-related group); only the specific edited source files were staged.
+Both `dotnet build SK_P.sln -c Debug` and `-c Release` are 0-warning / 0-error (warnings-as-error).
+The six pure-unit hermetic classes pass (29/29): `LatchedReadinessHealthCheckTests`,
+`ApiReadinessLatchTests`, `RedisReadyHealthCheckTests`, `LoopLivenessHealthCheckTests`,
+`LivenessHeartbeatTests`, `BitHealthLoopTests`. `HealthEndpointsTests` is 9/11 — the 2 failures
+(`Test_HealthReady_200_When_Postgres_Reachable`, `Health_Ready_Returns_200_When_Broker_Dead`) are
+pre-existing live-infra baseline tests that assert `/health/ready` == 200 and require a reachable
+Postgres+Redis (confirmed failing with `NpgsqlException: Failed to connect to 127.0.0.1` — not
+introduced by these fixes). No new hermetic failures beyond the known baseline.
+
+| Finding | What changed | Commit |
+|---------|--------------|--------|
+| CR-01 | Both latch decorators (`LatchedReadinessHealthCheck`, `ApiLatchedReadinessHealthCheck`) now return a STATIC message on EVERY Unhealthy path — added a `UnhealthyMessage` constant for the pre-latch case and stopped forwarding the inner check's raw `Description`/`Exception`. Latch counter/threshold/never-throw math unchanged. Verified live in the test log (`redis ... Unhealthy ... 'readiness dependency unhealthy'`). | `a927ecb` |
+| WR-01 | Bounded the per-tick `probe.ProbeOnceAsync` in `BitHealthLoop` with the same `WaitAsync(EdgeOpTimeout, stoppingToken)` used for the edge bus-ops; a timeout reads as L2-unhealthy for the tick, caught+logged (never crashes the loop). Non-Redis exceptions still propagate. `L2ProbeRecovery` untouched. | `041bdd7` |
+| WR-02 | Watchdog interval derived from bound options instead of literals — Keeper from `Probe:DelaySeconds` (`IOptions<ProbeOptions>`), processor from `Processor:Interval` (`IOptions<ProcessorLivenessOptions>`), resolved at composition root. Effective defaults (5 / 10) preserved via the options-type defaults. | `ef93ff3` |
+| WR-03 | Removed the false "default readiness service is KEPT here, not stripped" claim from `Keeper/Program.cs`'s top-of-file comment; now states Phase 86 strips `StartupCompletionService`. | `ed0ea05` |
+| WR-04 | Reconciled the two stale startup-gate invariant doc blocks (`BaseProcessorServiceCollectionExtensions.cs`, `ProcessorStartupOrchestrator.cs`) to acknowledge `/health/startup` now flips on the liveness heartbeat's first beat and the orchestrator's `MarkReady()` calls are redundant/defensive. | `dc50d28` |
+| WR-05 | Both Redis readiness checks now resolve `IConnectionMultiplexer` via `Task.Run(...).WaitAsync(...)` under the SAME bounded CTS as the ping, so a first-time synchronous blocking connect can't exceed the check window; timeout → static Unhealthy, never-throw preserved. | `9476601` |
+| WR-06 | Deleted the stale "RED skeleton" XML-doc paragraphs from `LivenessHeartbeat`, `LoopLivenessHealthCheck`, `RedisReadyHealthCheck`, `LatchedReadinessHealthCheck`. | `f09b2b0` |
+| IN-01 | Added `.ConfigureAwait(false)` to `ApiLatchedReadinessHealthCheck` (folded into CR-01) and `ApiRedisReadyHealthCheck` (folded into WR-05). | `a927ecb`, `9476601` |
+| IN-02 | No code change (accepted duplication trade-off); the actionable part — applying CR-01 in BOTH mirrors — was done. | — |
+| IN-03 | Added a comment documenting the single-prober assumption for the `_consecutiveFailures` counter in both latch mirrors (folded into CR-01). | `a927ecb` |
+
+_Fixed: 2026-07-26_
+_Fixer: Claude (gsd-code-fixer)_
 
 ---
 
