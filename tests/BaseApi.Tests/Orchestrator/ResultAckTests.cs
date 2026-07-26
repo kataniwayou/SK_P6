@@ -47,13 +47,33 @@ public sealed class ResultAckTests
                 .Returns(async ci =>
                 {
                     if (_onSend is not null) await _onSend();
-                    switch (ci.ArgAt<object>(0))
-                    {
-                        case NextStepHandoff h: Handoffs.Add(h); break;
-                        case IKeeperRecoverable kr: SentKeeper.Add(kr); break;
-                    }
+                    Record(ci.ArgAt<object>(0));
                 });
+
+            // The envelope-override overload: since Phase 77 (commit 27f70d8, feat 77-03) the live fan-out
+            // stamps ctx.MessageId = outboundId, so OrchestratorPrePipeline now sends via
+            // Send(object, Action<SendContext>→IPipe<SendContext>, ct) — NOT the two-arg overload above.
+            // This double must stub the IPipe overload too or the fan-out is never captured (Handoffs stays
+            // empty) and _onSend never fires. Mirrors OrchestratorPrePipelineFacts' capturing double.
+            endpoint.Send(Arg.Any<object>(), Arg.Any<IPipe<SendContext>>(), Arg.Any<CancellationToken>())
+                .Returns(async ci =>
+                {
+                    if (_onSend is not null) await _onSend();   // fault-injection hook (send-exhaust)
+                    var sendCtx = Substitute.For<SendContext>();
+                    await ci.ArgAt<IPipe<SendContext>>(1).Send(sendCtx);   // run the ctx.MessageId override
+                    Record(ci.ArgAt<object>(0));
+                });
+
             return Task.FromResult(endpoint);
+        }
+
+        private void Record(object o)
+        {
+            switch (o)
+            {
+                case NextStepHandoff h: Handoffs.Add(h); break;
+                case IKeeperRecoverable kr: SentKeeper.Add(kr); break;
+            }
         }
 
         public ConnectHandle ConnectSendObserver(ISendObserver observer) => throw new NotSupportedException();

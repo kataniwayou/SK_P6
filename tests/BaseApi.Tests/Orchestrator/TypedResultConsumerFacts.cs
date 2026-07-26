@@ -48,6 +48,18 @@ public sealed class TypedResultConsumerFacts
                     if (ci.ArgAt<object>(0) is NextStepHandoff h) Handoffs.Add(h);
                     return Task.CompletedTask;
                 });
+
+            // The envelope-override overload: since Phase 77 (commit 27f70d8, feat 77-03) the live fan-out
+            // stamps ctx.MessageId = outboundId, so OrchestratorPrePipeline sends via
+            // Send(object, Action<SendContext>→IPipe<SendContext>, ct) — NOT the two-arg overload above.
+            // Stub the IPipe overload too or the fan-out is never captured. Mirrors OrchestratorPrePipelineFacts.
+            endpoint.Send(Arg.Any<object>(), Arg.Any<IPipe<SendContext>>(), Arg.Any<CancellationToken>())
+                .Returns(async ci =>
+                {
+                    var sendCtx = Substitute.For<SendContext>();
+                    await ci.ArgAt<IPipe<SendContext>>(1).Send(sendCtx);   // run the ctx.MessageId override
+                    if (ci.ArgAt<object>(0) is NextStepHandoff h) Handoffs.Add(h);
+                });
             return Task.FromResult(endpoint);
         }
 
