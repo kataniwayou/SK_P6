@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using BaseConsole.Core.Health;
 using Keeper;
 using Keeper.Health;
 using Keeper.Recovery;
@@ -92,13 +93,15 @@ public sealed class BitHealthLoopTests
         }
     }
 
-    // 260614-b5c: the two new ctor params (clock + liveness) default to real instances so the 7 existing
-    // edge facts compile + pass UNCHANGED; Fact A injects a shared FakeTimeProvider + KeeperLivenessState.
+    // Phase 86 (86-06): the loop now depends on the SHARED BaseConsole.Core ILivenessHeartbeat + IStartupGate
+    // (the retired keeper-specific liveness-state holder is gone). Both default to real instances so the existing
+    // edge facts compile + pass UNCHANGED; the Phase-86 facts inject a FakeTimeProvider-backed LivenessHeartbeat
+    // (to pin the beat instant) and/or a fresh StartupGate (to assert first-beat MarkReady).
     private static BitHealthLoop NewLoop(
         L2ProbeRecovery probe, IL2HealthGate gate, IBus bus, RecoveryEndpointHandle holder,
-        TimeProvider? clock = null, IKeeperLivenessState? liveness = null) =>
+        ILivenessHeartbeat? heartbeat = null, IStartupGate? startupGate = null) =>
         new(probe, gate, bus, holder, ZeroDelay(), NullLogger<BitHealthLoop>.Instance,
-            clock ?? TimeProvider.System, liveness ?? new KeeperLivenessState(),
+            heartbeat ?? new LivenessHeartbeat(TimeProvider.System), startupGate ?? new StartupGate(),
             RecoveryTestKit.Metrics());   // Phase 74 (REQ-4): keeper_l2_probe heartbeat counter holder
 
     /// <summary>
@@ -121,6 +124,27 @@ public sealed class BitHealthLoopTests
         host.ReceiveEndpoint.Returns(endpoint);
 
         return (new RecoveryEndpointHandle { Handle = host }, endpoint);
+    }
+
+    /// <summary>
+    /// Phase 86 (T-86-12): a <see cref="RecoveryEndpointHandle"/> whose <c>Start(ct).Ready</c> NEVER completes —
+    /// simulating a dead/wedged broker on the healthy edge. The BIT loop's bounded <c>WaitAsync(EdgeOpTimeout)</c>
+    /// must time out (→ caught, retried next tick) instead of freezing the tick, so the top-of-tick beat still
+    /// stamps. Used to prove a hung edge bus-op can no longer starve the liveness beat.
+    /// </summary>
+    private static RecoveryEndpointHandle HangingStartHandle()
+    {
+        var started = Substitute.For<ReceiveEndpointHandle>();
+        started.Ready.Returns(new TaskCompletionSource<ReceiveEndpointReady>().Task);   // never completes
+
+        var endpoint = Substitute.For<IReceiveEndpoint>();
+        endpoint.Start(Arg.Any<CancellationToken>()).Returns(started);
+        endpoint.Stop(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+
+        var host = Substitute.For<HostReceiveEndpointHandle>();
+        host.ReceiveEndpoint.Returns(endpoint);
+
+        return new RecoveryEndpointHandle { Handle = host };
     }
 
     // Start the loop, let it consume the whole script, release the park, then graceful-stop.
@@ -283,28 +307,90 @@ public sealed class BitHealthLoopTests
         endpoint.Received(2).Start(Arg.Any<CancellationToken>());        // first-tick Start + unhealthy->healthy
     }
 
-    // 260614-b5c (Fact A): the keeper self-watchdog stamp is UNCONDITIONAL — it fires every tick OUTSIDE the
-    // edge guard, including on an unhealthy tick. Script = exactly ONE unhealthy tick (RedisDown). prev=null
-    // -> unhealthy IS an edge, but the stamp must NOT depend on the edge: it advances purely because the loop
-    // ticked. A fresh FakeTimeProvider is pinned to a known instant; after the single unhealthy tick the
-    // KeeperLivenessState.Current must equal that instant — edge-gated stamp code would leave it null.
+    // Phase 86 (86-06): the shared liveness beat is UNCONDITIONAL — it fires every tick, at the TOP, OUTSIDE the
+    // edge guard, including on an unhealthy tick. Script = exactly ONE unhealthy tick (RedisDown). prev=null ->
+    // unhealthy IS an edge, but the beat must NOT depend on the edge: it advances purely because the loop ticked.
+    // A FakeTimeProvider is pinned to a known instant; after the single unhealthy tick the LivenessHeartbeat.Current
+    // must equal that instant — edge-gated beat code would leave it null.
     [Fact]
-    public async Task Stamp_Advances_Every_Tick_Including_Unhealthy()
+    [Trait("Phase", "86")]
+    public async Task Beat_Advances_Every_Tick_Including_Unhealthy()
     {
         var ct = TestContext.Current.CancellationToken;
         var instant = new DateTime(2026, 6, 14, 5, 0, 0, DateTimeKind.Utc);
         var clock = new FakeTimeProvider();
         clock.SetUtcNow(new DateTimeOffset(instant));
-        var liveness = new KeeperLivenessState();
+        var heartbeat = new LivenessHeartbeat(clock);
 
         using var redis = new ScriptedRedis([RedisDown()]);   // ONLY an unhealthy tick
         var probe = new L2ProbeRecovery(redis.Multiplexer);
         var bus = Substitute.For<IBus>();
-        using var loop = NewLoop(probe, new L2HealthGate(), bus, FakeHandle().holder, clock, liveness);
+        using var loop = NewLoop(probe, new L2HealthGate(), bus, FakeHandle().holder, heartbeat);
 
         await RunScriptThenStop(loop, redis, ct);
 
-        // The stamp fired on the unhealthy tick (non-null) and equals the pinned clock instant.
-        Assert.Equal(instant, liveness.Current);
+        // The beat fired on the unhealthy tick (non-null) and equals the pinned clock instant.
+        Assert.Equal(instant, heartbeat.Current);
+    }
+
+    // Phase 86 (86-06 / HLTH-03 + HLTH-06): the beat AND the first-beat startup-gate MarkReady both happen at the
+    // TOP of the tick, BEFORE ProbeOnceAsync. Proven deterministically: the probe throws a NON-Redis exception on
+    // the FIRST read, which faults ExecuteAsync AT the probe. Because the beat + MarkReady are placed above the
+    // probe, the pinned heartbeat is already stamped and the gate is already ready despite the fault — an
+    // after-probe beat/mark would leave Current null and the gate un-ready. This is the ordering lock for the
+    // original-bug fix (old beat sat AFTER the probe/edge block).
+    [Fact]
+    [Trait("Phase", "86")]
+    public async Task Beat_And_MarkReady_Fire_Before_The_Probe()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var instant = new DateTime(2026, 7, 26, 9, 0, 0, DateTimeKind.Utc);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(new DateTimeOffset(instant));
+        var heartbeat = new LivenessHeartbeat(clock);
+        var startupGate = new StartupGate();
+
+        using var redis = new ScriptedRedis([new InvalidOperationException("boom")]);   // faults AT the probe
+        var probe = new L2ProbeRecovery(redis.Multiplexer);
+        var bus = Substitute.For<IBus>();
+        using var loop = NewLoop(probe, new L2HealthGate(), bus, FakeHandle().holder, heartbeat, startupGate);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        {
+            await loop.StartAsync(ct);
+            await loop.ExecuteTask!;
+        });
+
+        // Both the beat and the first-beat gate-mark happened BEFORE the throwing probe.
+        Assert.Equal(instant, heartbeat.Current);
+        Assert.True(startupGate.IsReady);
+    }
+
+    // Phase 86 (86-06 / T-86-12): a hung broker edge bus-op can no longer starve the beat. The healthy edge's
+    // Start(ct).Ready NEVER completes; the loop's bounded WaitAsync(EdgeOpTimeout) times out (→ caught, retried)
+    // instead of freezing the tick — and because the beat is FIRST, the pinned heartbeat is stamped regardless.
+    // A regression that awaited the edge op UNBOUNDED (or beat AFTER it) would hang the tick and leave Current
+    // reflecting no fresh beat past the wedge.
+    [Fact]
+    [Trait("Phase", "86")]
+    public async Task Beat_Survives_A_Hung_Edge_BusOp()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var instant = new DateTime(2026, 7, 26, 12, 0, 0, DateTimeKind.Utc);
+        var clock = new FakeTimeProvider();
+        clock.SetUtcNow(new DateTimeOffset(instant));
+        var heartbeat = new LivenessHeartbeat(clock);
+
+        // One healthy tick -> the prev=null->healthy edge fires Start().Ready, which HANGS; its bounded wait
+        // times out and the loop moves on, exhausts the script, and parks. The beat stamped at the tick top.
+        using var redis = new ScriptedRedis([null]);
+        var probe = new L2ProbeRecovery(redis.Multiplexer);
+        var bus = Substitute.For<IBus>();
+        using var loop = NewLoop(probe, new L2HealthGate(), bus, HangingStartHandle(), heartbeat);
+
+        await RunScriptThenStop(loop, redis, ct);
+
+        // The top-of-tick beat is fresh even though the edge Start().Ready hung and its bounded wait timed out.
+        Assert.Equal(instant, heartbeat.Current);
     }
 }
