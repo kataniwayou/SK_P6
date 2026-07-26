@@ -4,13 +4,13 @@ milestone: v12.0.0
 milestone_name: Resilience & Health-Probe Hardening
 status: executing
 stopped_at: Completed 86-05-PLAN.md
-last_updated: "2026-07-26T17:13:57.344Z"
+last_updated: "2026-07-26T18:05:27.990Z"
 last_activity: 2026-07-26
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 16
-  completed_plans: 13
+  completed_plans: 14
   percent: 67
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Phase: 86 (console-webapi-health-liveness-refactor) — EXECUTING
-Plan: 6 of 9
+Plan: 7 of 9
 Status: Ready to execute
 Last activity: 2026-07-26
 Current focus: Phase 86 — console/webapi health-liveness refactor (v12.0.0, first phase)
@@ -706,7 +706,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [████████░░] 81%
+Progress: [█████████░] 88%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1096,6 +1096,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 86 P03 | 20min | 3 tasks | 3 files |
 | Phase 86 P04 | ~12min | 3 tasks | 3 files |
 | Phase 86 P06 | 27min | 3 tasks | 6 files |
+| Phase 86 P07 | 44min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -1659,6 +1660,8 @@ Recent decisions affecting current work:
 - [Phase 86]: 86-04: readiness latch threshold from ConsoleHealth:ReadinessLatchThreshold (default 5, matches k8s keeper readiness failureThreshold)
 - [Phase 86]: 86-04: RedisReadyHealthCheck bounds PingAsync via linked-CTS WaitAsync (~2s) — StackExchange.Redis 2.13.1 PingAsync has no CancellationToken overload
 - [Phase 86]: keeper BitHealthLoop beats the shared ILivenessHeartbeat FIRST (top of tick, before probe/bus) and bounds edge bus-ops with WaitAsync(3s), fixing the BIT-loop stale-under-broker-outage false-restart bug (T-86-12); retired keeper watchdog + L1 state deleted, /health/live now the shared LoopLivenessHealthCheck
+- [Phase ?]: 86-07: processor liveness beat moved ABOVE the IsHealthy gate (unconditional top-of-loop Beat + first-beat MarkReady); IsHealthy now gates ONLY the L2 write — fixes false-restart under down bus (HLTH-03/T-86-14)
+- [Phase ?]: 86-07: retired LivenessWatchdogHealthCheck (/health/live is now the shared timestamp-only LoopLivenessHealthCheck); kept IProcessorLivenessState + ProcessorLivenessWriter for the separate L2 gate (Pitfall 6)
 
 ### Roadmap Milestone Log
 
@@ -1770,7 +1773,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-26T17:09:24.753Z
+Last session: 2026-07-26T18:04:51.452Z
 Stopped at: Completed 86-05-PLAN.md
 Resume file: None
 
