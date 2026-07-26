@@ -19,7 +19,14 @@ namespace Orchestrator.Scheduling;
 /// <para>
 /// <b>[DisallowConcurrentExecution]</b> guarantees a single jobKey never double-fires (Pitfall 4a).
 /// Business cases (workflow gone from L1, entry step missing) are logged + skipped — they NEVER throw.
-/// Only infra faults (broker unreachable on Send) propagate.
+/// An infra fault on an entry-step Send is ALSO logged + skipped on the FIRE path (QUICK-260726-f7x):
+/// it does NOT propagate out of <see cref="Execute"/>, so the L1 liveness refresh and the
+/// self-reschedule below still run and the Quartz schedule chain survives a transient broker blip
+/// (a self-rescheduling non-durable one-shot would otherwise be auto-purged, silently stopping the
+/// workflow). The swallow is PER-ENTRY-STEP (one blip does not drop sibling sends) and NEVER swallows a
+/// host-shutdown cancellation from <c>context.CancellationToken</c> — that still propagates so graceful
+/// shutdown proceeds. (The continuation-dispatch path — RelocateTail via <c>StepDispatcher</c> — keeps
+/// throw → nack → redelivery; only this fire path catches.)
 /// </para>
 /// <para>
 /// Primary-ctor DI mirrors <c>StartOrchestrationConsumer</c>: the body's
@@ -87,13 +94,36 @@ public sealed class WorkflowFireJob(
                         continue;
                     }
 
-                    // D-01: the build-and-Send shape lives in IStepDispatcher (the single owner). D-03: the
-                    // entry-step fire seeds entryId = Guid.Empty — the source-step sentinel (SourceStep.IsSource)
-                    // that replaces the retired deterministic hash. The first Guid.Empty is the (unchanged)
-                    // executionId lineage; the second is the new entryId sentinel. An infra fault on Send propagates.
-                    await dispatcher.DispatchAsync(
-                        workflowId, entryStepId, step.ProcessorId, step.Payload,
-                        correlationId, Guid.Empty, Guid.Empty, context.CancellationToken);
+                    try
+                    {
+                        // D-01: the build-and-Send shape lives in IStepDispatcher (the single owner). D-03: the
+                        // entry-step fire seeds entryId = Guid.Empty — the source-step sentinel (SourceStep.IsSource)
+                        // that replaces the retired deterministic hash. The first Guid.Empty is the (unchanged)
+                        // executionId lineage; the second is the new entryId sentinel. StepDispatcher.Send still
+                        // THROWS on an infra fault (unchanged); the fire path catches it just below.
+                        await dispatcher.DispatchAsync(
+                            workflowId, entryStepId, step.ProcessorId, step.Payload,
+                            correlationId, Guid.Empty, Guid.Empty, context.CancellationToken);
+                    }
+                    catch (Exception ex) when (
+                        !(ex is OperationCanceledException && context.CancellationToken.IsCancellationRequested))
+                    {
+                        // INFRA send fault (broker blip) — swallow-log-CONTINUE (QUICK-260726-f7x) so the fire
+                        // falls through to the L1 liveness refresh + self-reschedule below and the Quartz
+                        // schedule chain survives (a non-durable one-shot with no next trigger is auto-purged →
+                        // the workflow would silently stop firing on this leader until restart/failover). The
+                        // catch is PER-ENTRY-STEP (inside the loop, mirroring the business-skip `continue`
+                        // above) so one entry step's blip does NOT drop the OTHER entry-step sends in this fire.
+                        // The `when` filter deliberately does NOT catch an OperationCanceledException raised by
+                        // host-shutdown of context.CancellationToken — that cancellation propagates so graceful
+                        // shutdown proceeds (Task B). No retry is added; publisher confirmation stays ON. Ids
+                        // (workflowId/correlationId) ride the ALREADY-OPEN scope — only the non-id entryStepId
+                        // and the exception object are template args, which sidesteps CA2017 (T-18-04).
+                        logger.LogWarning(ex,
+                            "Entry step {StepId} send faulted on fire — logging and continuing so the schedule chain survives (infra)",
+                            entryStepId);
+                        continue;
+                    }
                 }
             }
             else

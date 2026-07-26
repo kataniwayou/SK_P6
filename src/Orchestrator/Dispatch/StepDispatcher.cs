@@ -7,7 +7,11 @@ namespace Orchestrator.Dispatch;
 /// <summary>
 /// The sole implementation of <see cref="IStepDispatcher"/> (D-01) — the verbatim build-and-Send
 /// block extracted from <c>WorkflowFireJob</c>. <c>Send</c> (NOT <c>Publish</c>, D-10) to the
-/// per-processor queue <c>queue:{processorId:D}</c>; an infra fault on <c>Send</c> propagates.
+/// per-processor queue <c>queue:{processorId:D}</c>; an infra fault on <c>Send</c> still THROWS
+/// (unchanged). How that throw is handled is the CALLER's concern, and the two callers differ: the
+/// RelocateTail / result-continuation caller relies on the throw → nack → broker redelivery, while the
+/// <c>WorkflowFireJob</c> fire caller CATCHES it (log + continue + self-reschedule) to keep its Quartz
+/// schedule chain alive (QUICK-260726-f7x). This dispatcher itself adds no retry and no catch.
 /// <para>
 /// Phase 43 (D-03): the retired <c>H</c>/flag effect-first dedup machinery is gone. The dispatch is
 /// built straight-through with a <c>Guid</c> <c>entryId</c> (the L2 data key; <c>Guid.Empty</c> = the
@@ -30,7 +34,9 @@ public sealed class StepDispatcher(
             EntryId = entryId,
         };
 
-        // D-10: Send (NOT Publish) to the per-processor queue. An infra fault here propagates.
+        // D-10: Send (NOT Publish) to the per-processor queue. An infra fault here THROWS (unchanged) —
+        // the result-continuation caller lets it propagate → nack → redelivery; the WorkflowFireJob fire
+        // caller catches it (log + reschedule) to preserve its schedule chain (QUICK-260726-f7x).
         var endpoint = await sendProvider.GetSendEndpoint(new Uri($"queue:{processorId:D}"));
         await endpoint.Send(msg, ct);
 

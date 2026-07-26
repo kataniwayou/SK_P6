@@ -7,8 +7,11 @@ namespace Orchestrator.Dispatch;
 /// result consumer (continuation — real executionId/entryId copied from the result) call this,
 /// so the build-and-Send convention lives in exactly one place.
 /// <para>
-/// An infra fault on <c>Send</c> (broker unreachable) propagates so the caller's retry pipeline
-/// can react — the contract is preserved across the cron fire path and the result-continuation path.
+/// An infra fault on <c>Send</c> (broker unreachable) THROWS — that contract is unchanged. The two
+/// callers differ ONLY in how they HANDLE the throw: the result-continuation path (RelocateTail via the
+/// post-process consumer) lets it propagate → nack → broker redelivery, while the cron fire path
+/// (<c>WorkflowFireJob</c>) catches it — log + continue + self-reschedule — so a transient blip does not
+/// silently break its Quartz schedule chain (QUICK-260726-f7x). The dispatcher adds no retry itself.
 /// </para>
 /// </summary>
 public interface IStepDispatcher
