@@ -56,7 +56,20 @@ namespace BaseProcessor.Core.Startup;
 /// the <c>"Healthy"</c> key necessarily lands in L2 AFTER the bind — so the orchestrator (which admits
 /// only Healthy processors) never Sends to a non-existent queue. <see cref="IStartupGate.MarkReady"/> fires
 /// on BOTH the clash path and the pass/skip path (D-09); <see cref="IProcessorContext.MarkHealthy"/> + the
-/// bind fire ONLY on pass/skip. <c>/startup</c> and <c>/ready</c> flip green HERE, not at bare host start.
+/// bind fire ONLY on pass/skip. <c>/ready</c> flips green HERE (it reads the un-latched identity+schema
+/// readiness check's <c>IsHealthy</c>).
+/// </para>
+/// <para>
+/// <b>NOTE (Phase 86 / HLTH-06):</b> <c>/startup</c> no longer flips HERE. Phase 86 adds a competing call
+/// site — <see cref="Liveness.ProcessorLivenessHeartbeat"/> fires <see cref="IStartupGate.MarkReady"/>
+/// UNCONDITIONALLY on its FIRST beat (within ms of host start, independent of <c>IsHealthy</c> / bus
+/// connectivity). Both are hosted services that start concurrently, and since <c>MarkReady</c> is a one-way
+/// idempotent latch the heartbeat's near-instant first beat wins the race and flips <c>/health/startup</c>
+/// long before identity/schema resolves. So the <see cref="IStartupGate.MarkReady"/> calls in THIS class are
+/// now redundant/defensive rather than the sole gate — KEPT for the no-crash-loop clash path (D-09) and as a
+/// backstop. The runtime safety nets still hold: <c>/health/live</c> depends only on the heartbeat's
+/// <c>Beat()</c> (not the gate), and <c>/health/ready</c> is independently gated by the un-latched
+/// identity+schema check.
 /// </para>
 /// <para>
 /// <b>Resilience (T-26-04/05):</b> exactly one in-flight request at a time per loop; a short

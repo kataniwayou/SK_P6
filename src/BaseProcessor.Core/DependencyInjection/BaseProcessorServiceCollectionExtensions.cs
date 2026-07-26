@@ -31,9 +31,17 @@ namespace BaseProcessor.Core.DependencyInjection;
 ///   <item><see cref="ProcessorLivenessOptions"/> bound from the <c>"Processor"</c> section (CONFIG-01);</item>
 ///   <item><c>TimeProvider.System</c> (idempotent), <see cref="ISourceHashProvider"/>,
 ///   <see cref="IProcessorContext"/>, and the <see cref="ProcessorStartupOrchestrator"/> hosted service;</item>
-///   <item>and the REMOVAL of the base library's <c>StartupCompletionService</c> so <c>MarkReady</c>
-///   fires when the processor reaches Healthy (identity + definitions resolved), NOT at bare host
-///   start (D-02 — mirrors <c>Orchestrator/Program.cs</c>).</item>
+///   <item>and the REMOVAL of the base library's <c>StartupCompletionService</c> so
+///   <see cref="Startup.ProcessorStartupOrchestrator"/> is the one that would fire <c>MarkReady</c> when
+///   the processor reaches Healthy (identity + definitions resolved), NOT at bare host start (D-02 —
+///   mirrors <c>Orchestrator/Program.cs</c>). NOTE (Phase 86 / HLTH-06): the EFFECTIVE first
+///   <c>IStartupGate.MarkReady</c> now comes from <see cref="Liveness.ProcessorLivenessHeartbeat"/>'s
+///   UNCONDITIONAL first beat (within ms of host start, independent of <c>IsHealthy</c> / bus
+///   connectivity), which — running concurrently as a hosted service — wins the race against the
+///   orchestrator's own post-Healthy <c>MarkReady</c>. Because <c>MarkReady</c> is a one-way idempotent
+///   latch, the orchestrator's calls are now redundant/defensive for <c>/health/startup</c>, not the sole
+///   gate. <c>/health/ready</c> is UNAFFECTED — it stays independently gated by the un-latched
+///   identity+schema readiness check reading <c>IsHealthy</c>.</item>
 /// </list>
 ///
 /// <para>
