@@ -113,6 +113,10 @@ None — no new network endpoint, auth path, or trust-boundary surface. The `/he
 - The keeper's `/health/ready` Redis + latch inheritance (86-04) is exercised transitively; no keeper-side wiring was needed.
 - No blockers.
 
+## Self-Check: PASSED
+- SUMMARY.md present; all 3 modified files present; all 3 deleted files confirmed gone.
+- All task + summary commits found in git: 148cf60, fcce4f0, 12076a0, a42c768.
+
 ---
 *Phase: 86-console-webapi-health-liveness-refactor*
 *Completed: 2026-07-26*
