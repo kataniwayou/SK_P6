@@ -28,10 +28,6 @@ namespace BaseConsole.Core.Health;
 /// <b>Info-disclosure guard (T-86-01 / T-18-08):</b> messages are STATIC literals — the connection string
 /// and the raw exception detail are NEVER placed in the result message or Data.
 /// </para>
-///
-/// <para><b>RED skeleton:</b> <see cref="CheckHealthAsync"/> returns a static Unhealthy("NOT IMPLEMENTED")
-/// so every behavioral assertion (null / healthy-ping / throwing-mux) fails RED. The resolve-ping-map
-/// logic lands in 86-04; the ctor already pins the locked signature.</para>
 /// </summary>
 public sealed class RedisReadyHealthCheck : IHealthCheck
 {

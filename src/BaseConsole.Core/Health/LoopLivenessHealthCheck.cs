@@ -34,10 +34,6 @@ namespace BaseConsole.Core.Health;
 /// <b>Info-disclosure guard (T-86-01 / T-18-08):</b> all descriptions are STATIC literals — never an
 /// instanceId, connection string, or stack trace in the message or Data.
 /// </para>
-///
-/// <para><b>RED skeleton:</b> <see cref="CheckHealthAsync"/> returns a static Unhealthy("NOT IMPLEMENTED")
-/// so every behavioral assertion in the Phase-86 test fails RED (behavior, not compile). The
-/// null/stale/fresh/boundary logic lands in 86-03; the ctor already pins the locked signature.</para>
 /// </summary>
 public sealed class LoopLivenessHealthCheck : IHealthCheck
 {

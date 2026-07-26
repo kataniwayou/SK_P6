@@ -13,9 +13,6 @@ namespace BaseConsole.Core.Health;
 /// A <c>DateTime?</c> cannot be <c>volatile</c>, hence the long-ticks idiom. The injected clock is the
 /// single time source (test-swappable via <c>FakeTimeProvider</c>).
 /// </para>
-///
-/// <para><b>RED skeleton:</b> both members throw <see cref="NotImplementedException"/> so the Phase-86
-/// behavioral tests fail on behavior (not compile). The Interlocked logic lands in 86-03.</para>
 /// </summary>
 public sealed class LivenessHeartbeat : ILivenessHeartbeat
 {

@@ -23,11 +23,6 @@ namespace BaseConsole.Core.Health;
 /// <c>Interlocked.Increment</c> and set <c>_latched</c> at the threshold; on any non-Unhealthy
 /// <c>Interlocked.Exchange(ref _consecutiveFailures, 0)</c>.
 /// </para>
-///
-/// <para><b>RED skeleton:</b> <see cref="CheckHealthAsync"/> passes straight through to the inner check
-/// with NO latch, so the sticky-after-recovery test fails RED (the inner recovering flips the wrapper back
-/// to Healthy, which the locked behavior forbids). The latch logic lands in 86-04; the ctor already pins
-/// the locked signature.</para>
 /// </summary>
 public sealed class LatchedReadinessHealthCheck : IHealthCheck
 {
