@@ -142,17 +142,25 @@ public static class BaseProcessorServiceCollectionExtensions
         //     Phase-61 self-watchdog probe. Singleton — one volatile-ref-swap record per replica.
         services.AddSingleton<IProcessorLivenessState, ProcessorLivenessState>();
 
-        // 6a''. Phase 61 (PROBE-01/02 / D-05): surface the self-watchdog on the embedded /health/live via the
-        //       generic BaseConsole.Core descriptor seam. The factory bridges the OUTER provider so the check
-        //       resolves the singleton IProcessorLivenessState (6a above) + TimeProvider (step 4) AT CHECK TIME
-        //       (never captured at registration — mirrors BusReadyHealthCheck(_outer), RESEARCH Pitfall 4). The
-        //       "live" tag means the UNCHANGED /health/live Predicate picks it up automatically; it arrives
-        //       transitively via AddBaseProcessor (Processor.* Program.cs do no per-app health wiring).
-        //       Orchestrator/Keeper register NO descriptor, so their /health/live stays self-only (D-01).
+        // 6a''. Phase 86 (HLTH-03/06 / T-86-16): surface liveness on /health/live via the SHARED loop-liveness
+        //       watchdog (BaseConsole.Core) instead of the retired processor-specific LivenessWatchdogHealthCheck.
+        //       AddConsoleLivenessWatchdog registers the shared ILivenessHeartbeat holder (the Phase-86
+        //       ProcessorLivenessHeartbeat Beat()s it every tick) + a "live"-tagged descriptor folding the
+        //       LoopLivenessHealthCheck onto /health/live (stale at k=3 × 10s = 30s). interval=10 matches
+        //       ProcessorLivenessOptions.IntervalSeconds. The retired LivenessWatchdogHealthCheck descriptor is
+        //       GONE; IProcessorLivenessState + ProcessorLivenessWriter (6a / 6a' below) are KEPT — they back
+        //       the SEPARATE L2 healthy-write gate, NOT liveness (Pitfall 6).
+        services.AddConsoleLivenessWatchdog(intervalSeconds: 10);
+
+        // 6a'''. Phase 86 (HLTH-04): the processor identity+schema READINESS check, folded onto /health/ready via
+        //        the generic descriptor seam ("ready" tag). The factory bridges the OUTER provider so the check
+        //        resolves the singleton IProcessorContext AT CHECK TIME and maps its one synchronized signal
+        //        (IsHealthy) → Healthy/Unhealthy (never reads Id/definition props — WR-03). Redis + latch
+        //        readiness are inherited from the 86-04 EmbeddedHealthEndpointService change (no processor code).
         services.AddSingleton(new HealthCheckDescriptor(
-            Name: "liveness-watchdog",
-            Tags: new[] { "live" },
-            Factory: outer => new LivenessWatchdogHealthCheck(outer)));
+            Name: "identity-schema-ready",
+            Tags: new[] { "ready" },
+            Factory: outer => new ProcessorIdentitySchemaReadyHealthCheck(outer)));
 
         // 6a'. Phase 60 (LOOP-03/04 / D-09/11/13/15): the single shared liveness write path both loops call
         //      (L2 SET(perInstance, derived TTL) + idempotent index SADD + unconditional L1 Update +

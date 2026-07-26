@@ -9,7 +9,6 @@ using MassTransit.Testing;
 using Messaging.Contracts;
 using Messaging.Contracts.Projections;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
@@ -37,9 +36,9 @@ namespace BaseApi.Tests.Processor;
 ///   reset each interval, never decaying to expiry as in the gap.</item>
 ///   <item><b>Fact C (L1 advances):</b> the in-memory <c>l1.Current</c> record stays Unhealthy and its
 ///   timestamp advances past the first captured one (never goes stale).</item>
-///   <item><b>Fact D (watchdog verdict UNCHANGED — D-03):</b> a refreshed interval=10 Unhealthy L1 entry reads
-///   as <see cref="HealthStatus.Healthy"/> "live" (NOT "liveness loop stale"); the watchdog Data carries the
-///   config=Fail outcome (PROBE-02). The fix does NOT re-introduce the false-restart bug.</item>
+///   <item><b>Fact D — RETIRED (86-07):</b> its regression guard asserted the now-DELETED
+///   <c>LivenessWatchdogHealthCheck</c>; /health/live moved to the shared unconditional-beat
+///   <c>LoopLivenessHealthCheck</c>, so the guard is subsumed by <c>LivenessHeartbeatFacts</c>.</item>
 ///   <item><b>Fact E (clean shutdown — D-06):</b> cancelling the refresh loop via <c>StopAsync</c> exits
 ///   cleanly with no unobserved exception and a non-faulted background task.</item>
 /// </list>
@@ -253,47 +252,13 @@ public sealed class ClashRefreshFacts : IClassFixture<RedisFixture>
         Assert.Equal(1, await db.SetLengthAsync(index));
     }
 
-    /// <summary>
-    /// Fact D (watchdog verdict UNCHANGED — D-03 / PROBE-02): take a REFRESHED <c>l1.Current</c> from a driven
-    /// clash run (a fresh interval=10 Unhealthy entry whose timestamp is the fake clock's now), feed it to a real
-    /// <see cref="LivenessWatchdogHealthCheck"/> over a stub provider returning that L1 + the SAME
-    /// <see cref="FakeTimeProvider"/>, and assert the verdict is <see cref="HealthStatus.Healthy"/> "live" — NOT
-    /// "liveness loop stale". A refreshed-but-Unhealthy replica reads LIVE; the config=Fail outcome rides in the
-    /// watchdog Data (status in the body, verdict stays live). This is the regression guard that the Plan-01 fix
-    /// does NOT re-introduce the false-restart bug (the watchdog code is asserted, never modified).
-    /// </summary>
-    [Fact]
-    public async Task RefreshedUnhealthy_L1_Reads_Live_On_Unmodified_Watchdog_With_ConfigFail_In_Data()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var procId = Guid.NewGuid();
-        var perInstance = L2ProjectionKeys.PerInstance(procId, InstanceId);
-        var index = L2ProjectionKeys.InstanceIndex(procId);
-        _redis.Track(perInstance);
-        _redis.Track(index);
-
-        await using var run = await DriveIntoRefreshLoopAsync(procId, perInstance, index, ct);
-
-        // Advance one refresh interval so the L1 record is a REFRESHED interval=10 Unhealthy entry whose
-        // timestamp == the fake clock's now (the loop stamps clock.GetUtcNow() on each re-SET).
-        var beforeRefresh = run.L1.Current?.Timestamp ?? DateTime.MinValue;
-        // Poll on the L1 record's timestamp advancing past the pre-advance value rather than a fixed sleep,
-        // so a slow continuation cannot race the read (IN-02). The helper advances the fake clock each poll.
-        var refreshed = await PollUntilL1AdvancesAsync(run.L1, run.Clock, beforeRefresh, ct);
-        AssertRefreshEntry(refreshed);    // fresh interval=10 Unhealthy / config=Fail
-
-        // Real watchdog over the refreshed L1 + the SAME clock (no extra advance ⇒ now == Timestamp ⇒ fresh).
-        var sp = BuildWatchdogProvider(refreshed, run.Clock);
-        var result = await new LivenessWatchdogHealthCheck(sp).CheckHealthAsync(new HealthCheckContext(), ct);
-
-        // The verdict is unchanged (D-03): a refreshed-but-Unhealthy replica reads LIVE, NOT "loop stale".
-        Assert.Equal(HealthStatus.Healthy, result.Status);
-        Assert.Equal("live", result.Description);
-
-        // PROBE-02: the config=Fail outcome rides in the watchdog Data (status in the body, verdict stays live).
-        Assert.True(result.Data.ContainsKey("configSchema"));
-        Assert.Equal(SchemaOutcome.Fail, result.Data["configSchema"]);
-    }
+    // Phase 86 (86-07 / T-86-16): the former Fact D asserted the RETIRED LivenessWatchdogHealthCheck
+    // (an IProcessorLivenessState-reading /health/live probe) read a refreshed-but-Unhealthy L1 as "live".
+    // That processor-specific watchdog is DELETED — /health/live is now the shared LoopLivenessHealthCheck
+    // reading ILivenessHeartbeat, which beats UNCONDITIONALLY above the Healthy gate (ProcessorLivenessHeartbeat,
+    // 86-07), so the false-restart-under-refresh regression it guarded is now structurally impossible and is
+    // re-locked by LivenessHeartbeatFacts' "beats when not-Healthy" assertion. Facts A/B/C/E below still exercise
+    // the KEPT L1/L2 refresh behavior (IProcessorLivenessState backs the separate L2 healthy-write gate — Pitfall 6).
 
     /// <summary>
     /// Fact E (clean shutdown — D-06): drive the clash path into the refresh loop, then cancel the
@@ -334,22 +299,6 @@ public sealed class ClashRefreshFacts : IClassFixture<RedisFixture>
 
         // Tear down the harness (orchestrator already stopped above).
         await run.DisposeAsync();
-    }
-
-    /// <summary>
-    /// Mirrors <c>LivenessWatchdogHealthCheckTests.BuildProvider</c>: a stub <see cref="IServiceProvider"/>
-    /// returning the supplied refreshed L1 holder + the SAME <see cref="FakeTimeProvider"/> the refresh loop
-    /// stamped against, so the watchdog's freshness math runs on identical clock state (D-03).
-    /// </summary>
-    private static IServiceProvider BuildWatchdogProvider(ProcessorLivenessEntry current, FakeTimeProvider clock)
-    {
-        var state = Substitute.For<IProcessorLivenessState>();
-        state.Current.Returns(current);
-
-        var sp = Substitute.For<IServiceProvider>();
-        sp.GetService(typeof(IProcessorLivenessState)).Returns(state);
-        sp.GetService(typeof(TimeProvider)).Returns(clock);
-        return sp;
     }
 
     private static async Task<ProcessorLivenessEntry> ReadEntryAsync(IDatabase db, RedisKey key, CancellationToken ct)

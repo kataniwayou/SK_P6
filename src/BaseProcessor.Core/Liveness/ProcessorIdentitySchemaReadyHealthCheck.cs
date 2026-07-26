@@ -54,11 +54,14 @@ public sealed class ProcessorIdentitySchemaReadyHealthCheck : IHealthCheck
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
-        // RED skeleton (Wave-0): the readiness mapping is pinned by IdentitySchemaReadyHealthCheckTests but
-        // not yet implemented. The real body resolves IProcessorContext from _outer at check time and maps
-        // IsHealthy -> Healthy("identity+schema resolved") / false -> Unhealthy("identity+schema not yet
-        // resolved"); it never reads Id/InputDefinition/etc (WR-03). Implemented in a later wave.
-        _ = _outer;
-        return Task.FromResult(HealthCheckResult.Unhealthy("NOT IMPLEMENTED"));
+        // Pattern 4 (RESEARCH Pitfall 4): resolve the singleton IProcessorContext from the OUTER provider AT
+        // CHECK TIME (it lives in the outer container, not the inner listener container). Read ONLY the one
+        // synchronized, never-throw signal — IsHealthy (Volatile.Read) — which means precisely "identity + all
+        // required definitions resolved". Never read Id/InputDefinition/etc (WR-03 stale-null hazard). Both
+        // descriptions are STATIC literals — no processor id or infra detail leaks (T-86-15 info-disclosure).
+        var processorContext = _outer.GetRequiredService<IProcessorContext>();
+        return Task.FromResult(processorContext.IsHealthy
+            ? HealthCheckResult.Healthy("identity+schema resolved")
+            : HealthCheckResult.Unhealthy("identity+schema not yet resolved"));
     }
 }
