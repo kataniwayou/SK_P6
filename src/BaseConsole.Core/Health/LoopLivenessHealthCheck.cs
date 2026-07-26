@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace BaseConsole.Core.Health;
@@ -55,9 +56,26 @@ public sealed class LoopLivenessHealthCheck : IHealthCheck
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
-        // Fields captured for 86-03 (resolve ILivenessHeartbeat + TimeProvider from _outer at check time,
-        // stale iff now >= Current + _k * _intervalSeconds); not yet consulted in the RED skeleton.
-        _ = (_outer, _intervalSeconds, _k);
-        return Task.FromResult(HealthCheckResult.Unhealthy("NOT IMPLEMENTED"));
+        // OUTER check-time resolution (RESEARCH Pitfall 4 / T-61-06): the singletons live in the outer host
+        // container, not the inner listener container — never captured at registration.
+        var heartbeat = _outer.GetRequiredService<ILivenessHeartbeat>();
+        var clock = _outer.GetRequiredService<TimeProvider>();
+
+        var current = heartbeat.Current;
+        if (current is null)
+        {
+            // The loop crashed before its first beat — boot coverage is the future K8s startupProbe.
+            return Task.FromResult(HealthCheckResult.Unhealthy("liveness loop not started"));
+        }
+
+        var now = clock.GetUtcNow().UtcDateTime;
+        // Strict >= so the exact boundary instant (Current + k*interval == now) is stale, matching the
+        // retired watchdog's boundary discipline generalized ×2 → ×k (k=3, RESEARCH Pattern 1).
+        if (now >= current.Value.AddSeconds(_intervalSeconds * _k))
+        {
+            return Task.FromResult(HealthCheckResult.Unhealthy("liveness loop stale"));
+        }
+
+        return Task.FromResult(HealthCheckResult.Healthy("live"));
     }
 }
