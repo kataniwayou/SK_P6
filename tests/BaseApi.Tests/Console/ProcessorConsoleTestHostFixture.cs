@@ -1,8 +1,8 @@
 using BaseConsole.Core.DependencyInjection;
+using BaseConsole.Core.Health;
 using BaseProcessor.Core.DependencyInjection;
 using BaseProcessor.Core.Liveness;
 using BaseProcessor.Core.Startup;
-using Messaging.Contracts.Projections;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Processor.Sample;
@@ -18,23 +18,31 @@ namespace BaseApi.Tests.Console;
 /// processor composition root (<c>AddBaseProcessor</c>) exactly as <c>Processor.Sample/Program.cs</c> does
 /// — observability + <c>AddBaseProcessor</c> (which folds the BaseConsole infra + bus + identity + liveness
 /// + the embedded health listener) + the ONE concrete <see cref="BaseProcessorBase"/> seam
-/// (<see cref="SampleProcessor"/>). The Plan-02 <c>liveness-watchdog</c> <see cref="HealthCheckDescriptor"/>
-/// is registered transitively by <c>AddBaseProcessor</c>, so it arrives on the embedded <c>/health/live</c>
-/// listener WITHOUT any per-app health wiring — this fixture is the end-to-end proof of that path.
+/// (<see cref="SampleProcessor"/>).
+/// </para>
+///
+/// <para>
+/// <b>Phase 86 (HLTH-03 / 86-07).</b> The processor <c>/health/live</c> is now the SHARED
+/// <c>LoopLivenessHealthCheck</c> registered by <c>AddConsoleLivenessWatchdog(intervalSeconds:10)</c> inside
+/// <c>AddBaseProcessor</c> — it reads the shared <see cref="ILivenessHeartbeat"/> (NOT the retired
+/// <c>IProcessorLivenessState</c> watchdog, which is deleted; the L1 holder now backs only the separate L2
+/// gate). The descriptor arrives transitively on the embedded listener WITHOUT any per-app health wiring —
+/// this fixture is the end-to-end proof of that path. The verdict is timestamp-only (no per-schema summary
+/// in the body — 86-03 contract).
 /// </para>
 ///
 /// <para>
 /// <b>Dead-dep boot (D-01 / T-61-08).</b> The inherited <c>BuildConfig</c> points Redis + RabbitMQ at dead
-/// ports; the watchdog reads ONLY the in-process L1 holder (never Redis/RMQ), so the host boots and
+/// ports; the watchdog reads ONLY the in-process heartbeat holder (never Redis/RMQ), so the host boots and
 /// <c>/health/live</c> answers regardless. A dependency blip cannot flip liveness — only a genuinely
-/// null/stale L1 loop does.
+/// null/stale beat does.
 /// </para>
 ///
 /// <para>
-/// <b>L1 seeding.</b> <see cref="SeedLiveness"/> resolves the singleton <see cref="IProcessorLivenessState"/>
-/// from the running host and swaps in a <see cref="ProcessorLivenessEntry"/> so a test can deterministically
-/// drive the fresh/stale verdict immediately before its GET. Leaving <c>Current</c> unseeded exercises the
-/// null ("liveness loop not started") verdict.
+/// <b>Heartbeat driving.</b> <see cref="BeatLiveness"/> resolves the singleton <see cref="ILivenessHeartbeat"/>
+/// from the running host and stamps a fresh beat (real clock) so a test can deterministically drive the
+/// Healthy verdict immediately before its GET. Leaving it un-beaten exercises the null ("liveness loop not
+/// started") verdict → 503. (Staleness verdict math is unit-covered by <c>LoopLivenessHealthCheckTests</c>.)
 /// </para>
 /// </summary>
 public class ProcessorConsoleTestHostFixture : ConsoleTestHostFixture
@@ -48,7 +56,7 @@ public class ProcessorConsoleTestHostFixture : ConsoleTestHostFixture
     protected override void ConfigureBuilder(IHostApplicationBuilder builder)
     {
         builder.AddBaseConsoleObservability(builder.Configuration);          // metrics-only OTel (no tracer)
-        builder.Services.AddBaseProcessor(builder.Configuration);            // identity + liveness + dispatch + heartbeat (+ watchdog descriptor)
+        builder.Services.AddBaseProcessor(builder.Configuration);            // identity + liveness + dispatch + heartbeat (+ shared watchdog descriptor)
         builder.Services.AddSingleton<BaseProcessorBase, SampleProcessor>(); // the ONE concrete transform seam
 
         // [Rule 3 - Blocking] The two processor background loops (ProcessorStartupOrchestrator +
@@ -57,11 +65,12 @@ public class ProcessorConsoleTestHostFixture : ConsoleTestHostFixture
         // assembly's [assembly: AssemblyMetadata("SourceHash", ...)] — emitted only onto a real
         // Processor.<Purpose>.dll by the Phase-28 MSBuild embed target, never onto the BaseApi.Tests entry
         // assembly. Without it the orchestrator throws inside Host.StartAsync and the fixture cannot start.
-        // These loops are IRRELEVANT to this proof: the test seeds the L1 holder DIRECTLY via SeedLiveness
-        // (the loops are the only OTHER L1 writers), and the watchdog/listener wiring under proof is
-        // registered separately by AddBaseProcessor (the live-tagged HealthCheckDescriptor + the embedded
-        // EmbeddedHealthEndpointService) and is left intact. We strip ONLY these two hosted services by
-        // their concrete singleton type so the embedded listener + MassTransit bus hosted services survive.
+        // These loops are IRRELEVANT to this proof: the test drives the shared heartbeat DIRECTLY via
+        // BeatLiveness (the ProcessorLivenessHeartbeat loop is the only OTHER Beat() caller), and the
+        // watchdog/listener wiring under proof is registered separately by AddBaseProcessor (the live-tagged
+        // shared-watchdog HealthCheckDescriptor + the embedded EmbeddedHealthEndpointService) and is left
+        // intact. We strip ONLY these two hosted services by their concrete singleton type so the embedded
+        // listener + MassTransit bus hosted services survive.
         RemoveHostedService<ProcessorStartupOrchestrator>(builder.Services);
         RemoveHostedService<ProcessorLivenessHeartbeat>(builder.Services);
     }
@@ -100,11 +109,11 @@ public class ProcessorConsoleTestHostFixture : ConsoleTestHostFixture
     }
 
     /// <summary>
-    /// Seeds the singleton L1 liveness holder so the watchdog produces a deterministic verdict on the next
-    /// GET. Fresh = <c>(DateTime.UtcNow, 300)</c>; stale = <c>(DateTime.UtcNow.AddDays(-1), 0)</c>. All three
-    /// per-schema outcomes are left null (=&gt; Success), so the summary fields are present in the body.
+    /// Phase 86 (HLTH-03 / 86-07): stamps a FRESH beat on the singleton shared <see cref="ILivenessHeartbeat"/>
+    /// (real clock) so the shared <c>LoopLivenessHealthCheck</c> reports Healthy ("live") on the next GET.
+    /// Leaving it un-beaten exercises the null ("liveness loop not started") verdict → 503. Replaces the
+    /// retired L1 <c>SeedLiveness</c> — the L1 <c>IProcessorLivenessState</c> no longer backs <c>/health/live</c>.
     /// </summary>
-    public void SeedLiveness(DateTime timestamp, int interval)
-        => Host.Services.GetRequiredService<IProcessorLivenessState>()
-               .Update(ProcessorLivenessEntry.Create(null, null, null, timestamp, interval));
+    public void BeatLiveness()
+        => Host.Services.GetRequiredService<ILivenessHeartbeat>().Beat();
 }
