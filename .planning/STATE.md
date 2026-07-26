@@ -4,13 +4,13 @@ milestone: v12.0.0
 milestone_name: Resilience & Health-Probe Hardening
 status: executing
 stopped_at: Completed 86-05-PLAN.md
-last_updated: "2026-07-26T18:05:27.990Z"
+last_updated: "2026-07-26T18:09:58.846Z"
 last_activity: 2026-07-26
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 16
-  completed_plans: 14
+  completed_plans: 15
   percent: 67
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Phase: 86 (console-webapi-health-liveness-refactor) — EXECUTING
-Plan: 7 of 9
+Plan: 8 of 9
 Status: Ready to execute
 Last activity: 2026-07-26
 Current focus: Phase 86 — console/webapi health-liveness refactor (v12.0.0, first phase)
@@ -706,7 +706,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [█████████░] 88%
+Progress: [█████████░] 94%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1097,6 +1097,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 86 P04 | ~12min | 3 tasks | 3 files |
 | Phase 86 P06 | 27min | 3 tasks | 6 files |
 | Phase 86 P07 | 44min | 3 tasks | 9 files |
+| Phase 86 P08 | 6min | 1 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -1773,7 +1774,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-26T18:04:51.452Z
+Last session: 2026-07-26T18:09:51.641Z
 Stopped at: Completed 86-05-PLAN.md
 Resume file: None
 
