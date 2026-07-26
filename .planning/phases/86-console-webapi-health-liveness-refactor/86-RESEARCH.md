@@ -382,16 +382,16 @@ This is a code/config refactor with NO stored-data or external-registration migr
 | A3 | Latch keys off consecutive failed probe evaluations (kubelet cadence) rather than a wall-clock timer | Pattern 5 | Low — spec §6 explicitly permits "key off consecutive failed evaluations". A timer-based window is an alternative if evaluation cadence is deemed unreliable. |
 | A4 | `StackExchange.Redis` `PingAsync()` on `IDatabase` is the bounded ping (no CT overload; rely on multiplexer timeouts or `.WaitAsync`) | Pattern 3 | Low — version 2.13.1 confirmed pinned; exact ping API should be verified at implementation (`IDatabase.PingAsync()` exists; `IServer.PingAsync` is an alternative). |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Where does the latch live for the console (inner container) vs. baseapi (outer chain)?**
    - What we know: console checks run in the inner Kestrel container (folded descriptors); baseapi checks run in the single outer `AddHealthChecks` chain.
    - What's unclear: whether to register the latch as a wrapping descriptor (console) and a singleton-wrapped check (baseapi), or unify.
-   - Recommendation: console → wrap inside the `HealthCheckDescriptor.Factory` (per-listener singleton); baseapi → register the latch instance as a singleton and reference it in `.AddCheck`. Verify with the Pitfall-4 test.
+   - RESOLVED: console → wrap inside the `HealthCheckDescriptor.Factory` (per-listener singleton); baseapi → register the latch instance as a singleton and reference it in `.AddCheck`. Verify with the Pitfall-4 test. (Implemented by 86-04 Task 3 + 86-05.)
 
 2. **Should `LoopLivenessHealthCheck` retain the null-not-started branch given first-beat→startup handoff?**
    - What we know: with startupProbe guarding boot and first-beat marking the gate, `/health/live` should only ever see a beaten state in steady state.
-   - Recommendation: keep the null→Unhealthy("not started") branch as defense-in-depth (cheap), matching both retired checks.
+   - RESOLVED: keep the null→Unhealthy("not started") branch as defense-in-depth (cheap), matching both retired checks. (Implemented by 86-03 Task 2.)
 
 ## Environment Availability
 
