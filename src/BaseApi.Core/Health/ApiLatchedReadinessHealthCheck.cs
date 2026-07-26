@@ -22,6 +22,8 @@ public sealed class ApiLatchedReadinessHealthCheck : IHealthCheck
 {
     private readonly IHealthCheck _inner;
     private readonly int _failureThreshold;
+    private int _consecutiveFailures;
+    private volatile bool _latched;
 
     public ApiLatchedReadinessHealthCheck(IHealthCheck inner, int failureThreshold)
     {
@@ -29,12 +31,32 @@ public sealed class ApiLatchedReadinessHealthCheck : IHealthCheck
         _failureThreshold = failureThreshold;
     }
 
-    public Task<HealthCheckResult> CheckHealthAsync(
+    public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
-        // RED skeleton: pass-through, NO latch. Latch logic lands in the GREEN step of this task.
-        _ = _failureThreshold;
-        return _inner.CheckHealthAsync(context, cancellationToken);
+        // Once latched, stay Unhealthy forever (restart-only recovery — no self-heal, T-86-10).
+        if (_latched)
+        {
+            return HealthCheckResult.Unhealthy("readiness latched (sustained dependency failure — restart required)");
+        }
+
+        var result = await _inner.CheckHealthAsync(context, cancellationToken);
+
+        if (result.Status == HealthStatus.Unhealthy)
+        {
+            if (Interlocked.Increment(ref _consecutiveFailures) >= _failureThreshold)
+            {
+                _latched = true;
+            }
+        }
+        else
+        {
+            Interlocked.Exchange(ref _consecutiveFailures, 0); // a transient blip resets the counter
+        }
+
+        return _latched
+            ? HealthCheckResult.Unhealthy("readiness latched (sustained dependency failure — restart required)")
+            : result;
     }
 }

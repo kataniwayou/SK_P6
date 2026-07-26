@@ -41,12 +41,29 @@ public sealed class ApiRedisReadyHealthCheck : IHealthCheck
 
     public ApiRedisReadyHealthCheck(IServiceProvider outer) => _outer = outer;
 
-    public Task<HealthCheckResult> CheckHealthAsync(
+    public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
-        // RED skeleton — resolve-ping-map logic lands in the GREEN step of this task.
-        _ = _outer;
-        return Task.FromResult(HealthCheckResult.Unhealthy("NOT IMPLEMENTED"));
+        // Resolve the multiplexer AT CHECK TIME (never captured at registration — Pitfall 4). Unresolved
+        // (null) ⇒ Unhealthy, so readiness never reports a stale-Healthy state before Redis is up.
+        var mux = _outer.GetService<IConnectionMultiplexer>();
+        if (mux is null)
+        {
+            return HealthCheckResult.Unhealthy("Redis not started");
+        }
+
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            cts.CancelAfter(TimeSpan.FromSeconds(2)); // bounded — a dead Redis can never hang the probe
+            await mux.GetDatabase().PingAsync().WaitAsync(cts.Token);
+            return HealthCheckResult.Healthy();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            // STATIC literal only — the connection string and raw exception detail NEVER leak (T-86-09).
+            return HealthCheckResult.Unhealthy("Redis unreachable");
+        }
     }
 }
