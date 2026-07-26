@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v12.0.0
 milestone_name: Resilience & Health-Probe Hardening
-status: in_progress
-stopped_at: Phase 86 planning
-last_updated: 2026-07-26T00:00:00.000Z
+status: executing
+stopped_at: Completed 85-03-PLAN.md
+last_updated: "2026-07-26T14:12:47.333Z"
 last_activity: 2026-07-26
 progress:
-  total_phases: 1
-  completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
-  percent: 0
+  total_phases: 3
+  completed_phases: 2
+  total_plans: 16
+  completed_plans: 8
+  percent: 50
 ---
 
 # Project State
@@ -20,17 +20,17 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Milestone complete
+**Current focus:** Phase 86 — console-webapi-health-liveness-refactor
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
 
 ## Current Position
 
-Phase: 86
-Plan: Planned — 9 plans in 5 waves (ready for /gsd:execute-phase 86)
-Status: Phase planned
-Last activity: 2026-07-26 - Planned Phase 86 (console/webapi health-liveness refactor); plan-checker 0 blockers
+Phase: 86 (console-webapi-health-liveness-refactor) — EXECUTING
+Plan: 2 of 9
+Status: Ready to execute
+Last activity: 2026-07-26
 Current focus: Phase 86 — console/webapi health-liveness refactor (v12.0.0, first phase)
 
 ### Quick Tasks Completed
@@ -706,7 +706,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [█████████░] 86%
+Progress: [█████░░░░░] 50%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1090,6 +1090,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 85 P01 | 35min | 2 tasks | 4 files |
 | Phase 85 P02 | 18min | 2 tasks | 2 files |
 | Phase 85 P03 | 40min | 3 tasks | 7 files |
+| Phase 86 P01 | 30 | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -1643,6 +1644,8 @@ Recent decisions affecting current work:
 - [Phase ?]: PB-01: SpawnToPost fails loud on transient send-exhaust — fires OnSpawnDropped telemetry THEN throws SpawnSendExhaustedException (Exception-derived, ids-only ExecutionId+inner); deterministic faults still throw raw (D-03), IsTransientSendFault unchanged
 - [Phase 85]: PB-02: narrow catch (SpawnSendExhaustedException) { throw; } in ProcessorPipeline turns a defeated Mode-2 spawn into a nack-requeue; deterministic faults stay in the generic catch (StepFailed+ack, D-03 preserved)
 - [Phase 85]: PB-03: entry deletion is framework-owned via a shared ProcessorPipeline.DeleteEntryTail called from both the Mode-1 tail and the Mode-2 null-return path; the concrete DeleteEntry API/SeamState.EntryId/EscalateDelete are removed and SampleProcessor no longer deletes — Shrinks the concrete-processor surface to interpret-input/business-logic/return-or-spawn; the Guid.Empty source net-effect and DELETE-keeper escalation are both preserved (guarded by !SourceStep.IsSource; escalation moved inline to SendKeeper(BuildDelete))
+- [Phase 86]: 86-01: RED skeletons use explicit ctors (not primary) — captured-but-unread params trip CS9113 under warnings-as-errors; exact locked ctor signatures preserved
+- [Phase 86]: 86-01: k=3 staleness grace (was x2) for LoopLivenessHealthCheck; no-secret guard reused from LivenessWatchdogHealthCheckTests
 
 ### Roadmap Milestone Log
 
@@ -1754,7 +1757,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-21T21:34:19.716Z
+Last session: 2026-07-26T14:12:27.166Z
 Stopped at: Completed 85-03-PLAN.md
 Resume file: None
 
