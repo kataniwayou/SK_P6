@@ -55,7 +55,7 @@
   - [x] 86-06-PLAN.md — Wave 2: keeper — top-of-tick beat + bounded edge bus-ops + first-beat MarkReady; delete keeper watchdog+state
   - [x] 86-07-PLAN.md — Wave 2: processor — unconditional beat above the gate + first-beat MarkReady + identity/schema readiness; delete BaseProcessor watchdog
   - [x] 86-08-PLAN.md — Wave 3: add startupProbe -> /health/startup to all four k8s manifests
-  - [ ] 86-09-PLAN.md — Wave 4: terminal gate — full hermetic green + startupProbe grep + live broker-unreachable proof (RESTARTS 0)
+  - [x] 86-09-PLAN.md — Wave 4: terminal gate — full hermetic green + startupProbe grep + live broker-unreachable proof (RESTARTS 0)
 
 ## 🚧 v11.0.0 Kafka Binary Import/Export (In Progress — started 2026-07-21)
 

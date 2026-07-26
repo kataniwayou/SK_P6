@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v12.0.0
 milestone_name: Resilience & Health-Probe Hardening
-status: executing
-stopped_at: Completed 86-05-PLAN.md
-last_updated: "2026-07-26T18:09:58.846Z"
+status: milestone_complete
+stopped_at: Milestone complete (Phase 86 was final phase)
+last_updated: 2026-07-26T19:51:17.358Z
 last_activity: 2026-07-26
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 16
-  completed_plans: 15
+  completed_plans: 16
   percent: 67
 ---
 
@@ -20,16 +20,16 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase 86 — console-webapi-health-liveness-refactor
+**Current focus:** Milestone complete
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
 
 ## Current Position
 
-Phase: 86 (console-webapi-health-liveness-refactor) — EXECUTING
-Plan: 8 of 9
-Status: Ready to execute
+Phase: 86
+Plan: Not started
+Status: Milestone complete
 Last activity: 2026-07-26
 Current focus: Phase 86 — console/webapi health-liveness refactor (v12.0.0, first phase)
 
@@ -735,7 +735,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 
 **Velocity:**
 
-- Total plans completed: 293
+- Total plans completed: 302
 - Average duration: —
 - Total execution time: —
 
@@ -821,6 +821,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | 82 | 4 | - | - |
 | 83 | 5 | - | - |
 | 85 | 4 | - | - |
+| 86 | 9 | - | - |
 
 **Recent Trend:**
 
