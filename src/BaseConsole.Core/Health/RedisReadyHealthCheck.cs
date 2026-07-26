@@ -43,28 +43,25 @@ public sealed class RedisReadyHealthCheck : IHealthCheck
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
     {
+        // Resolve the multiplexer from the OUTER provider AT CHECK TIME (never captured at registration —
+        // RESEARCH Pitfall 4). A not-yet-connected / absent Redis reads as null → Unhealthy, so readiness
+        // never reports a stale-Healthy state (HLTH-04).
+        // NOTE (WR-05 reverted): resolution is intentionally OUTSIDE the ping budget. The singleton factory's
+        // first-time synchronous ConnectionMultiplexer.Connect can legitimately exceed PingTimeout against a
+        // REACHABLE-but-cold Redis; bounding it into that window turned a slow-but-successful connect into a
+        // false NotReady (and risked latching a healthy dependency). The ping itself stays bounded below.
+        var mux = _outer.GetService<IConnectionMultiplexer>();
+        if (mux is null)
+        {
+            return HealthCheckResult.Unhealthy("Redis not started");
+        }
+
         try
         {
-            // ONE bounded budget for the WHOLE check (WR-05 / T-86-08): both the first-time multiplexer
-            // RESOLUTION and the ping share this deadline. The IConnectionMultiplexer singleton factory does a
-            // SYNCHRONOUS, blocking ConnectionMultiplexer.Connect on first resolution (no pre-warm hosted
-            // service — D-17). If this check is the first component in the process to resolve it, that connect
-            // could block PAST this window before the ping deadline even started; bounding the resolution too
-            // (offloaded via Task.Run so the blocking connect can never hang the probe) closes that gap.
             using var timeout = new CancellationTokenSource(PingTimeout);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
 
-            // Resolve the multiplexer from the OUTER provider AT CHECK TIME (never captured at registration —
-            // RESEARCH Pitfall 4). A not-yet-connected / absent Redis reads as null → Unhealthy, so readiness
-            // never reports a stale-Healthy state (HLTH-04).
-            var mux = await Task.Run(() => _outer.GetService<IConnectionMultiplexer>())
-                .WaitAsync(linked.Token).ConfigureAwait(false);
-            if (mux is null)
-            {
-                return HealthCheckResult.Unhealthy("Redis not started");
-            }
-
-            // StackExchange.Redis 2.13.1 PingAsync has no CancellationToken overload — bound it via the same
+            // StackExchange.Redis 2.13.1 PingAsync has no CancellationToken overload — bound it via the
             // linked CTS + WaitAsync so a hung Redis cannot hang the probe (T-86-08).
             await mux.GetDatabase().PingAsync().WaitAsync(linked.Token).ConfigureAwait(false);
             return HealthCheckResult.Healthy();
