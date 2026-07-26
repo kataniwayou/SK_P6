@@ -29,7 +29,10 @@ namespace BaseConsole.Core.Health;
 ///   <item><c>/health/live</c> = the always-Healthy <c>"self"</c> check ONLY — never Redis/RMQ, so a
 ///   dependency blip can never flip liveness and trigger a pod restart (CONSOLE-HEALTH-02 / T-18-09).</item>
 ///   <item><c>/health/startup</c> = the <c>StartupHealthCheck</c> over the shared gate (CONSOLE-HEALTH-04).</item>
-///   <item><c>/health/ready</c> = the <c>BusReadyHealthCheck</c> reading the outer bus (CONSOLE-HEALTH-03).</item>
+///   <item><c>/health/ready</c> = the outer bus state (<c>BusReadyHealthCheck</c>) AND the Redis PING
+///   (<c>RedisReadyHealthCheck</c>), each wrapped in its own per-process <c>LatchedReadinessHealthCheck</c>
+///   so a sustained required-dependency failure latches NotReady until an operator restart, defeating
+///   client auto-reconnect self-heal (CONSOLE-HEALTH-03 / HLTH-04/05/08).</item>
 /// </list>
 /// </para>
 ///
@@ -69,13 +72,24 @@ internal sealed class EmbeddedHealthEndpointService : IHostedService
 
         // Share the OUTER gate instance into the inner DI so /health/startup tracks the real latch.
         builder.Services.AddSingleton(_gate);
-        // Bridge to the OUTER bus health so /health/ready reflects real bus state (Open-Q 1).
-        builder.Services.AddSingleton(new BusReadyHealthCheck(_outer));
+
+        // HLTH-05 latch cadence: source the consecutive-failure threshold from config, defaulting to 5 to
+        // match the k8s readiness failureThreshold (keeper=5). The latch rides the kubelet's own polling
+        // cadence — periodSeconds × failureThreshold consecutive failures flip the sticky latch.
+        var latchThreshold = _cfg.GetValue<int?>("ConsoleHealth:ReadinessLatchThreshold") ?? 5;
+
+        // Construct the required-dependency readiness checks ONCE here (StartAsync runs once per process),
+        // then wrap EACH in its OWN per-process latch instance so its sticky state persists across probe
+        // polls (RESEARCH Pitfall 4 — never new the latch per request). Both checks resolve the OUTER
+        // provider at check time (Open-Q 1): bus state + Redis PING.
+        var latchedBusReady = new LatchedReadinessHealthCheck(new BusReadyHealthCheck(_outer), latchThreshold);
+        var latchedRedisReady = new LatchedReadinessHealthCheck(new RedisReadyHealthCheck(_outer), latchThreshold);
 
         var hc = builder.Services.AddHealthChecks()
             .AddCheck("self", () => HealthCheckResult.Healthy(), tags: new[] { "live" })       // live = self-only
             .AddCheck<StartupHealthCheck>("startup", tags: new[] { "startup" })                // startup = host gate
-            .AddCheck<BusReadyHealthCheck>("bus-ready", tags: new[] { "ready" });              // ready = bus state
+            .AddCheck("bus-ready", latchedBusReady, tags: new[] { "ready" })                   // ready = latched bus
+            .AddCheck("redis-ready", latchedRedisReady, tags: new[] { "ready" });             // ready = latched Redis
 
         // D-05: fold each OUTER-registered descriptor into the inner container; the factory bridges _outer in.
         // The seam is GENERIC — BaseConsole.Core carries no reference to any concrete check type. A "live"-tagged
