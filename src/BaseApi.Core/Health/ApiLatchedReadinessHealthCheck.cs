@@ -20,8 +20,26 @@ namespace BaseApi.Core.Health;
 /// </summary>
 public sealed class ApiLatchedReadinessHealthCheck : IHealthCheck
 {
+    // Static-literal latched message (mirror of BaseConsole.Core LatchedReadinessHealthCheck).
+    private const string LatchedMessage =
+        "readiness latched (sustained dependency failure — restart required)";
+
+    // Static-literal PRE-latch message (CR-01): the inner check's raw Description/Exception is NEVER
+    // forwarded — not even on the 1..threshold-1 consecutive-failure polls before the latch trips. The
+    // wrapped baseapi Postgres check is the third-party NpgSqlHealthCheck, which attaches the raw
+    // NpgsqlException (host/port/db/auth detail); returning this static literal on every Unhealthy path
+    // keeps the info-disclosure guard intact regardless of which inner check is wrapped.
+    private const string UnhealthyMessage =
+        "readiness dependency unhealthy";
+
     private readonly IHealthCheck _inner;
     private readonly int _failureThreshold;
+
+    // IN-03 (single-prober assumption): the Interlocked Increment/Exchange on _consecutiveFailures prevent
+    // torn reads, but they are NOT a transactional read-modify-write across the whole check. This is exact
+    // under the standard single-kubelet-prober model (probes are sequential). If multiple concurrent probers
+    // ever poll /health/ready simultaneously, a stale-Healthy Exchange(0) could interleave with a failing
+    // Increment and transiently erase progress toward the latch — revisit the counter design if that happens.
     private int _consecutiveFailures;
     private volatile bool _latched;
 
@@ -38,25 +56,27 @@ public sealed class ApiLatchedReadinessHealthCheck : IHealthCheck
         // Once latched, stay Unhealthy forever (restart-only recovery — no self-heal, T-86-10).
         if (_latched)
         {
-            return HealthCheckResult.Unhealthy("readiness latched (sustained dependency failure — restart required)");
+            return HealthCheckResult.Unhealthy(LatchedMessage);
         }
 
-        var result = await _inner.CheckHealthAsync(context, cancellationToken);
+        var result = await _inner.CheckHealthAsync(context, cancellationToken).ConfigureAwait(false);
 
         if (result.Status == HealthStatus.Unhealthy)
         {
+            // Count CONSECUTIVE failed evaluations; latch once the threshold is reached.
             if (Interlocked.Increment(ref _consecutiveFailures) >= _failureThreshold)
             {
                 _latched = true;
+                return HealthCheckResult.Unhealthy(LatchedMessage);
             }
-        }
-        else
-        {
-            Interlocked.Exchange(ref _consecutiveFailures, 0); // a transient blip resets the counter
+
+            // CR-01: NEVER forward the inner result verbatim — its Description/Exception can carry raw
+            // driver detail. Return a STATIC pre-latch literal instead (the latch counter math is unchanged).
+            return HealthCheckResult.Unhealthy(UnhealthyMessage);
         }
 
-        return _latched
-            ? HealthCheckResult.Unhealthy("readiness latched (sustained dependency failure — restart required)")
-            : result;
+        // Any non-Unhealthy result resets the consecutive counter — a transient blip does not latch.
+        Interlocked.Exchange(ref _consecutiveFailures, 0);
+        return result;
     }
 }

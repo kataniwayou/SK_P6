@@ -35,11 +35,24 @@ public sealed class LatchedReadinessHealthCheck : IHealthCheck
     private const string LatchedMessage =
         "readiness latched (sustained dependency failure — restart required)";
 
+    // Static-literal PRE-latch message (CR-01): the inner check's raw Description/Exception is NEVER
+    // forwarded to the response — not even on the 1..threshold-1 consecutive-failure polls before the latch
+    // trips. Some wrapped inner checks (BusReadyHealthCheck, the third-party NpgSqlHealthCheck) attach the
+    // raw driver exception (host/port/db/auth detail); returning this static literal on every Unhealthy path
+    // keeps the phase's info-disclosure guard intact regardless of which inner check is wrapped.
+    private const string UnhealthyMessage =
+        "readiness dependency unhealthy";
+
     private readonly IHealthCheck _inner;
     private readonly int _failureThreshold;
 
     // Per-process sticky state: MUST persist across probe polls, so this instance is a per-process
     // singleton constructed ONCE by the caller (never per request — RESEARCH Pitfall 4).
+    // IN-03 (single-prober assumption): the Interlocked Increment/Exchange on _consecutiveFailures prevent
+    // torn reads, but they are NOT a transactional read-modify-write across the whole check. This is exact
+    // under the standard single-kubelet-prober model (probes are sequential). If multiple concurrent probers
+    // ever poll /health/ready simultaneously, a stale-Healthy Exchange(0) could interleave with a failing
+    // Increment and transiently erase progress toward the latch — revisit the counter design if that happens.
     private int _consecutiveFailures;
     private volatile bool _latched;
 
@@ -71,7 +84,10 @@ public sealed class LatchedReadinessHealthCheck : IHealthCheck
                 return HealthCheckResult.Unhealthy(LatchedMessage);
             }
 
-            return result;
+            // CR-01: NEVER forward the inner result verbatim — its Description/Exception can carry raw
+            // driver detail. Return a STATIC pre-latch literal instead (the latch counter math above is
+            // unchanged).
+            return HealthCheckResult.Unhealthy(UnhealthyMessage);
         }
 
         // Any non-Unhealthy result resets the consecutive counter — a transient blip does not latch.
