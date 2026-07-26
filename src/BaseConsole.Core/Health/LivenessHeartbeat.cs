@@ -21,13 +21,21 @@ public sealed class LivenessHeartbeat : ILivenessHeartbeat
 {
     private readonly TimeProvider _clock;
 
+    // 0 = "never beaten" sentinel. Beat() only ever stamps a 2024+ UTC instant (DateTime.Ticks far from 0),
+    // so 0 is unambiguously "no beat yet" — no real tick produces 0. Mirrors the retired KeeperLivenessState.
+    private long _ticks;
+
     public LivenessHeartbeat(TimeProvider clock) => _clock = clock;
 
     public void Beat()
-    {
-        _ = _clock;   // captured for 86-03 (Interlocked.Exchange from clock.GetUtcNow()); unused in the RED skeleton
-        throw new NotImplementedException();
-    }
+        => Interlocked.Exchange(ref _ticks, _clock.GetUtcNow().UtcDateTime.Ticks);
 
-    public DateTime? Current => throw new NotImplementedException();
+    public DateTime? Current
+    {
+        get
+        {
+            var t = Interlocked.Read(ref _ticks);
+            return t == 0 ? null : new DateTime(t, DateTimeKind.Utc);
+        }
+    }
 }
