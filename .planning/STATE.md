@@ -4,14 +4,14 @@ milestone: v12.0.0
 milestone_name: Resilience & Health-Probe Hardening
 status: executing
 stopped_at: Completed 86-05-PLAN.md
-last_updated: "2026-07-26T16:15:35.875Z"
+last_updated: "2026-07-26T16:28:34.846Z"
 last_activity: 2026-07-26
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 16
-  completed_plans: 10
-  percent: 63
+  completed_plans: 11
+  percent: 67
 ---
 
 # Project State
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Phase: 86 (console-webapi-health-liveness-refactor) — EXECUTING
-Plan: 4 of 9
+Plan: 5 of 9
 Status: Ready to execute
 Last activity: 2026-07-26
 Current focus: Phase 86 — console/webapi health-liveness refactor (v12.0.0, first phase)
@@ -706,7 +706,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [██████░░░░] 63%
+Progress: [███████░░░] 69%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1093,6 +1093,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 86 P01 | 30 | 3 tasks | 9 files |
 | Phase 86 P02 | 44min | 3 tasks | 5 files |
 | Phase 86 P05 | 80min | 2 tasks | 6 files |
+| Phase 86 P03 | 20min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1652,6 +1653,7 @@ Recent decisions affecting current work:
 - [Phase ?]: 86-02: HLTH-02 broker-down-never-throws locked by driving the real ProcessorStartupOrchestrator loop with a non-OCE RedisConnectionException injected via IRequestClient.GetResponse; asserts caught+logged+retried, ExecuteAsync never faults.
 - [Phase ?]: 86-05: baseapi /health/ready latches Postgres+Redis (sticky, restart-only); bus stays Degraded/unlatched; D-06 superseded
 - [Phase ?]: 86-05: dead-Redis WebApplicationFactory fixtures must inject via env-var (in-memory config silently loses to appsettings.Development localhost:6380 live)
+- [Phase ?]: 86-03: LoopLivenessHealthCheck resolves heartbeat+TimeProvider from the OUTER provider at check time; k=3 strict->= staleness boundary
 
 ### Roadmap Milestone Log
 
@@ -1763,7 +1765,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-26T16:15:35.849Z
+Last session: 2026-07-26T16:28:22.920Z
 Stopped at: Completed 86-05-PLAN.md
 Resume file: None
 

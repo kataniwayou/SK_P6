@@ -49,7 +49,7 @@
 
   - [x] 86-01-PLAN.md — Wave 0 RED: BaseConsole.Core primitive skeletons + failing hermetic tests (liveness heartbeat/loop check, Redis-ready, latch)
   - [x] 86-02-PLAN.md — Wave 0 RED: processor identity/schema readiness skeleton + HLTH-02 resilience lock + retire the two watchdog-only test files
-  - [ ] 86-03-PLAN.md — Wave 1: implement shared liveness watchdog (ILivenessHeartbeat + LoopLivenessHealthCheck, k=3) + AddConsoleLivenessWatchdog opt-in seam
+  - [x] 86-03-PLAN.md — Wave 1: implement shared liveness watchdog (ILivenessHeartbeat + LoopLivenessHealthCheck, k=3) + AddConsoleLivenessWatchdog opt-in seam
   - [ ] 86-04-PLAN.md — Wave 1: implement Redis-ready + sticky latch; wire latched bus+Redis readiness into the embedded listener for all consoles
   - [x] 86-05-PLAN.md — Wave 1: mirror Redis-ready + latch into BaseApi.Core (Postgres+Redis latched; bus stays soft), fix stale D-06 comment
   - [ ] 86-06-PLAN.md — Wave 2: keeper — top-of-tick beat + bounded edge bus-ops + first-beat MarkReady; delete keeper watchdog+state
