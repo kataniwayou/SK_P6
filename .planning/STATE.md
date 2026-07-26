@@ -27,11 +27,11 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 
 ## Current Position
 
-Phase: 85
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-07-26 - Completed quick task 260726-f7x: scheduler-fire resilience (WorkflowFireJob logs+reschedules on entry-step send fault)
-Current focus: Phase 84 — byte[] data-channel widening (first phase of v11.0.0)
+Phase: 86
+Plan: Planned — 9 plans in 5 waves (ready for /gsd:execute-phase 86)
+Status: Phase planned
+Last activity: 2026-07-26 - Planned Phase 86 (console/webapi health-liveness refactor); plan-checker 0 blockers
+Current focus: Phase 86 — console/webapi health-liveness refactor (v12.0.0, first phase)
 
 ### Quick Tasks Completed
 
