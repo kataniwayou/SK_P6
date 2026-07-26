@@ -19,7 +19,18 @@ using Keeper;
 var builder = Host.CreateApplicationBuilder(args);
 
 builder.AddBaseConsoleObservability(builder.Configuration);   // metrics-only OTel (no tracer)
-builder.Services.AddBaseConsole(builder.Configuration);       // Redis soft-dep + embedded health + default readiness service (KEPT — D-06)
+builder.Services.AddBaseConsole(builder.Configuration);       // Redis soft-dep + embedded health + gate/self/startup checks
+
+// HLTH-06 (Phase 86 / D-02 idiom): remove the base library's StartupCompletionService so the keeper marks its
+// startup gate ready on the BitHealthLoop's FIRST beat (BitHealthLoop.MarkReady), NOT at bare host start —
+// /health/startup now reflects the BIT loop actually ticking. Copied from BaseProcessorServiceCollectionExtensions
+// (adapted to builder.Services). IStartupGate + the self/startup checks stay intact.
+foreach (var d in builder.Services
+             .Where(d => d.ImplementationType == typeof(StartupCompletionService))
+             .ToList())
+{
+    builder.Services.Remove(d);
+}
 
 // DLQ-04 / D-09 — bind the shared Immediate(N) retry budget from the "Retry" section (the single
 // source of truth the recovery consumer definition's UseMessageRetry reads).
@@ -42,16 +53,13 @@ builder.Services.AddSingleton<Keeper.Health.IL2HealthGate, Keeper.Health.L2Healt
 // KEEP-01/02 (D-06): the proactive BIT loop hosted service (edge-triggered global pause/resume + gate driver).
 builder.Services.AddHostedService<Keeper.Health.BitHealthLoop>();
 
-// 260614-b5c — minimal keeper self-watchdog. TimeProvider.System (idempotent, mirrors Orchestrator/Program.cs:91)
-// + the timestamp-only liveness holder (stamped each BitHealthLoop tick) + a "live"-tagged HealthCheckDescriptor
-// that EmbeddedHealthEndpointService auto-folds into /health/live (NO BaseConsole.Core change). A silently-stalled
-// BIT loop lets the timestamp go stale, flipping /health/live Unhealthy.
-builder.Services.TryAddSingleton(TimeProvider.System);
-builder.Services.AddSingleton<Keeper.Health.IKeeperLivenessState, Keeper.Health.KeeperLivenessState>();
-builder.Services.AddSingleton(new HealthCheckDescriptor(
-    "keeper-liveness-watchdog",
-    new[] { "live" },
-    outer => new Keeper.Health.KeeperLivenessWatchdogHealthCheck(outer)));
+// HLTH-03/06 (Phase 86): opt into the SHARED loop-liveness watchdog (BaseConsole.Core), replacing the retired
+// keeper-specific KeeperLivenessWatchdogHealthCheck + IKeeperLivenessState + KeeperLivenessState. Registers the
+// singleton ILivenessHeartbeat (BitHealthLoop Beat()s it at the top of each tick) + a "live"-tagged
+// HealthCheckDescriptor that EmbeddedHealthEndpointService auto-folds onto /health/live. intervalSeconds: 5 matches
+// Probe:DelaySeconds so a silently-stalled BIT loop goes stale at 15s (k=3) → /health/live Unhealthy. IStartupGate
+// is already registered by AddBaseConsole (AddBaseConsoleHealth); TimeProvider.System is TryAdd'd by both.
+builder.Services.AddConsoleLivenessWatchdog(intervalSeconds: 5);
 
 // KEEP-04 / D-04 (OQ-1): the keeper-recovery endpoint is RUNTIME-BOUND via ConnectReceiveEndpoint
 // (RecoveryEndpointBinder), NOT static AddConsumer auto-config — a statically-configured 8.5.5 endpoint
