@@ -12,7 +12,10 @@ using BaseProcessorBase = BaseProcessor.Core.Processing.BaseProcessor;
 // EntryStepDispatchConsumer resolves BaseProcessor). It does NOT call the folded extensions directly.
 var builder = Host.CreateApplicationBuilder(args);
 
-builder.AddBaseConsoleObservability(builder.Configuration);          // metrics-only OTel (no tracer)
+// A processor's identity is the DB row, NOT appsettings — so its Service:Name/Version are the sentinel
+// `unresolved` / `0.0.0`. The real identity arrives per-record as the ProcessorId + IdentityName log
+// attributes (ProcessorIdLogEnricher) once Loop A resolves; Source=processor is the emitter class.
+builder.AddBaseConsoleObservability(builder.Configuration, source: "processor");
 builder.Services.AddBaseProcessor(builder.Configuration);            // identity + liveness + dispatch + heartbeat
 builder.Services.AddSingleton<BaseProcessorBase, SampleProcessor>(); // the ONE concrete seam
 

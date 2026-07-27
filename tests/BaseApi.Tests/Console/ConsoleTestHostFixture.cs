@@ -87,7 +87,7 @@ public class ConsoleTestHostFixture : IAsyncLifetime
     /// </summary>
     protected virtual void ConfigureBuilder(IHostApplicationBuilder builder)
     {
-        builder.AddBaseConsoleObservability(builder.Configuration);
+        builder.AddBaseConsoleObservability(builder.Configuration, source: "console-test");   // generic console fixture — not a real emitter class
         builder.Services.AddBaseConsole(builder.Configuration);
         builder.Services.AddBaseConsoleMessaging(builder.Configuration, x => { });  // empty consumer seam (D-06)
     }

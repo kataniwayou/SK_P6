@@ -3,7 +3,7 @@ using BaseApi.Service;
 using BaseApi.Service.Composition;
 
 var builder = WebApplication.CreateBuilder(args);
-builder.AddBaseApiObservability(builder.Configuration);
+builder.AddBaseApiObservability(builder.Configuration, source: "webapi");
 builder.Services.AddBaseApi<AppDbContext>(builder.Configuration);
 builder.Services.AddBaseApiResponderMessaging(builder.Configuration);   // Phase 25 RPC-01/02/03: bus responder host (extends the Phase-19 publish-only join).
 builder.Services.AddAppFeatures();

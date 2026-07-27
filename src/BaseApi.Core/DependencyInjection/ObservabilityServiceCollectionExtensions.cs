@@ -34,8 +34,18 @@ public static class ObservabilityServiceCollectionExtensions
     /// indirection without value.
     /// </para>
     /// </summary>
+    /// <param name="builder">The host builder — exposes both <c>.Logging</c> and <c>.Services</c>.</param>
+    /// <param name="cfg">The app's own configuration; supplies <c>Service:Name</c> / <c>Service:Version</c>.</param>
+    /// <param name="source">
+    /// Coarse emitter class stamped on EVERY log record's resource as <c>Source</c> — one of
+    /// <c>orchestrator</c> / <c>processor</c> / <c>webapi</c> / <c>keeper</c>. REQUIRED (not defaulted)
+    /// so a new service cannot silently ship without it. This is the stable "who emitted this" query
+    /// key: <c>service.name</c> is NOT usable for that on processors (it is the fixed <c>unresolved</c>
+    /// sentinel until identity resolves), and BOTH processor images share the value <c>processor</c>
+    /// deliberately, so one term matches the whole class.
+    /// </param>
     public static IHostApplicationBuilder AddBaseApiObservability(
-        this IHostApplicationBuilder builder, IConfiguration cfg)
+        this IHostApplicationBuilder builder, IConfiguration cfg, string source)
     {
         // WR-03: fail fast at the boundary with an actionable message rather than letting
         // null propagate into ResourceBuilder.AddService(null, null) → OTel SDK ArgumentNullException.
@@ -50,6 +60,16 @@ public static class ObservabilityServiceCollectionExtensions
         var instanceId    = ResolveInstanceId();
         var instanceAttrs = new[] { new KeyValuePair<string, object>("service.instance.id", instanceId) };
 
+        // LOGS resource attrs = instance id + the Source emitter class. Source is a RESOURCE attribute,
+        // not a per-record one: it never varies within a process, so stamping it once costs nothing at
+        // per-hop log volume and cannot be forgotten by an enricher. Queried as
+        // `resource.attributes.Source`. PascalCase per the log-attribute convention (ExecutionLogScope).
+        var logAttrs = new[]
+        {
+            new KeyValuePair<string, object>("service.instance.id", instanceId),
+            new KeyValuePair<string, object>("Source", source),
+        };
+
         // OTel LOGS — MEL bridge (Phase 5 D-09 / OBSERV-02). MUST be builder.Logging.AddOpenTelemetry
         // — NOT services.AddOpenTelemetry().WithLogging() (creates a parallel provider that
         // bypasses MEL filtering per Phase 5 Pitfall 9).
@@ -60,7 +80,7 @@ public static class ObservabilityServiceCollectionExtensions
             o.ParseStateValues        = true;
             o.SetResourceBuilder(ResourceBuilder.CreateDefault()
                 .AddService(serviceName: serviceName, serviceVersion: serviceVersion)
-                .AddAttributes(instanceAttrs));   // Phase 30 METRIC-01 — every log carries service.instance.id
+                .AddAttributes(logAttrs));   // Phase 30 METRIC-01 — service.instance.id + the Source emitter class
             o.AddOtlpExporter();
         });
 

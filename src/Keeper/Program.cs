@@ -19,7 +19,7 @@ using Keeper;
 // host start — /health/startup reflects the BIT loop actually ticking (D-06).
 var builder = Host.CreateApplicationBuilder(args);
 
-builder.AddBaseConsoleObservability(builder.Configuration);   // metrics-only OTel (no tracer)
+builder.AddBaseConsoleObservability(builder.Configuration, source: "keeper");   // metrics-only OTel (no tracer)
 builder.Services.AddBaseConsole(builder.Configuration);       // Redis soft-dep + embedded health + gate/self/startup checks
 
 // HLTH-06 (Phase 86 / D-02 idiom): remove the base library's StartupCompletionService so the keeper marks its

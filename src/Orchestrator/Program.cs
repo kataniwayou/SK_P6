@@ -23,7 +23,7 @@ using Quartz;
 // consumers + the per-replica fan-out endpoint.
 var builder = Host.CreateApplicationBuilder(args);
 
-builder.AddBaseConsoleObservability(builder.Configuration);   // metrics-only OTel (no tracer — Pitfall 4)
+builder.AddBaseConsoleObservability(builder.Configuration, source: "orchestrator");   // metrics-only OTel (no tracer — Pitfall 4)
 builder.Services.AddBaseConsole(builder.Configuration);       // Redis soft-dep + embedded health
 
 // D-01: the per-replica identity now derives from the k8s downward-API pod name (kubelet-supplied,

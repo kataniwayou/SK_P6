@@ -31,8 +31,18 @@ public static class BaseConsoleObservabilityExtensions
     /// builder exposes both <c>.Logging</c> and <c>.Services</c>. Service name/version are read
     /// from the console's own configuration (D-07 — nothing hardcoded).
     /// </summary>
+    /// <param name="builder">The host builder — exposes both <c>.Logging</c> and <c>.Services</c>.</param>
+    /// <param name="cfg">The console's own configuration; supplies <c>Service:Name</c> / <c>Service:Version</c>.</param>
+    /// <param name="source">
+    /// Coarse emitter class stamped on EVERY log record's resource as <c>Source</c> — one of
+    /// <c>orchestrator</c> / <c>processor</c> / <c>webapi</c> / <c>keeper</c>. REQUIRED (not defaulted)
+    /// so a new console cannot silently ship without it. This is the stable "who emitted this" query
+    /// key: <c>service.name</c> is NOT usable for that on processors (it is the fixed <c>unresolved</c>
+    /// sentinel until identity resolves), and BOTH processor images share the value <c>processor</c>
+    /// deliberately, so one term matches the whole class.
+    /// </param>
     public static IHostApplicationBuilder AddBaseConsoleObservability(
-        this IHostApplicationBuilder builder, IConfiguration cfg)
+        this IHostApplicationBuilder builder, IConfiguration cfg, string source)
     {
         // Fail fast at the boundary with an actionable message rather than letting null
         // propagate into ResourceBuilder.AddService(null, null).
@@ -47,6 +57,16 @@ public static class BaseConsoleObservabilityExtensions
         var instanceId    = ResolveInstanceId();
         var instanceAttrs = new[] { new KeyValuePair<string, object>("service.instance.id", instanceId) };
 
+        // LOGS resource attrs = instance id + the Source emitter class. Source is a RESOURCE attribute,
+        // not a per-record one: it never varies within a process, so stamping it once costs nothing at
+        // per-hop log volume and cannot be forgotten by an enricher. Queried as
+        // `resource.attributes.Source`. PascalCase per the log-attribute convention (ExecutionLogScope).
+        var logAttrs = new[]
+        {
+            new KeyValuePair<string, object>("service.instance.id", instanceId),
+            new KeyValuePair<string, object>("Source", source),
+        };
+
         // OTel LOGS — MEL bridge. IncludeScopes=true is load-bearing: it serializes the
         // inbound consume filter's "CorrelationId" log scope as a telemetry attribute.
         builder.Logging.AddOpenTelemetry(o =>
@@ -56,7 +76,7 @@ public static class BaseConsoleObservabilityExtensions
             o.ParseStateValues        = true;
             o.SetResourceBuilder(ResourceBuilder.CreateDefault()
                 .AddService(serviceName: serviceName, serviceVersion: serviceVersion)
-                .AddAttributes(instanceAttrs));   // Phase 30 METRIC-01 — every log carries service.instance.id
+                .AddAttributes(logAttrs));   // Phase 30 METRIC-01 — service.instance.id + the Source emitter class
             // Phase 76 (FW-04/T-76-02): declare the batch/drop export posture EXPLICITLY. A per-hop record now
             // fires on EVERY executed hop at real volume; the log export must never apply backpressure into the
             // consume path. Batch = a bounded queue with a background export + drop-on-full — a stalled/throwing

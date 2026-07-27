@@ -180,7 +180,7 @@ public sealed class SC1RoundTripE2ETests
               "bool": {
                 "must": [
                   { "term": { "attributes.WorkflowId": "{{wfId}}" } },
-                  { "term": { "resource.attributes.service.name": "processor-sample" } }
+                  { "term": { "attributes.ProcessorId": "{{procId:D}}" } }
                 ]
               }
             }

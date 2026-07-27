@@ -55,7 +55,7 @@ public class ProcessorConsoleTestHostFixture : ConsoleTestHostFixture
     /// </summary>
     protected override void ConfigureBuilder(IHostApplicationBuilder builder)
     {
-        builder.AddBaseConsoleObservability(builder.Configuration);          // metrics-only OTel (no tracer)
+        builder.AddBaseConsoleObservability(builder.Configuration, source: "processor");   // mirrors Processor.Sample/Program.cs
         builder.Services.AddBaseProcessor(builder.Configuration);            // identity + liveness + dispatch + heartbeat (+ shared watchdog descriptor)
         builder.Services.AddSingleton<BaseProcessorBase, SampleProcessor>(); // the ONE concrete transform seam
 

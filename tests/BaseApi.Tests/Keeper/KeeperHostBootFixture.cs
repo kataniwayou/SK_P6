@@ -25,7 +25,7 @@ public sealed class KeeperHostBootFixture : ConsoleTestHostFixture
 {
     protected override void ConfigureBuilder(IHostApplicationBuilder builder)
     {
-        builder.AddBaseConsoleObservability(builder.Configuration);
+        builder.AddBaseConsoleObservability(builder.Configuration, source: "keeper");
         builder.Services.AddBaseConsole(builder.Configuration);
         // IN-01: inject an explicit "Retry" section mirroring the live appsettings.json (Limit=3,
         // Strategy=Immediate) so the bind below is exercised against a REAL config value instead of

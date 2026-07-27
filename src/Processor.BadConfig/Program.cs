@@ -14,7 +14,7 @@ using BaseProcessorBase = BaseProcessor.Core.Processing.BaseProcessor;
 // Phase-57 stay-up clash posture (no startup-orchestrator override).
 var builder = Host.CreateApplicationBuilder(args);
 
-builder.AddBaseConsoleObservability(builder.Configuration);            // metrics-only OTel (no tracer)
+builder.AddBaseConsoleObservability(builder.Configuration, source: "processor");            // metrics-only OTel (no tracer)
 builder.Services.AddBaseProcessor(builder.Configuration);              // identity + liveness + dispatch + heartbeat
 builder.Services.AddSingleton<BaseProcessorBase, BadConfigProcessor>(); // the ONE concrete seam
 
