@@ -1,0 +1,81 @@
+{
+  "ScenarioId": "phase-87-dashboards",
+  "Verdict": "Pass",
+  "DashboardsProvisioned": true,
+  "DatasourceDefaultReadOnly": true,
+  "NoPvc": true,
+  "UiSaveRejected": true,
+  "AllFourClassesPresent": true,
+  "ClassAPanelsNonEmpty": true,
+  "ClassBPanelsGuarded": true,
+  "PodDropdownSuperset": true,
+  "KeeperChainFiltered": true,
+  "ReproducedAfterPodDelete": true,
+  "TrafficDriven": true,
+  "TargetExprCount": 36,
+  "ClassAExprCount": 30,
+  "ClassBExprCount": 6,
+  "ObservedSources": [
+    "keeper",
+    "orchestrator",
+    "processor",
+    "webapi"
+  ],
+  "LivePodCount": 8,
+  "DropdownPodCount": 21,
+  "GrafanaPvcCount": 0,
+  "StorageIsEmptyDir": true,
+  "TamperResponseMessage": "Cannot save provisioned dashboard",
+  "WindowStart": "2026-07-27T19:18:03.5652057+00:00",
+  "WindowEnd": "2026-07-27T19:20:03.5848909+00:00",
+  "UnevaluableClaims": [],
+  "EmptyClassAExprs": [],
+  "ClassBOffSpecExprs": [],
+  "ClassBExprs": [
+    {
+      "File": "business.json",
+      "Panel": "Keeper consumed vs sent (conservation)",
+      "RefId": "A",
+      "Expr": "sum by (source) (rate(keeper_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval])) or vector(0)",
+      "SampleCount": 1
+    },
+    {
+      "File": "business.json",
+      "Panel": "Keeper consumed vs sent (conservation)",
+      "RefId": "B",
+      "Expr": "sum by (source) (rate(keeper_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval])) or vector(0)",
+      "SampleCount": 1
+    },
+    {
+      "File": "business.json",
+      "Panel": "Orchestrator unresolved steps in range",
+      "RefId": "A",
+      "Expr": "sum(increase(orchestrator_step_unresolved_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) or vector(0)",
+      "SampleCount": 1
+    },
+    {
+      "File": "business.json",
+      "Panel": "Processor dropped spawns in range",
+      "RefId": "A",
+      "Expr": "sum(increase(processor_spawn_dropped_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) or vector(0)",
+      "SampleCount": 1
+    },
+    {
+      "File": "business.json",
+      "Panel": "Keeper consumed - sent gap in range",
+      "RefId": "A",
+      "Expr": "sum(increase(keeper_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) - sum(increase(keeper_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) or vector(0)",
+      "SampleCount": 1
+    },
+    {
+      "File": "business.json",
+      "Panel": "WebApi 5xx ratio",
+      "RefId": "A",
+      "Expr": "sum(rate(http_server_request_duration_seconds_count{source=~\"$source\", service_instance_id=~\"$pod\", http_response_status_code=~\"5..\"}[$__rate_interval])) / sum(rate(http_server_request_duration_seconds_count{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval])) or vector(0)",
+      "SampleCount": 1
+    }
+  ],
+  "MissingDropdownPods": [],
+  "SpecDiffs": [],
+  "HumanSummary": "VER-01/VER-02 verdict=Pass: all 10 claims green — every one of the 30 unguarded expressions returned real samples through Grafana's datasource proxy, all 6 guarded expressions returned exactly one sample, both dropdowns enumerated correctly, a grafana pod delete reproduced both dashboard specs byte-identically from the repo, and a UI save was rejected. [DashboardsProvisioned=True, DatasourceDefaultReadOnly=True, NoPvc=True, UiSaveRejected=True, AllFourClassesPresent=True, ClassAPanelsNonEmpty=True, ClassBPanelsGuarded=True, PodDropdownSuperset=True, KeeperChainFiltered=True, ReproducedAfterPodDelete=True]"
+}
