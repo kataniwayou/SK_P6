@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v13.0.0
 milestone_name: Observability Dashboards
 status: executing
-stopped_at: Completed 86-05-PLAN.md
-last_updated: "2026-07-27T18:24:14.100Z"
+stopped_at: Completed 87-03-PLAN.md
+last_updated: "2026-07-27T18:35:15.288Z"
 last_activity: 2026-07-27
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 15
-  completed_plans: 10
+  completed_plans: 11
   percent: 50
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Phase: 87 (grafana-observability-dashboards) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-07-27
 Current focus: Phase 87 — awaiting `/gsd-plan-phase 87`
@@ -720,7 +720,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [███████░░░] 67%
+Progress: [███████░░░] 73%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1114,6 +1114,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 86 P07 | 44min | 3 tasks | 9 files |
 | Phase 86 P08 | 6min | 1 tasks | 4 files |
 | Phase 87 P01 | 35m | 2 tasks | 3 files |
+| Phase 87 P03 | ~20 min | 3 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -1681,6 +1682,7 @@ Recent decisions affecting current work:
 - [Phase ?]: 86-07: retired LivenessWatchdogHealthCheck (/health/live is now the shared timestamp-only LoopLivenessHealthCheck); kept IProcessorLivenessState + ProcessorLivenessWriter for the separate L2 gate (Pitfall 6)
 - [Phase ?]: 87-01: Get-MetricTokens scopes metric-name extraction to selector position (a family match is a METRIC only when followed by '{'); the rejected strip-clauses alternative misses the in-selector http_response_status_code collision on 87-04 Panel 13
 - [Phase ?]: 87-01: lint rule numbering is append-only (S15 after S14, C7/C8 after C6) because plans 87-02..87-05 already cite rule ids by number
+- [Phase 87]: 87-03: ship the resets() restart proxy WITH the A4 metric_expiration caveat in the panel description, rather than dropping the panel — A counter reset can be produced by the OTel collector's metric_expiration (5 min default) as well as by a real restart, so panel 17 is a restart SIGNAL, not a certified count. A restart panel with a stated failure mode beats no restart panel, and lint rule C6 requires the title to exist. Plan 87-05's live run must record whether a stable stack shows spurious nonzero values; the instruction is written into the panel's own description so it travels with the artifact.
 
 ### Roadmap Milestone Log
 
@@ -1792,8 +1794,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-27T18:24:06.381Z
-Stopped at: Completed 86-05-PLAN.md
+Last session: 2026-07-27T18:35:15.268Z
+Stopped at: Completed 87-03-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
