@@ -3,11 +3,21 @@
 # ============================================================================
 # This is NOT an overlay structure (D-01: raw kubectl YAML, one deploy target).
 # It ONLY (a) lists every manifest as a resource so `kubectl apply -k k8s/` is a
-# single command, and (b) stamps the `skp` namespace + two common labels. No
-# templating, no patches, no configMapGenerator (the ConfigMaps are the
-# hand-authored 02-configmaps.yaml — swapping to a generator would rename them
-# with a content-hash suffix and break the Deployment volume `configMap.name`
-# references, so it is deliberately NOT used here — RESEARCH Open-Q4 default).
+# single command, (b) stamps the `skp` namespace + two common labels, and (c) runs
+# exactly ONE `configMapGenerator`, for the two Grafana dashboard JSONs only, with
+# `disableNameSuffixHash: true`. No templating and no patches.
+#
+# The hash-suffix opt-out is mandatory, not cosmetic: `23-grafana.yaml`'s volume
+# references the generated ConfigMap BY NAME (`grafana-dashboards`), and the default
+# generator behaviour would rename it with a content-hash suffix on every edit and
+# break that reference. That is the same reason the hand-authored ConfigMaps in
+# 02-configmaps.yaml are still NOT generated — they are the canonical drop-in and
+# swapping them to a generator would buy nothing while risking the 80-04 volume refs
+# (RESEARCH Open-Q4 default). The dashboards are the one justified exception because
+# they must be real `.json` files on disk: that is what keeps "the repo JSON is the
+# single source of truth" literally true (DASH-03) and what makes the hermetic
+# `scripts/phase-87-dashboard-lint.ps1` gate possible — a YAML block scalar embedded
+# in this file would be lintable only by re-parsing kustomize output.
 #
 # APPLY-ORDER NOTE: `kubectl apply -k` sorts by KIND, not by this file's order
 # (Namespace first, then CRDs/ConfigMaps/Secrets, then workloads). True infra→app
@@ -41,7 +51,7 @@ labels:
       app.kubernetes.io/managed-by: kustomize
     includeSelectors: false
 
-# All 13 manifests, in tier order (namespace → secret/config → stateful backing
+# All 14 manifests, in tier order (namespace → secret/config → stateful backing
 # services → observability → app tiers). Kind-sort at apply time still applies.
 resources:
   - 00-namespace.yaml
@@ -53,8 +63,28 @@ resources:
   - 13-elasticsearch.yaml
   - 20-otel-collector.yaml
   - 21-prometheus.yaml
+  - 23-grafana.yaml
   - 30-baseapi-service.yaml
   - 31-orchestrator.yaml
   - 34-orchestrator-rbac.yaml
   - 32-keeper.yaml
   - 33-processor-sample.yaml
+
+# MANDATORY — `23-grafana.yaml`'s `gf-dashboards` volume references the generated
+# ConfigMap by the literal name `grafana-dashboards`, so the content-hash suffix must
+# be off or every dashboard edit silently orphans that volume reference.
+# NOTE: `generatorOptions.labels` is deliberately NOT set. The top-level `labels:`
+# block above (with includeSelectors: false) already stamps part-of + managed-by onto
+# generated resources too — verified by inspecting the generated ConfigMap in
+# `kubectl kustomize k8s/` output — so adding them here would be pure duplication.
+generatorOptions:
+  disableNameSuffixHash: true
+
+# The repo's ONLY generator. Paths are relative to k8s/; the generated data keys are
+# the file BASENAMES (`runtime.json`, `business.json`), which is exactly what Grafana's
+# file provider reports back as `meta.provisionedExternalId`.
+configMapGenerator:
+  - name: grafana-dashboards
+    files:
+      - dashboards/runtime.json
+      - dashboards/business.json
