@@ -4,7 +4,7 @@ milestone: v13.0.0
 milestone_name: Observability Dashboards
 status: executing
 stopped_at: Completed 87-03-PLAN.md
-last_updated: "2026-07-27T18:45:28.234Z"
+last_updated: "2026-07-27T18:58:51.994Z"
 last_activity: 2026-07-27
 progress:
   total_phases: 2
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Phase: 87 (grafana-observability-dashboards) — EXECUTING
-Plan: 4 of 6
+Plan: 5 of 6
 Status: Ready to execute
 Last activity: 2026-07-27
 Current focus: Phase 87 — awaiting `/gsd-plan-phase 87`
@@ -1116,6 +1116,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 87 P01 | 35m | 2 tasks | 3 files |
 | Phase 87 P03 | ~20 min | 3 tasks | 1 files |
 | Phase 87 P04 | ~25 min | 3 tasks | 1 files |
+| Phase 87 P02 | ~50 min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1686,6 +1687,8 @@ Recent decisions affecting current work:
 - [Phase 87]: 87-03: ship the resets() restart proxy WITH the A4 metric_expiration caveat in the panel description, rather than dropping the panel — A counter reset can be produced by the OTel collector's metric_expiration (5 min default) as well as by a real restart, so panel 17 is a restart SIGNAL, not a certified count. A restart panel with a stated failure mode beats no restart panel, and lint rule C6 requires the title to exist. Plan 87-05's live run must record whether a stable stack shows spurious nonzero values; the instruction is written into the panel's own description so it travels with the artifact.
 - [Phase ?]: 87-04: business.json guard placement is a two-valued VER-01 classification (6 guarded Class-B / 13 unguarded Class-A of 19 targets), not formatting - lint C3/C7/C8 partition the same 'or vector(0)' substring 87-05's live classifier reads
 - [Phase ?]: 87-04: keeper is split deliberately - the consumed/sent conservation overlay is GUARDED (recovery-only counters, 0 live series) while the L2 probe heartbeat is UNGUARDED (2 live series), so a flat 0 means 'no recovery traffic', never 'keeper down'
+- [Phase ?]: 87-02: generatorOptions.labels omitted from kustomization — verified redundant, the top-level labels block already stamps part-of + managed-by onto generated ConfigMaps
+- [Phase ?]: 87-02: kubectl apply -k reverts live image tags to :local — orchestrator/processor-sample had to be restored to :tags-const-1544 via kubectl set image
 
 ### Roadmap Milestone Log
 
@@ -1797,7 +1800,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-27T18:42:54.005Z
+Last session: 2026-07-27T18:58:44.832Z
 Stopped at: Completed 87-03-PLAN.md
 Resume file: None
 
