@@ -88,9 +88,16 @@ spec:
             failureThreshold: 5
           resources:
             requests:
-              memory: "700Mi"       # holds the 512m heap + JVM/off-heap overhead (Pitfall 6)
-            limits:
               memory: "1Gi"
+            # 2Gi, NOT 1Gi. The 512m heap cap does NOT bound container RSS: Lucene mmap,
+            # direct buffers, metaspace and thread stacks are all off-heap, and under
+            # sustained otel log ingest they pushed RSS past a 1Gi limit — the cgroup OOM
+            # killer SIGKILLed the container (exit 137, 104 restarts observed 2026-07-27).
+            # Every restart makes the collector's elasticsearchexporter DROP in-flight log
+            # batches ("Exporting failed. Dropping data."), so log continuity is lost.
+            # Rule of thumb: container limit >= 2x heap. Node has 16Gi allocatable.
+            limits:
+              memory: "2Gi"
   volumeClaimTemplates:
     - metadata:
         name: data
