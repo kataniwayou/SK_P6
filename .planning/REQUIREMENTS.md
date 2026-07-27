@@ -10,9 +10,9 @@ No production source code changes: every label and series the dashboards consume
 
 ### DASH — Grafana Deployment & Provisioning — Phase 87
 
-- [ ] **DASH-01**: Grafana runs in the existing `skp` k8s namespace as a Deployment + Service, brought up by `kubectl apply -k k8s/` alongside the rest of the stack, and reachable by port-forward like the other tools. **Image pinned to `grafana/grafana:12.3.9`** *(amended 2026-07-27, OQ-5)* — both 12.3.9 and 13.1.1 provision hand-authored classic JSON correctly (verified live on both), but Grafana 13 removed the Classic UI export that makes an author-in-the-editor round-trip work.
-- [ ] **DASH-02**: The in-cluster Prometheus (`k8s/21-prometheus.yaml`) is provisioned as Grafana's default datasource **at startup, from config** — no manual datasource setup in the UI is ever required.
-- [ ] **DASH-03**: Dashboards are file-provisioned from checked-in JSON (dashboard provider + ConfigMap). Grafana carries **no persistent volume**: a pod restart reproduces the identical dashboards from the repo, and any UI-side edit is disposable. The repo JSON is the single source of truth.
+- [x] **DASH-01**: Grafana runs in the existing `skp` k8s namespace as a Deployment + Service, brought up by `kubectl apply -k k8s/` alongside the rest of the stack, and reachable by port-forward like the other tools. **Image pinned to `grafana/grafana:12.3.9`** *(amended 2026-07-27, OQ-5)* — both 12.3.9 and 13.1.1 provision hand-authored classic JSON correctly (verified live on both), but Grafana 13 removed the Classic UI export that makes an author-in-the-editor round-trip work.
+- [x] **DASH-02**: The in-cluster Prometheus (`k8s/21-prometheus.yaml`) is provisioned as Grafana's default datasource **at startup, from config** — no manual datasource setup in the UI is ever required.
+- [x] **DASH-03**: Dashboards are file-provisioned from checked-in JSON (dashboard provider + ConfigMap). Grafana carries **no persistent volume**: a pod restart reproduces the identical dashboards from the repo, and any UI-side edit is disposable. The repo JSON is the single source of truth.
 - [x] **DASH-04**: Each dashboard JSON is **portable** — the datasource is referenced through a dashboard-level datasource template variable rather than a hardcoded datasource UID, so the same file loads unmodified against another Grafana / another Prometheus datasource.
 
 ### RTD — Runtime Instrumentation Dashboard — Phase 87
@@ -29,19 +29,19 @@ No production source code changes: every label and series the dashboards consume
 
 ### VAR — Shared Dropdown Behavior — Phase 87
 
-- [ ] **VAR-01**: Both dashboards expose a **multi-select `source`** template variable (service class: `webapi` / `orchestrator` / `keeper` / `processor`), populated by `label_values()` against live series — not a hardcoded list — with an "All" option.
-- [ ] **VAR-02**: Both dashboards expose a **multi-select pod** template variable over the `service_instance_id` label (the pod name, resolved from `POD_NAME`), likewise populated by `label_values()` with an "All" option.
+- [x] **VAR-01**: Both dashboards expose a **multi-select `source`** template variable (service class: `webapi` / `orchestrator` / `keeper` / `processor`), populated by `label_values()` against live series — not a hardcoded list — with an "All" option.
+- [x] **VAR-02**: Both dashboards expose a **multi-select pod** template variable over the `service_instance_id` label (the pod name, resolved from `POD_NAME`), likewise populated by `label_values()` with an "All" option.
 - [x] **VAR-03**: The pod variable is **chained** to the source selection — selecting `keeper` lists only keeper pods — and every panel query honors both selections.
 - [x] **VAR-04**: Every processor pod shares the value `processor` on the `source` label (deliberate, so one term matches the whole class). Where per-processor separation matters, the finer-grained discriminator is the **`identityName` datapoint tag** on the business counters (`processor_messages_consumed_total` / `_sent_total`, carrying `{db.Name}_{db.Version}`), with `service_instance_id` (pod name) as the discriminator on the runtime series. ***Amended 2026-07-27 (research F-6): `service_name` CANNOT discriminate processors*** — `Processor.Sample/appsettings.json:9-12` sets `Service:Name = "unresolved"` / `Version = "0.0.0"` and MLBL-03 deliberately keeps that sentinel for the pod's whole life (`ProcessorMetrics.cs:40-43`), so every `source="processor"` series carries `service_name="unresolved_0.0.0"` (confirmed live). Note also that only `processor-sample` is deployed to k8s (`k8s/33-processor-sample.yaml`), so "both processor images" is currently a single-image reality in this cluster.
 
 ### VER — Live Verification — Phase 87
 
-- [ ] **VER-01**: With the k8s stack up and pipeline traffic flowing, every panel on both dashboards renders data for each selected service, under a **two-class assertion** *(amended 2026-07-27, OQ-1 / research F-4)*:
+- [x] **VER-01**: With the k8s stack up and pipeline traffic flowing, every panel on both dashboards renders data for each selected service, under a **two-class assertion** *(amended 2026-07-27, OQ-1 / research F-4)*:
   - **Class A — must return at least one real sample:** the runtime panels and the steady-state pipeline counters (`orchestrator_`/`processor_` consumed + sent, `keeper_l2_probe_total`). A "No data" here is a failure.
   - **Class B — must render a guarded value, `0` permitted:** the fault indicators (`orchestrator_step_unresolved_total`, `processor_spawn_dropped_total`) and any counter with no live series on a healthy stack. An OTel counter is not exported to Prometheus until first increment, and a green stack *should* have zero unresolved steps and zero dropped spawns — so these panels carry `or vector(0)` guards and rendering `0` satisfies the requirement. Driving a fault scenario to make them fire is explicitly NOT a precondition of this phase.
 
   Both dropdowns must enumerate the 4 service classes exactly. The pod dropdown is asserted as a **superset** — every live pod appears — not as an exact live list *(amended 2026-07-27, OQ-2 / research F-7)*: `label_values()` reads the Prometheus index and returns recently-dead pods too (measured: 4 keeper pods listed while 2 were alive, even at a 60-second window). This is index granularity, not a Grafana setting, and VAR-02's `label_values()` mandate is kept as-is.
-- [ ] **VER-02**: Portability is demonstrated, not assumed: the dashboards are proven to load from the repo JSON alone after a Grafana pod delete/recreate (no PVC, no manual step).
+- [x] **VER-02**: Portability is demonstrated, not assumed: the dashboards are proven to load from the repo JSON alone after a Grafana pod delete/recreate (no PVC, no manual step).
 
 ## Future Requirements (deferred — future Kafka milestone)
 

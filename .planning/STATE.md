@@ -4,13 +4,13 @@ milestone: v13.0.0
 milestone_name: Observability Dashboards
 status: executing
 stopped_at: Completed 87-03-PLAN.md
-last_updated: "2026-07-27T18:58:51.994Z"
+last_updated: "2026-07-27T19:22:11.347Z"
 last_activity: 2026-07-27
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 15
-  completed_plans: 12
+  completed_plans: 13
   percent: 50
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Phase: 87 (grafana-observability-dashboards) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-07-27
 Current focus: Phase 87 — awaiting `/gsd-plan-phase 87`
@@ -720,7 +720,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [████████░░] 80%
+Progress: [█████████░] 87%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1117,6 +1117,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 87 P03 | ~20 min | 3 tasks | 1 files |
 | Phase 87 P04 | ~25 min | 3 tasks | 1 files |
 | Phase 87 P02 | ~50 min | 3 tasks | 2 files |
+| Phase 87 P05 | ~55 min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1689,6 +1690,8 @@ Recent decisions affecting current work:
 - [Phase ?]: 87-04: keeper is split deliberately - the consumed/sent conservation overlay is GUARDED (recovery-only counters, 0 live series) while the L2 probe heartbeat is UNGUARDED (2 live series), so a flat 0 means 'no recovery traffic', never 'keeper down'
 - [Phase ?]: 87-02: generatorOptions.labels omitted from kustomization — verified redundant, the top-level labels block already stamps part-of + managed-by onto generated ConfigMaps
 - [Phase ?]: 87-02: kubectl apply -k reverts live image tags to :local — orchestrator/processor-sample had to be restored to :tags-const-1544 via kubectl set image
+- [Phase ?]: 87-05: VER-01 Class A/B partition is asserted mechanically on the 'or vector(0)' substring with NO exception list — symmetric with lint rules C3/C7/C8, so a silently-added guard surfaces as a new ClassBExprs entry rather than as silence
+- [Phase ?]: 87-05: VER-02 spec byte-equality drops the Grafana DB surrogates id and version before canonicalising — neither appears in the repo JSON, and grafana's emptyDir store necessarily mints fresh ones on every pod recreate
 
 ### Roadmap Milestone Log
 
@@ -1800,7 +1803,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-27T18:58:44.832Z
+Last session: 2026-07-27T19:21:54.757Z
 Stopped at: Completed 87-03-PLAN.md
 Resume file: None
 
