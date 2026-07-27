@@ -1,0 +1,97 @@
+{
+  "uid": "skp-business",
+  "title": "SKP Business / Pipeline",
+  "description": "Business / pipeline counters across the three services that emit domain meters (orchestrator / keeper / processor), plus the WebApi represented by ASP.NET Core request metrics only (it registers no domain meter - BPD-03). The two template variables are populated from the process_runtime_dotnet_* family emitted by OpenTelemetry.Instrumentation.Runtime 1.15.0 on net8.0 (research F-1) - the one instrumentation every service class shares. A future net9.0 upgrade would rename that family to dotnet_* and blank both dropdowns; scripts/phase-87-dashboard-lint.ps1 rule S8 hard-fails on any dotnet_* reference so that regression surfaces hermetically in ~5s instead of as a silently empty dashboard.",
+  "tags": ["skp", "business"],
+  "timezone": "browser",
+  "editable": false,
+  "graphTooltip": 1,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "annotations": { "list": [] },
+  "links": [],
+  "templating": {
+    "list": [
+      {
+        "type": "datasource",
+        "name": "datasource",
+        "label": "Datasource",
+        "query": "prometheus",
+        "current": {},
+        "refresh": 1,
+        "regex": "",
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "type": "query",
+        "name": "source",
+        "label": "Service class",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(process_runtime_dotnet_gc_collections_count_total, source)",
+        "definition": "label_values(process_runtime_dotnet_gc_collections_count_total, source)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": {},
+        "options": [],
+        "hide": 0,
+        "skipUrlSync": false
+      },
+      {
+        "type": "query",
+        "name": "pod",
+        "label": "Pod",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(process_runtime_dotnet_gc_collections_count_total{source=~\"$source\"}, service_instance_id)",
+        "definition": "label_values(process_runtime_dotnet_gc_collections_count_total{source=~\"$source\"}, service_instance_id)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": null,
+        "current": {},
+        "options": [],
+        "hide": 0,
+        "skipUrlSync": false
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Orchestrator consumed vs sent (conservation)",
+      "description": "Overlaying consumed and sent on one axis is what makes the conservation relationship readable at a glance (BPD-02). Both targets are Class A (VER-01): they have live series on a healthy stack and must never carry an or vector(0) guard - lint rule C7 enforces that, because a guarded Class A signal renders 0 and lets a fully stalled pipeline pass the live proof.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (source) (rate(orchestrator_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))",
+          "legendFormat": "consumed {{source}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (source) (rate(orchestrator_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))",
+          "legendFormat": "sent {{source}}"
+        }
+      ]
+    }
+  ]
+}
