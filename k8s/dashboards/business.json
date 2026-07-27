@@ -92,6 +92,130 @@
           "legendFormat": "sent {{source}}"
         }
       ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Keeper consumed vs sent (conservation)",
+      "description": "GUARDED ON PURPOSE - both targets carry 'or vector(0)', and that is not decoration. keeper_messages_consumed / keeper_messages_sent increment ONLY inside RecoveryConsumerBase.Consume / CountSent, so they fire only during a recovery event: research F-4 measured zero live series and Pitfall 6 records that both names are absent from the entire 15-day Prometheus __name__ index. That places them in REQUIREMENTS.md VER-01 Class B ('any counter with no live series on a healthy stack'), so this is a properly guarded Class-B panel, not a Class-A panel with a hole in it. Lint rule C3 requires the guard on EVERY expression referencing these two counters anywhere in this file, and plan 87-05 STEP F classifies an expression Class A or Class B purely by the presence of this substring - its traffic drive (STEP E) is a happy-path FanOutSeeder run with no fault scenario, so an unguarded target here would be asserted as Class A and would fail the live proof. HOW TO READ A FLAT 0: 'no recovery traffic in this window'. It does NOT mean 'keeper down' - the keeper liveness signal is the Class-A 'Keeper L2 probe heartbeat' panel.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (source) (rate(keeper_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval])) or vector(0)",
+          "legendFormat": "consumed {{source}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (source) (rate(keeper_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval])) or vector(0)",
+          "legendFormat": "sent {{source}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Processor consumed vs sent by image (conservation)",
+      "description": "The VAR-04 correction in force (research F-6). Every source=\"processor\" series carries the unresolved_0.0.0 MLBL-03 sentinel on service_name, so service_name CANNOT discriminate processor images; identityName (carrying {db.Name}_{db.Version}) is the discriminator, and it exists only on these two business counters. No processor panel on this dashboard groups by service_name - lint rule C5 enforces the identityName grouping. Both targets are Class A (VER-01): they have live series on a healthy stack and must never carry an 'or vector(0)' guard, which lint rule C7 enforces.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (identityName) (rate(processor_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))",
+          "legendFormat": "consumed {{identityName}}"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (identityName) (rate(processor_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))",
+          "legendFormat": "sent {{identityName}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Cross-tier conservation gap (orchestrator sent - processor consumed)",
+      "description": "This is the axis the 7-scenario resilience sweep scores on (MG-1 conservation), evaluated over the dashboard window rather than over a sweep run. A sustained positive value means the orchestrator dispatched work the processors never consumed. Class A (VER-01): both counters have live series on a healthy stack, so this expression carries NO 'or vector(0)' guard - lint rule C7 enforces that, because a guarded Class-A expression renders 0 and would let a fully stalled pipeline pass the live proof. Threshold: green base, red at 1 - the operand is an integer message count, so 'red above 0' is 'red at 1'.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum(increase(orchestrator_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) - sum(increase(processor_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range]))",
+          "legendFormat": "gap"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Per-processor dispatch gap",
+      "description": "The analyzer's historical bottleneck view expressed in the current counter names: dispatched-minus-consumed per processor identity. processorId is the DB identity GUID carried on both business counters - note it is a LABEL, not a metric, and it does not match the lint's processor_\\w+ family regex because that regex requires the underscore (pinned by the lint's -SelfTest fixture (e)). Class A (VER-01): unguarded by design, enforced by lint rule C7.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (processorId) (rate(orchestrator_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval])) - sum by (processorId) (rate(processor_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))",
+          "legendFormat": "{{processorId}}"
+        }
+      ]
     }
   ]
 }
