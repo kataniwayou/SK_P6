@@ -104,6 +104,39 @@ public class ComputeSourceHash : Microsoft.Build.Utilities.Task
     <WriteLinesToFile File="$(IntermediateOutputPath)sourcehash.stamp" Lines="$(SourceHash)" Overwrite="true" />
   </Target>
 
+  <!--
+    (3a) STALE-EMBED GUARD (Pitfall 2b). Without this, an INCREMENTAL build can PRINT the new
+    SourceHash while leaving the OLD one embedded in the assembly — the most dangerous possible
+    failure for a value whose whole job is code identity.
+
+    Mechanism: the SDK's CoreGenerateAssemblyInfo is itself incremental on
+    Inputs="$(MSBuildAllProjects)" — the PROJECT files — NOT on @(AssemblyAttribute). So when only
+    BaseProcessor.Core *.cs change (they are in @(ImplFiles), so the hash changes) but this concrete
+    project's own files do not, ComputeSourceHash re-runs and EchoSourceHash prints the NEW hash,
+    yet CoreGenerateAssemblyInfo is skipped as up-to-date and $(GeneratedAssemblyInfoFile) keeps the
+    PREVIOUS AssemblyMetadata("SourceHash", ...). CoreCompile then has no changed input, so the .dll
+    ships the stale value. Docker builds are immune (always clean); host incremental builds are not.
+
+    Observed 2026-07-27: build log said be9c0fe7…, Processor.Sample.dll carried e2f0e743… (three
+    hashes stale). Registering the printed hash then deploying that binary is an identity mismatch —
+    the container never resolves its processor row and Start 422s on the liveness gate.
+
+    Fix: an Inputs/Outputs target that fires ONLY when the stamp is newer than the generated
+    AssemblyInfo, and deletes that file. CoreGenerateAssemblyInfo then sees its output missing and
+    regenerates with the current attribute; CoreCompile sees a changed source and rebuilds. Ordered
+    BeforeTargets="CoreGenerateAssemblyInfo" and DependsOnTargets="ComputeSourceHash" so the stamp is
+    always fresh before the comparison. When the hash has NOT changed the stamp is not rewritten, so
+    this target is skipped and incrementality is fully preserved.
+  -->
+  <Target Name="InvalidateAssemblyInfoOnSourceHashChange"
+          BeforeTargets="CoreGenerateAssemblyInfo"
+          DependsOnTargets="ComputeSourceHash"
+          Inputs="$(IntermediateOutputPath)sourcehash.stamp"
+          Outputs="$(GeneratedAssemblyInfoFile)">
+    <Message Text="SourceHash changed — regenerating $(GeneratedAssemblyInfoFile)" Importance="high" />
+    <Delete Files="$(GeneratedAssemblyInfoFile)" />
+  </Target>
+
   <Target Name="EmitSourceHashAttribute" BeforeTargets="CoreGenerateAssemblyInfo;CoreCompile" DependsOnTargets="ComputeSourceHash">
     <!-- If ComputeSourceHash was skipped (no source change), recover the hash from the stamp. -->
     <ReadLinesFromFile File="$(IntermediateOutputPath)sourcehash.stamp" Condition="'$(SourceHash)' == ''">
