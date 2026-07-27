@@ -83,6 +83,140 @@
           "legendFormat": "{{source}} / {{service_instance_id}} / {{generation}}"
         }
       ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "GC heap size by generation",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (source, service_instance_id, generation) (process_runtime_dotnet_gc_heap_size_bytes{source=~\"$source\", service_instance_id=~\"$pod\"})",
+          "legendFormat": "{{source}} / {{service_instance_id}} / {{generation}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "GC heap fragmentation by generation",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (source, service_instance_id, generation) (process_runtime_dotnet_gc_heap_fragmentation_size_bytes{source=~\"$source\", service_instance_id=~\"$pod\"})",
+          "legendFormat": "{{source}} / {{service_instance_id}} / {{generation}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Allocation rate",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "fieldConfig": { "defaults": { "unit": "Bps" }, "overrides": [] },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (source, service_instance_id) (rate(process_runtime_dotnet_gc_allocations_size_bytes_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))",
+          "legendFormat": "{{source}} / {{service_instance_id}}"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "GC committed memory",
+      "description": "SUBSTITUTION (research F-2, RTD-02 amendment). This is GC-COMMITTED bytes, NOT the OS working set. No process_memory_working_set (nor any other OS-level memory) metric exists anywhere in this stack's Prometheus inventory. Obtaining one would require either adding the OpenTelemetry.Instrumentation.Process package (a src/ change) or adding a cAdvisor/kubelet scrape job to the Prometheus config (a scrape-config change) — both are out of scope for this milestone, so this panel is titled for what it actually measures rather than for the axis it cannot measure. Caveat (research F-3): this gauge derives from GC.GetGCMemoryInfo() and is ABSENT for source=\"webapi\" until that pod performs its first GC, so an idle webapi legitimately shows no series here.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (source, service_instance_id) (process_runtime_dotnet_gc_committed_memory_size_bytes{source=~\"$source\", service_instance_id=~\"$pod\"})",
+          "legendFormat": "{{source}} / {{service_instance_id}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Live object bytes",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": { "defaults": { "unit": "bytes" }, "overrides": [] },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (source, service_instance_id) (process_runtime_dotnet_gc_objects_size_bytes{source=~\"$source\", service_instance_id=~\"$pod\"})",
+          "legendFormat": "{{source}} / {{service_instance_id}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "GC time per second",
+      "description": "SUBSTITUTION (research F-2, RTD-02 amendment). Seconds of GC per second — a GC-PRESSURE proxy, not process CPU. This instrumentation (OpenTelemetry.Instrumentation.Runtime 1.15.0 on net8.0) emits no process CPU metric at all, and none can be derived from what it does emit; a real one would need OpenTelemetry.Instrumentation.Process (a src/ change) or a cAdvisor/kubelet scrape job (a scrape-config change), both out of scope. This panel is deliberately NOT titled CPU: an empty or mislabelled CPU panel is a defect under the RTD-02 amendment, and lint rule S12 enforces that.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (source, service_instance_id) (rate(process_runtime_dotnet_gc_duration_nanoseconds_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval])) / 1e9",
+          "legendFormat": "{{source}} / {{service_instance_id}}"
+        }
+      ]
     }
   ]
 }
