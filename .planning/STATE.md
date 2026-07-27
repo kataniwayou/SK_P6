@@ -1,17 +1,17 @@
 ---
 gsd_state_version: 1.0
-milestone: v12.0.0
-milestone_name: Resilience & Health-Probe Hardening
-status: shipped
-stopped_at: v12.0.0 SHIPPED & archived (Phase 86 only); v11.0.0 remains un-closed
-last_updated: 2026-07-27
-last_activity: 2026-07-27 — v12.0.0 shipped & archived (tag v12.0.0)
+milestone: v13.0.0
+milestone_name: Observability Dashboards
+status: executing
+stopped_at: Completed 86-05-PLAN.md
+last_updated: "2026-07-27T17:53:37.059Z"
+last_activity: 2026-07-27 -- Phase 87 planning complete
 progress:
-  total_phases: 1
+  total_phases: 2
   completed_phases: 1
-  total_plans: 9
+  total_plans: 15
   completed_plans: 9
-  percent: 100
+  percent: 50
 ---
 
 # Project State
@@ -27,11 +27,11 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 
 ## Current Position
 
-Phase: — (v12.0.0 shipped)
+Phase: 87 — Grafana Observability Dashboards (v13.0.0) — not planned yet
 Plan: —
-Status: v12.0.0 SHIPPED & archived (tag v12.0.0); v11.0.0 (phases 84-85) remains un-closed
-Last activity: 2026-07-27 - Completed quick task 260727-ngv: k8s OTel Collector export paths verified live (metrics→Prometheus, logs→ES, 4/4 services wired, TEST-01 happy path PASS)
-Current focus: Awaiting next milestone (or close out v11.0.0 bookkeeping)
+Status: Ready to execute
+Last activity: 2026-07-27 -- Phase 87 planning complete
+Current focus: Phase 87 — awaiting `/gsd-plan-phase 87`
 
 ### Quick Tasks Completed
 
@@ -47,6 +47,7 @@ Current focus: Awaiting next milestone (or close out v11.0.0 bookkeeping)
 
 ### Roadmap Evolution
 
+- 2026-07-27 — **Milestone v13.0.0 (Observability Dashboards) started + Phase 87 added.** Two Grafana dashboards over the telemetry the stack already emits: **runtime instrumentation** across all four service classes (`webapi`/`orchestrator`/`keeper`/`processor` — the one instrumentation every service shares) and **business/pipeline** counters across the three services that emit domain counters (`orchestrator_messages_consumed/sent_total` + `orchestrator_step_unresolved_total`, `keeper_messages_consumed/sent_total` + `keeper_l2_probe_total`, `processor_messages_consumed/sent_total` + `processor_spawn_dropped_total`). Both dashboards carry the same two `label_values()`-populated multi-select variables — `source` (service class) and `service_instance_id` (pod), pod chained to source — plus a datasource variable for portability. Grafana deploys into the existing `skp` k8s stack (Deployment + Service + kustomization, datasource + dashboard-provider ConfigMaps) with **no PVC**: dashboards are checked-in JSON, file-provisioned, and a pod recreate must reproduce them exactly. **Scoped decisions (user, this session):** (a) new milestone rather than appending to the shipped/archived v12.0.0; (b) ONE phase, THREE plans (deploy → runtime dashboard → business dashboard + live verify); (c) the WebApi is represented on the business dashboard by **ASP.NET Core request metrics only** — it registers no domain meter and not even the MassTransit meter (`ObservabilityServiceCollectionExtensions.cs:96-118` = AspNetCore + HttpClient + Runtime), and adding WebApi business counters was explicitly ruled OUT of scope so a dashboards milestone does not widen production instrumentation. **Feasibility pre-checked:** no code change is needed for either dropdown — the collector's `resource_to_telemetry_conversion: true` (`k8s/02-configmaps.yaml:85`) already promotes `source` + `service_instance_id` + `service_name` to Prometheus labels. No Grafana existed anywhere in the repo (greenfield). 16 requirements mapped (DASH-01…04, RTD-01…03, BPD-01…03, VAR-01…04, VER-01…02) — all to Phase 87, no orphans. **Numbering:** created MANUALLY (not `phase.add`) with continued numbering from v12.0.0's Phase 86 → **87**, and `STATE.milestone` set to **v13.0.0** BEFORE anything else — deliberately avoiding both [[gsd-phase-numbering]] bugs (stale-pointer mis-numbering + the EOF mis-placement), same approach that worked for Phases 82/83. **Bookkeeping:** v11.0.0's `REQUIREMENTS.md` (still live in the working file, never archived) was copied to `milestones/v11.0.0-REQUIREMENTS.md` before `REQUIREMENTS.md` was rewritten for v13.0.0 — without that step this would have repeated the documented v9.0.0 requirements loss. v11.0.0 itself remains un-closed. Next: `/gsd-plan-phase 87`.
 - 2026-07-21 — **v11.0.0 roadmap created** — 2 phases (84-85), standard granularity, **11/11 requirements mapped** (DATA-01..05 → Phase 84, KIMP-01..06 → Phase 85; no orphans, no duplicates). Dependency-driven order (the byte[] channel is the prerequisite the importer writes into): **84** `byte[]` Data-Channel Widening (DATA-01 ground-truth `byte[]`, DATA-02 JSON-schema-as-lens, DATA-03 byte-for-byte string/JSON equivalence, DATA-04 **the existing 7-scenario fault-recovery sweep `scripts/phase-68-sweep.ps1` reproducing all-PASS is the SOLE acceptance gate — no new test suite**, DATA-05 recovery carries `byte[]` losslessly) → **85** KafkaImporter Processor (KIMP-01 Mode-2 pull-≤N-per-dispatch entry step, KIMP-02 executionId-per-file + bytes-direct-to-L2/never-on-bus, KIMP-03 per-message offset commit fail-loud after confirmed store+hand-off, KIMP-04 content-agnostic, KIMP-05 standalone Kafka container via `host.docker.internal:9092`, KIMP-06 topic/group/N in `ProcessorConfig`). Phase 84 `Depends on: —`; Phase 85 `Depends on: Phase 84`. **Deferred to a future milestone (NOT phases here):** file-manipulator step (MANIP-01) + KafkaExporter terminal step (KEXP-01). **Numbering:** continued from v10.0.0 (ended at Phase 83) → **84/85**; `STATE.milestone` already correctly set to **v11.0.0** (no stale-pointer bug this run). Next: `/gsd-plan-phase 84`.
 - 2026-07-18 — **Milestone v10.0.0 (Orchestrator High Availability) started + Phases 82-83 added** (new milestone after v9.0.0 completed): orchestrator run as N≥2 replicas with single-leader mutual exclusion. **Phase 82** `orchestrator-ha-leader-election` — `KubernetesClient` `LeaderElector` (`RunAndTryToHoldLeadershipForeverAsync`) over a `coordination.k8s.io/v1` Lease in a `BackgroundService`; single-writer volatile `LeaderState`; the leader gate wraps `WorkflowFireJob`'s entry-step `foreach…DispatchAsync` loop ONLY (followers still reschedule + refresh L1; `RelocateTail` step-advancement stays ungated so in-flight workflows never stall on failover); `OrchestratorRoleLogEnricher` stamps `attributes.role`; RBAC Role/RoleBinding for `leases` in `skp`; orchestrator Deployment → N≥2 (HA-01..HA-06). **Phase 83** `orchestrator-ha-failover-proof` — kill the leader mid-run, prove zero duplicate triggers (distinct per-fire correlationIds) + bounded single-leader recovery (HA-07). Design confirmed in the 2026-07-18 conversation; mechanism = library-over-BackgroundService (not roll-your-own), verified `KubernetesClient` API. New dep: `KubernetesClient`. **Numbering:** created MANUALLY (not `phase.add`) with continued numbering (82/83) and `STATE.milestone` set to **v10.0.0** — avoided the [[gsd-phase-numbering]] stale-pointer bug (pointer was stale `v7.0.0`); did NOT run `phases.clear` (would have deleted unarchived v9.0.0 phase dirs 80-81). v9.0.0 left complete-but-unarchived. Created `REQUIREMENTS.md` (HA-01..HA-07).
 - 2026-07-18 — **Phase 81 added** (v9.0.0, after Phase 80): `re-run-the-7-scenario-fault-recovery-sweep-test-01-test-07-o` — re-run the 7-scenario fault-recovery sweep (TEST-01..07) on the k8s Docker Desktop target using `kubectl scale --replicas=0` (then scale-back) as the crash/recovery injection — the k8s analog of the compose `docker stop`/`start`. Generalizes the Phase-80 k8s harness (`phase-80-harness.ps1`, currently TEST-01-only) to accept a scenario id/list and re-targets the crash sequencer from docker-compose CLI to `kubectl scale` (THIRD instance of the RESEARCH Pitfall-1 CLI-coupling re-target), preserving each tier's replica count on restore (orchestrator 1, keeper 2, processor-sample 2, redis 1, rabbitmq 1) and waiting for actual terminate on scale-0 + Ready on restore before pinning RECOVERY_UTC. Reuses the phase-68 sweep analyzer + conservation/recovery metric gate verbatim. Scope = the 7 recovery-capstone scenarios only (processor/orchestrator/keeper/redis/rabbitmq/redis+rabbitmq whole-tier crash + no-fault baseline); the seam-dependent negative controls (TEST-08/09/10, FALSIFY-01/02) stay OUT of scope because the Phase-80 manifests deliberately omit the test-only env seams they require (D-08). Realizes the "fault-scenario re-run on k8s" deferred idea from Phase 80's CONTEXT. Depends on Phase 80. **Numbering-bug fix applied ([[gsd-phase-numbering]], 7th occurrence):** `STATE.milestone` had regressed to the stale `v7.0.0` pointer AGAIN (post phase-80 `phase.complete` reset it to v7.0.0/milestone_complete; `phase.add` then numbered off phases 59-62 → bogus **63**, colliding with archived v8.0.0 phases 63-68, inserted at EOF with wrong `Depends on: Phase 62`). Reverted the bogus insertion (`git checkout ROADMAP.md` + `rm -rf 63-*`), reset `STATE.milestone` → **v9.0.0** BEFORE re-adding → numbering resolved to **81** (`Depends on: Phase 80`); then manually relocated the block from EOF into the v9.0.0 section (after Phase 80). Root cause STILL unfixed in the tool — always reset the pointer before a phase add.
