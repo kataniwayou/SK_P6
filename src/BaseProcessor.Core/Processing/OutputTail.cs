@@ -1,3 +1,4 @@
+using BaseConsole.Core.Observability;   // ConsoleMetricTags — shared camelCase metric tag names
 using BaseConsole.Core.Resilience;       // RetryLoop
 using BaseProcessor.Core.Configuration;  // ProcessorLivenessOptions
 using BaseProcessor.Core.Identity;       // IProcessorContext
@@ -160,8 +161,8 @@ public sealed class OutputTail(
         // `outcome` label is REMOVED (and the ResultOutcome helper deleted). D-05/D-06: processorId = this
         // producing processor's own id; workflowId from result.WorkflowId (IStepResult : IExecutionCorrelated).
         metrics.MessagesSent.Add(1,
-            new KeyValuePair<string, object?>("workflowId", result.WorkflowId.ToString("D")),
-            new KeyValuePair<string, object?>("processorId", context.Id!.Value.ToString("D")),
+            new KeyValuePair<string, object?>(ConsoleMetricTags.WorkflowIdTag, result.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>(ConsoleMetricTags.ProcessorIdTag, context.Id!.Value.ToString("D")),
             new KeyValuePair<string, object?>(ProcessorMetrics.IdentityNameTag, ProcessorMetrics.IdentityNameOf(context)));
 
         return outboundId;   // D3/LOG-03: the stamped outbound envelope id, logged by RunAsync

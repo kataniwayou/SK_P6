@@ -1,3 +1,4 @@
+using BaseConsole.Core.Observability;   // ConsoleMetricTags — shared camelCase metric tag names
 using MassTransit;
 using Messaging.Contracts;
 using Microsoft.Extensions.Logging;
@@ -53,8 +54,8 @@ public abstract class TypedResultConsumer<TMessage>(
         // workflowId+processorId (D-07); messageId is the counting unit, never a label (D-04). `m` is the
         // consumed IStepResult (IExecutionCorrelated) → both ids in-hand. Ambient service_instance_id.
         metrics.MessagesConsumed.Add(1,
-            new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")),
-            new KeyValuePair<string, object?>("processorId", m.ProcessorId.ToString("D")));
+            new KeyValuePair<string, object?>(ConsoleMetricTags.WorkflowIdTag, m.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>(ConsoleMetricTags.ProcessorIdTag, m.ProcessorId.ToString("D")));
 
         // Delegate to the shared Pre pipeline: L1 resolution -> two-reason trip-end / out: gate-read ->
         // fan-out to orchestrator-result-post -> delete out:. The inbound envelope MessageId is threaded so a

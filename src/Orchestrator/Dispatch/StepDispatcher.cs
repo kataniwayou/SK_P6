@@ -1,3 +1,4 @@
+using BaseConsole.Core.Observability;   // ConsoleMetricTags — shared camelCase metric tag names
 using MassTransit;
 using Messaging.Contracts;
 using Orchestrator.Observability;
@@ -48,7 +49,7 @@ public sealed class StepDispatcher(
         // site covers BOTH the orchestrator's direct forward dispatch AND RelocateTail's post-process dispatch
         // (both call DispatchAsync) — do NOT add a second dispatch increment in RelocateTail (no double-count).
         metrics.MessagesSent.Add(1,
-            new KeyValuePair<string, object?>("workflowId", workflowId.ToString("D")),
-            new KeyValuePair<string, object?>("processorId", processorId.ToString("D")));
+            new KeyValuePair<string, object?>(ConsoleMetricTags.WorkflowIdTag, workflowId.ToString("D")),
+            new KeyValuePair<string, object?>(ConsoleMetricTags.ProcessorIdTag, processorId.ToString("D")));
     }
 }

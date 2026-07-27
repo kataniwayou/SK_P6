@@ -29,6 +29,12 @@ public sealed class ProcessorMetrics
     /// <summary>The meter name — MUST equal the <c>AddMeter("BaseProcessor")</c> registration (D-02).</summary>
     public const string MeterName = "BaseProcessor";
 
+    // NOTE: the cross-service `workflowId`/`processorId` tags are NOT declared here — they are shared with
+    // the orchestrator and keeper via BaseConsole.Core.Observability.ConsoleMetricTags (the common assembly
+    // all three console tiers reference), so one const backs every increment site in the system.
+    // `identityName` below stays processor-owned: it is emitted only by this framework and is built from
+    // IProcessorContext, a type BaseConsole.Core does not know.
+
     /// <summary>
     /// camelCase tag carrying the resolved DB identity as ONE combined <c>{db.Name}_{db.Version}</c>
     /// string — the metrics twin of the <c>IdentityName</c> log attribute. Supersedes MLBL-03 (ii): the

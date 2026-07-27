@@ -1,3 +1,4 @@
+using BaseConsole.Core.Observability;   // ConsoleMetricTags — shared camelCase metric tag names
 using BaseConsole.Core.Resilience;   // D-05: RetryLoop / RetryOutcome relocated here
 using BaseProcessor.Core.Configuration;
 using BaseProcessor.Core.Identity;
@@ -312,7 +313,7 @@ public sealed class ProcessorPipeline(
                 // camelCase `processorId` — MUST match the tag the two business counters use (D-07) so a
                 // query can join spawn-drops against them on one label name.
                 metrics.SpawnDropped.Add(1,
-                    new KeyValuePair<string, object?>("processorId", context.Id!.Value.ToString("D")),
+                    new KeyValuePair<string, object?>(ConsoleMetricTags.ProcessorIdTag, context.Id!.Value.ToString("D")),
                     new KeyValuePair<string, object?>(ProcessorMetrics.IdentityNameTag, ProcessorMetrics.IdentityNameOf(context)));
             });
         // PB-03: no entryId / escalateDelete wiring here anymore — the entry delete + its DELETE-keeper

@@ -1,3 +1,4 @@
+using BaseConsole.Core.Observability;   // ConsoleMetricTags — shared camelCase metric tag names
 using BaseProcessor.Core.Identity;       // IProcessorContext
 using BaseProcessor.Core.Observability;  // ProcessorMetrics
 using MassTransit;
@@ -44,8 +45,8 @@ public sealed class PostProcessConsumer(
         // post-identity (mirrors the entry consumer's bang). workflowId from the DataResult (IExecutionCorrelated);
         // processorId = this processor's own id (== ctx.Message.ProcessorId, asserted by the provenance guard above).
         metrics.MessagesConsumed.Add(1,
-            new KeyValuePair<string, object?>("workflowId", ctx.Message.WorkflowId.ToString("D")),
-            new KeyValuePair<string, object?>("processorId", self.ToString("D")),
+            new KeyValuePair<string, object?>(ConsoleMetricTags.WorkflowIdTag, ctx.Message.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>(ConsoleMetricTags.ProcessorIdTag, self.ToString("D")),
             new KeyValuePair<string, object?>(ProcessorMetrics.IdentityNameTag, ProcessorMetrics.IdentityNameOf(context)));
 
         // Post never touches an entry → deleteEntryId = Guid.Empty (the INJECT delete no-ops on it).

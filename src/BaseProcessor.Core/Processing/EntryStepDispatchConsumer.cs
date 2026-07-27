@@ -1,3 +1,4 @@
+using BaseConsole.Core.Observability;   // ConsoleMetricTags — shared camelCase metric tag names
 using BaseProcessor.Core.Identity;
 using BaseProcessor.Core.Observability;
 using MassTransit;
@@ -36,8 +37,8 @@ public sealed class EntryStepDispatchConsumer(
         // workflowId comes from the consumed EntryStepDispatch (IExecutionCorrelated); processorId is the
         // consuming processor's own context.Id (the value already used today). value .ToString("D") matches queue:{id:D}.
         metrics.MessagesConsumed.Add(1,
-            new KeyValuePair<string, object?>("workflowId", ctx.Message.WorkflowId.ToString("D")),
-            new KeyValuePair<string, object?>("processorId", context.Id!.Value.ToString("D")),
+            new KeyValuePair<string, object?>(ConsoleMetricTags.WorkflowIdTag, ctx.Message.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>(ConsoleMetricTags.ProcessorIdTag, context.Id!.Value.ToString("D")),
             new KeyValuePair<string, object?>(ProcessorMetrics.IdentityNameTag, ProcessorMetrics.IdentityNameOf(context)));
 
         // D-09/T-51-03: the broker MessageId is the slot-array branch key — fail-fast on null rather than

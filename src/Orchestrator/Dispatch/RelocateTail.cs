@@ -1,3 +1,4 @@
+using BaseConsole.Core.Observability;   // ConsoleMetricTags — shared camelCase metric tag names
 using BaseConsole.Core.Resilience;       // RetryLoop
 using MassTransit;                        // ISendEndpointProvider
 using Messaging.Contracts;
@@ -102,7 +103,7 @@ public sealed class RelocateTail(
         // keeper-recovery recipient is not a processor → use the producing processor's id off the
         // IKeeperRecoverable `msg` (== the BuildInject source's WorkflowId/ProcessorId). camelCase (D-07).
         metrics.MessagesSent.Add(1,
-            new KeyValuePair<string, object?>("workflowId", msg.WorkflowId.ToString("D")),
-            new KeyValuePair<string, object?>("processorId", msg.ProcessorId.ToString("D")));
+            new KeyValuePair<string, object?>(ConsoleMetricTags.WorkflowIdTag, msg.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>(ConsoleMetricTags.ProcessorIdTag, msg.ProcessorId.ToString("D")));
     }
 }

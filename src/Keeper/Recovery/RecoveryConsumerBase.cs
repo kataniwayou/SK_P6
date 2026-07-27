@@ -1,3 +1,4 @@
+using BaseConsole.Core.Observability;   // ConsoleMetricTags — shared camelCase metric tag names
 using BaseConsole.Core.Resilience;
 using Keeper.Observability;
 using MassTransit;
@@ -40,8 +41,8 @@ public abstract class RecoveryConsumerBase<TMessage>(
         // consumers funnel through (REINJECT/INJECT/DELETE for both processor and orchestrator). Labels are
         // the camelCase workflowId+processorId from IKeeperRecoverable.
         metrics.MessagesConsumed.Add(1,
-            new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")),
-            new KeyValuePair<string, object?>("processorId", m.ProcessorId.ToString("D")));
+            new KeyValuePair<string, object?>(ConsoleMetricTags.WorkflowIdTag, m.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>(ConsoleMetricTags.ProcessorIdTag, m.ProcessorId.ToString("D")));
         return HandleAsync(m, context.CancellationToken);   // gate now enforced at the ENDPOINT (D-04)
     }
 
@@ -69,6 +70,6 @@ public abstract class RecoveryConsumerBase<TMessage>(
     /// consumed-counter increment (DRY).</summary>
     protected void CountSent(Guid workflowId, Guid processorId) =>
         metrics.MessagesSent.Add(1,
-            new KeyValuePair<string, object?>("workflowId", workflowId.ToString("D")),
-            new KeyValuePair<string, object?>("processorId", processorId.ToString("D")));
+            new KeyValuePair<string, object?>(ConsoleMetricTags.WorkflowIdTag, workflowId.ToString("D")),
+            new KeyValuePair<string, object?>(ConsoleMetricTags.ProcessorIdTag, processorId.ToString("D")));
 }

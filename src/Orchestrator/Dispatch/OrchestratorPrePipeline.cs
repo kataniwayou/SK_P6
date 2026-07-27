@@ -1,3 +1,4 @@
+using BaseConsole.Core.Observability;   // ConsoleMetricTags — shared camelCase metric tag names
 using BaseConsole.Core.Resilience;       // RetryLoop
 using MassTransit;                        // ISendEndpointProvider
 using Messaging.Contracts;
@@ -74,7 +75,7 @@ public sealed class OrchestratorPrePipeline(
         {
             logger.LogInformation(
                 "Trip ended (completed-unresolved): no L1 entry — acking (business)");
-            metrics.StepUnresolved.Add(1, new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")));
+            metrics.StepUnresolved.Add(1, new KeyValuePair<string, object?>(ConsoleMetricTags.WorkflowIdTag, m.WorkflowId.ToString("D")));
             return;
         }
 
@@ -158,8 +159,8 @@ public sealed class OrchestratorPrePipeline(
             // the PRODUCING processor's id off the inbound result `m` (the only processor identity present);
             // workflowId = m.WorkflowId. camelCase labels (D-07); messageId never a label (D-04).
             metrics.MessagesSent.Add(1,
-                new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")),
-                new KeyValuePair<string, object?>("processorId", m.ProcessorId.ToString("D")));
+                new KeyValuePair<string, object?>(ConsoleMetricTags.WorkflowIdTag, m.WorkflowId.ToString("D")),
+                new KeyValuePair<string, object?>(ConsoleMetricTags.ProcessorIdTag, m.ProcessorId.ToString("D")));
 
             // FW-02 / D3 (Phase 77, reverses D-11 Option C): one fan-out edge record per next step, AFTER the
             // send landed. The outbound envelope id is now MINTED + stamped on the send (ctx.MessageId) AND
@@ -182,7 +183,7 @@ public sealed class OrchestratorPrePipeline(
             logger.LogInformation(
                 "Dangling next-step id {NextStepId} — skipping (business)",
                 unresolvedId);
-            metrics.StepUnresolved.Add(1, new KeyValuePair<string, object?>("workflowId", m.WorkflowId.ToString("D")));
+            metrics.StepUnresolved.Add(1, new KeyValuePair<string, object?>(ConsoleMetricTags.WorkflowIdTag, m.WorkflowId.ToString("D")));
             // IN-02: graceful business skip — never throw (D-02 / T-72-08). No explicit `continue` needed:
             // this is the last statement of the loop body, so the iteration falls through naturally.
         }
@@ -210,8 +211,8 @@ public sealed class OrchestratorPrePipeline(
         // escalation (read-fault) AND the DELETE escalation (delete-exhaust). D-06: the keeper-recovery
         // recipient is not a processor → use the producing processor's id off the IKeeperRecoverable `msg`.
         metrics.MessagesSent.Add(1,
-            new KeyValuePair<string, object?>("workflowId", msg.WorkflowId.ToString("D")),
-            new KeyValuePair<string, object?>("processorId", msg.ProcessorId.ToString("D")));
+            new KeyValuePair<string, object?>(ConsoleMetricTags.WorkflowIdTag, msg.WorkflowId.ToString("D")),
+            new KeyValuePair<string, object?>(ConsoleMetricTags.ProcessorIdTag, msg.ProcessorId.ToString("D")));
     }
 
     /// <summary>D-02/D-03: the REINJECT re-asserts the SAME inbound envelope <paramref name="messageId"/> on
