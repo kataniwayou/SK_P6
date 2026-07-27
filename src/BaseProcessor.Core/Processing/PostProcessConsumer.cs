@@ -45,7 +45,8 @@ public sealed class PostProcessConsumer(
         // processorId = this processor's own id (== ctx.Message.ProcessorId, asserted by the provenance guard above).
         metrics.MessagesConsumed.Add(1,
             new KeyValuePair<string, object?>("workflowId", ctx.Message.WorkflowId.ToString("D")),
-            new KeyValuePair<string, object?>("processorId", self.ToString("D")));
+            new KeyValuePair<string, object?>("processorId", self.ToString("D")),
+            new KeyValuePair<string, object?>(ProcessorMetrics.IdentityNameTag, ProcessorMetrics.IdentityNameOf(context)));
 
         // Post never touches an entry → deleteEntryId = Guid.Empty (the INJECT delete no-ops on it).
         // D-18: Post logs NO per-hop record, so it deconstructs-and-discards the resolved-outcome tuple.

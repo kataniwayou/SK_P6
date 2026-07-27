@@ -206,22 +206,6 @@ public static class BaseProcessorServiceCollectionExtensions
         services.AddSingleton<ProcessorMetrics>();
         services.ConfigureOpenTelemetryMeterProvider(mp => mp.AddMeter(ProcessorMetrics.MeterName));
 
-        // 6d. MLBL-03 (D-02/D-03, Model A1): the MeterProviderHolder owns the placeholder->DB
-        //     service.name swap. It receives the HOST's shared MeterProvider (provider #1 — built by the
-        //     unchanged AddBaseConsoleObservability path + the additive AddMeter above), the appsettings
-        //     Service:Version (kept as service.version — D-07), and the resolved service.instance.id
-        //     (captured ONCE, reused for provider #2). On identity-resolve in Loop A the orchestrator
-        //     calls SwapTo("{db.Name}_{db.Version}"); the holder builds #2 and disposes #1 (double-dispose
-        //     by DI at shutdown is a safe no-op — A1). MeterProvider is DI-resolvable (the shared path's
-        //     AddOpenTelemetry registers it; see ConsoleObservabilityTests.MeterProvider_Resolvable).
-        services.AddSingleton<MeterProviderHolder>(sp =>
-        {
-            var hostProvider = sp.GetRequiredService<MeterProvider>();   // provider #1 (host-built, placeholder resource — A1)
-            var version      = cfg.Require("Service:Version");           // appsettings placeholder version (D-04/D-07)
-            var instanceId   = ResolveInstanceIdForHolder();            // the holder's single documented IN-03 read (see below)
-            return new MeterProviderHolder(hostProvider, instanceId, version);
-        });
-
         // 7 / 7b. Phase 60 (D-01/02 / KEY-03): resolve the per-replica instanceId ONCE (env-precedence SoT,
         //         available from boot) and pass the SAME value to BOTH grown ctors so the two loops write the
         //         IDENTICAL {instanceId} per-instance key (one replica identity). The instanceId is a plain
@@ -263,18 +247,4 @@ public static class BaseProcessorServiceCollectionExtensions
         return services;
     }
 
-    /// <summary>
-    /// MLBL-03 (Pitfall 4 / Phase 30 D-10) — the MeterProviderHolder's SINGLE read of the per-replica
-    /// <c>service.instance.id</c>, captured once and reused for provider #2 so logs + metrics #1 + #2
-    /// carry the identical value. The shared <c>AddBaseConsoleObservability</c> resolves the id once but
-    /// does not expose it, so this is a documented capture using the IDENTICAL env precedence.
-    /// <para>
-    /// IN-03 — this holder copy now DELEGATES to the Phase-60 single source of truth
-    /// <see cref="InstanceId.Resolve"/> (the same SoT this class already calls at the DI site), so the
-    /// precedence lives in ONE implementation. The remaining OTel observability copies in
-    /// <c>BaseConsole.Core</c> / <c>BaseApi.Core</c> (and their hermetic mirror) stay as-is for now; they
-    /// remain byte-identical to <see cref="InstanceId.Resolve"/>.
-    /// </para>
-    /// </summary>
-    private static string ResolveInstanceIdForHolder() => InstanceId.Resolve();
 }

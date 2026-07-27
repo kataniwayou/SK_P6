@@ -146,8 +146,8 @@ public sealed class ClashRefreshFacts : IClassFixture<RedisFixture>
 
         var orchestrator = new ProcessorStartupOrchestrator(
             identityClient, schemaClient, sourceHash, context, gate,
-            IdentityResolutionFacts.StubConnector(), IdentityResolutionFacts.StubMeterProviderHolder(),
-            // Gate A reflects over GateAStubConfig (CLR enum Mode) — the string-enum config def above CLASHES.
+            IdentityResolutionFacts.StubConnector(), 
+                // Gate A reflects over GateAStubConfig (CLR enum Mode) — the string-enum config def above CLASHES.
             IdentityResolutionFacts.StubConfigTypeProvider(typeof(IdentityResolutionFacts.GateAStubConfig)),
             writer, InstanceId, options, clock, NullLogger<ProcessorStartupOrchestrator>.Instance);
 

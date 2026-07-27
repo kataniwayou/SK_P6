@@ -37,12 +37,9 @@ public static class ObservabilityServiceCollectionExtensions
     /// <param name="builder">The host builder — exposes both <c>.Logging</c> and <c>.Services</c>.</param>
     /// <param name="cfg">The app's own configuration; supplies <c>Service:Name</c> / <c>Service:Version</c>.</param>
     /// <param name="source">
-    /// Coarse emitter class stamped on EVERY log record's resource as <c>Source</c> — one of
-    /// <c>orchestrator</c> / <c>processor</c> / <c>webapi</c> / <c>keeper</c>. REQUIRED (not defaulted)
-    /// so a new service cannot silently ship without it. This is the stable "who emitted this" query
-    /// key: <c>service.name</c> is NOT usable for that on processors (it is the fixed <c>unresolved</c>
-    /// sentinel until identity resolves), and BOTH processor images share the value <c>processor</c>
-    /// deliberately, so one term matches the whole class.
+    /// Coarse emitter class stamped on EVERY log record's resource as <c>Source</c> (here: <c>webapi</c>).
+    /// REQUIRED — mirrors <c>AddBaseConsoleObservability</c> so one <c>resource.attributes.Source</c> term
+    /// selects an emitter class across the whole stack.
     /// </param>
     public static IHostApplicationBuilder AddBaseApiObservability(
         this IHostApplicationBuilder builder, IConfiguration cfg, string source)
@@ -57,17 +54,20 @@ public static class ObservabilityServiceCollectionExtensions
         // resources below. Resolving ONCE (a single local) is a correctness requirement — calling
         // the resolver twice risks the Guid fallback differing between the two resources, so the
         // logs and metrics signals would carry different service_instance_id labels.
-        var instanceId    = ResolveInstanceId();
-        var instanceAttrs = new[] { new KeyValuePair<string, object>("service.instance.id", instanceId) };
+        var instanceId = ResolveInstanceId();
 
-        // LOGS resource attrs = instance id + the Source emitter class. Source is a RESOURCE attribute,
-        // not a per-record one: it never varies within a process, so stamping it once costs nothing at
-        // per-hop log volume and cannot be forgotten by an enricher. Queried as
-        // `resource.attributes.Source`. PascalCase per the log-attribute convention (ExecutionLogScope).
+        // The emitter class rides on BOTH resources, under each signal's own casing convention:
+        // PascalCase `Source` on logs, camelCase `source` on metrics (see BaseConsoleObservabilityExtensions
+        // for the full rationale). Resource-level, not per-record — it never varies within a process.
         var logAttrs = new[]
         {
             new KeyValuePair<string, object>("service.instance.id", instanceId),
             new KeyValuePair<string, object>("Source", source),
+        };
+        var metricAttrs = new[]
+        {
+            new KeyValuePair<string, object>("service.instance.id", instanceId),
+            new KeyValuePair<string, object>("source", source),
         };
 
         // OTel LOGS — MEL bridge (Phase 5 D-09 / OBSERV-02). MUST be builder.Logging.AddOpenTelemetry
@@ -100,11 +100,13 @@ public static class ObservabilityServiceCollectionExtensions
                     // carries a single human label.
                     // SUPERSEDES D-07: `serviceVersion:` is deliberately NOT passed, so the metrics
                     // resource carries NO service.version attribute and no service_version Prom label.
-                    // It was pure duplication -- the SAME `serviceVersion` local is already interpolated
-                    // into the combined name above. LOGS keep service.version: their bare service.name
-                    // has no version suffix (MLBL-04).
+                    // It was pure duplication here — the SAME `serviceVersion` local is already
+                    // interpolated into the combined name above, so the label re-stated one variable
+                    // twice on every series. service_name is now the single version-bearing metrics
+                    // label. LOGS are unaffected (see the bare-name resource above): their
+                    // service.name has NO version suffix, so they still need service.version.
                     .AddService(serviceName: $"{serviceName}_{serviceVersion}")
-                    .AddAttributes(instanceAttrs))    // Phase 30 METRIC-01/02/03 — every metric carries service.instance.id; service_name={name}_{version} (MLBL-01)
+                    .AddAttributes(metricAttrs))    // Phase 30 METRIC-01/02/03 — every metric carries service.instance.id; service_name={name}_{version} (MLBL-01)
                 // OpenTelemetry.Instrumentation.AspNetCore 1.15.0's metrics-side
                 // AddAspNetCoreInstrumentation is parameterless (no opts.Filter overload on
                 // the MeterProviderBuilder). /health metrics filtered at the Collector via

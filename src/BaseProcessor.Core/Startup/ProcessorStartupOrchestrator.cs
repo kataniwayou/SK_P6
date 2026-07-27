@@ -85,7 +85,6 @@ public sealed class ProcessorStartupOrchestrator(
     IProcessorContext context,
     IStartupGate gate,
     IReceiveEndpointConnector endpointConnector,
-    MeterProviderHolder meterProviderHolder,
     IConfigTypeProvider configType,
     ProcessorLivenessWriter writer,
     string instanceId,
@@ -113,24 +112,13 @@ public sealed class ProcessorStartupOrchestrator(
                 if (resp.Is(out Response<ProcessorIdentityFound>? found))
                 {
                     context.SetIdentity(found!.Message);
-                    // MLBL-03 (ii): swap the metrics MeterProvider to the DB-sourced service_name
-                    // ({db.Name}_{db.Version}) — synchronous, inside Loop A, BEFORE the {id:D} queue-bind /
-                    // MarkHealthy (race-safe: the dispatch counters can't fire until the queue is bound
-                    // post-swap; the heartbeat writes Redis only). Reads Name/Version straight off the
-                    // received message (WR-03 memory-visibility is moot at the call-site).
-                    // WR-02: the metrics label is non-load-bearing for correctness and identity has already
-                    // resolved — a swap fault (e.g. ForceFlush on the placeholder provider throwing) must NOT
-                    // fault this BackgroundService. Degrade to "keep emitting on the placeholder provider + warn".
-                    try
-                    {
-                        meterProviderHolder.SwapTo($"{found.Message.Name}_{found.Message.Version}");
-                    }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex,
-                            "Metrics provider swap failed for hash {Hash}; continuing on the placeholder service_name (non-fatal).",
-                            hash);
-                    }
+                    // SUPERSEDES MLBL-03 (ii)/(iv): there is NO MeterProvider swap any more. The metrics
+                    // resource stays on the appsettings sentinel (`unresolved_0.0.0`) for the process's whole
+                    // life, exactly like the logs resource, and the resolved DB identity is carried per
+                    // datapoint by the `processorId` + `identityName` labels on the business counters (and per
+                    // record by ProcessorId + IdentityName on logs). SetIdentity above is the single publish
+                    // point both signals read from — one resource per pod, so the runtime/MassTransit families
+                    // no longer split across a placeholder and a resolved service_name.
                     logger.LogInformation("Identity resolved for hash {Hash}: processor {ProcessorId}",
                         hash, found.Message.Id);
 

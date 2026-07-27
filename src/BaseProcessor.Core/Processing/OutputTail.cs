@@ -161,7 +161,8 @@ public sealed class OutputTail(
         // producing processor's own id; workflowId from result.WorkflowId (IStepResult : IExecutionCorrelated).
         metrics.MessagesSent.Add(1,
             new KeyValuePair<string, object?>("workflowId", result.WorkflowId.ToString("D")),
-            new KeyValuePair<string, object?>("processorId", context.Id!.Value.ToString("D")));
+            new KeyValuePair<string, object?>("processorId", context.Id!.Value.ToString("D")),
+            new KeyValuePair<string, object?>(ProcessorMetrics.IdentityNameTag, ProcessorMetrics.IdentityNameOf(context)));
 
         return outboundId;   // D3/LOG-03: the stamped outbound envelope id, logged by RunAsync
     }

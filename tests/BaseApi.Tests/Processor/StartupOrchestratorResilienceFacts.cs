@@ -76,8 +76,8 @@ public sealed class StartupOrchestratorResilienceFacts
 
         var orchestrator = new ProcessorStartupOrchestrator(
             identityClient, schemaClient, sourceHash, context, gate,
-            IdentityResolutionFacts.StubConnector(), IdentityResolutionFacts.StubMeterProviderHolder(),
-            IdentityResolutionFacts.StubConfigTypeProvider(), IdentityResolutionFacts.StubLivenessWriter(),
+            IdentityResolutionFacts.StubConnector(), 
+                IdentityResolutionFacts.StubConfigTypeProvider(), IdentityResolutionFacts.StubLivenessWriter(),
             "pod-resilience", options, clock, logger);
 
         await orchestrator.StartAsync(cts.Token); // returns once ExecuteAsync first yields at the backoff await

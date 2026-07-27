@@ -177,15 +177,16 @@ public sealed class MetricsRoundTripE2ETests
         //    15s scrape + placeholder→resolved swap window) and assert the RESOLVED series PRESENCE —
         //    never the placeholder's absence within this window.
 
-        // MLBL-03 (ii) — processor steady-state DB-sourced service_name (business family). The live
-        // container swaps its MeterProvider to the DB-sourced resource on identity-resolve (Plan 03),
-        // so its business counters carry service_name={db.Name}_{db.Version} — NOT processor-sample_3.5.0.
-        // Filter by BOTH ProcessorId AND the captured combined name; a non-empty vector proves the swap
-        // is observable end-to-end through resource_to_telemetry_conversion.
+        // SUPERSEDES MLBL-03 (ii) — the MeterProvider swap is GONE. A processor's metrics resource now stays
+        // on the appsettings sentinel (service_name="unresolved_0.0.0") for the process's whole life, exactly
+        // like its logs resource, and the resolved DB identity rides on the DATAPOINT as the `identityName`
+        // label ({db.Name}_{db.Version}) next to `processorId`. Filter by BOTH so a non-empty vector proves
+        // the identity reached Prometheus per-datapoint — the swap-era proof (service_name carrying the DB
+        // name) is no longer meaningful because the resource never changes.
         var procDbSeries = await prom.PollPromForQuery(
-            $"processor_messages_consumed_total{{processorId=\"{procId:D}\",service_name=\"{procServiceName}\"}}",
+            $"processor_messages_consumed_total{{processorId=\"{procId:D}\",identityName=\"{procServiceName}\"}}",
             PrometheusTestClient.VectorNonEmpty, PromPollTimeoutMs, ct);
-        Assert.NotNull(procDbSeries); // resolved series carries the DB {Name}_{Version}, NOT processor-sample_3.5.0
+        Assert.NotNull(procDbSeries); // business counter carries the DB {Name}_{Version} as identityName
 
         // MLBL-01 + MLBL-02 — HTTP family (sk-api). The webapi's http_server_* series must carry the
         // combined service_name=sk-api_3.2.0 (Plan 02 combine) AND a non-empty service_instance_id.

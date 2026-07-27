@@ -29,7 +29,12 @@ public static class BaseConsoleObservabilityExtensions
     /// Takes the host builder because <c>builder.Logging.AddOpenTelemetry</c> requires the
     /// <see cref="ILoggingBuilder"/> surface (not <see cref="IServiceCollection"/>); the host
     /// builder exposes both <c>.Logging</c> and <c>.Services</c>. Service name/version are read
-    /// from the console's own configuration (D-07 — nothing hardcoded).
+    /// from the console's own configuration (D-07 — nothing hardcoded). The LOGS resource shape is
+    /// UNIFORM across every console (MLBL-04): bare <c>service.name</c> + standalone
+    /// <c>service.version</c>. A processor is not special-cased here — it simply configures the
+    /// sentinel VALUES (<c>unresolved</c> / <c>0.0.0</c>) in its own appsettings, because its real
+    /// identity is the DB row and arrives per-record as the <c>ProcessorId</c> / <c>IdentityName</c>
+    /// attributes once Loop A resolves.
     /// </summary>
     /// <param name="builder">The host builder — exposes both <c>.Logging</c> and <c>.Services</c>.</param>
     /// <param name="cfg">The console's own configuration; supplies <c>Service:Name</c> / <c>Service:Version</c>.</param>
@@ -39,7 +44,8 @@ public static class BaseConsoleObservabilityExtensions
     /// so a new console cannot silently ship without it. This is the stable "who emitted this" query
     /// key: <c>service.name</c> is NOT usable for that on processors (it is the fixed <c>unresolved</c>
     /// sentinel until identity resolves), and BOTH processor images share the value <c>processor</c>
-    /// deliberately, so one term matches the whole class.
+    /// deliberately, so one term matches the whole class. It also makes <c>-processor</c> in the
+    /// sentinel name redundant — hence the bare <c>unresolved</c>.
     /// </param>
     public static IHostApplicationBuilder AddBaseConsoleObservability(
         this IHostApplicationBuilder builder, IConfiguration cfg, string source)
@@ -54,17 +60,27 @@ public static class BaseConsoleObservabilityExtensions
         // resources below. Resolving ONCE (a single local) is a correctness requirement — calling
         // the resolver twice risks the Guid fallback differing between the two resources, so the
         // logs and metrics signals would carry different service_instance_id labels.
-        var instanceId    = ResolveInstanceId();
-        var instanceAttrs = new[] { new KeyValuePair<string, object>("service.instance.id", instanceId) };
+        var instanceId = ResolveInstanceId();
 
-        // LOGS resource attrs = instance id + the Source emitter class. Source is a RESOURCE attribute,
-        // not a per-record one: it never varies within a process, so stamping it once costs nothing at
-        // per-hop log volume and cannot be forgotten by an enricher. Queried as
-        // `resource.attributes.Source`. PascalCase per the log-attribute convention (ExecutionLogScope).
+        // The emitter class rides on BOTH resources, but under each signal's OWN casing convention:
+        // logs use PascalCase attribute names (ExecutionLogScope: ProcessorId/WorkflowId/...), metrics
+        // use camelCase labels (D-07: processorId/workflowId). Same concept, two spellings — the same
+        // split already applied to ProcessorId vs processorId.
+        //
+        // It is a RESOURCE attribute, not a per-record/per-datapoint one: it never varies within a
+        // process, so stamping it once costs nothing at per-hop volume and cannot be forgotten at an
+        // increment site. Queried as `resource.attributes.Source` (logs) / the `source` label (metrics).
+        // On metrics it is load-bearing for the INFRA families (MassTransit, runtime): those carry no
+        // processorId/identityName, so `source` is their only class-level grouping key.
         var logAttrs = new[]
         {
             new KeyValuePair<string, object>("service.instance.id", instanceId),
             new KeyValuePair<string, object>("Source", source),
+        };
+        var metricAttrs = new[]
+        {
+            new KeyValuePair<string, object>("service.instance.id", instanceId),
+            new KeyValuePair<string, object>("source", source),
         };
 
         // OTel LOGS — MEL bridge. IncludeScopes=true is load-bearing: it serializes the
@@ -74,6 +90,7 @@ public static class BaseConsoleObservabilityExtensions
             o.IncludeFormattedMessage = true;
             o.IncludeScopes           = true;
             o.ParseStateValues        = true;
+            // MLBL-04 — BARE name + standalone version, uniformly for every console.
             o.SetResourceBuilder(ResourceBuilder.CreateDefault()
                 .AddService(serviceName: serviceName, serviceVersion: serviceVersion)
                 .AddAttributes(logAttrs));   // Phase 30 METRIC-01 — service.instance.id + the Source emitter class
@@ -100,11 +117,12 @@ public static class BaseConsoleObservabilityExtensions
                     // carries a single human label.
                     // SUPERSEDES D-07: `serviceVersion:` is deliberately NOT passed, so the metrics
                     // resource carries NO service.version attribute and no service_version Prom label.
-                    // It was pure duplication -- the SAME `serviceVersion` local is already interpolated
-                    // into the combined name above. LOGS keep service.version: their bare service.name
-                    // has no version suffix (MLBL-04).
+                    // It was pure duplication here — the SAME `serviceVersion` local is already
+                    // interpolated into the combined name above. service_name is now the single
+                    // version-bearing metrics label. LOGS are unaffected (bare-name resource above):
+                    // their service.name has NO version suffix, so they still need service.version.
                     .AddService(serviceName: $"{serviceName}_{serviceVersion}")
-                    .AddAttributes(instanceAttrs))    // Phase 30 METRIC-01/02 — every metric carries service.instance.id; service_name={name}_{version} (MLBL-01)
+                    .AddAttributes(metricAttrs))    // Phase 30 METRIC-01/02 — service.instance.id + the `source` emitter class; service_name={name}_{version} (MLBL-01)
                 // REMOVED vs the API base library: AspNetCore + HttpClient instrumentation
                 // (the worker host has no inbound HTTP request surface beyond health probes).
                 .AddMeter(InstrumentationOptions.MeterName)   // "MassTransit" (CONSOLE-02)

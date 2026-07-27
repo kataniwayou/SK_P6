@@ -37,7 +37,8 @@ public sealed class EntryStepDispatchConsumer(
         // consuming processor's own context.Id (the value already used today). value .ToString("D") matches queue:{id:D}.
         metrics.MessagesConsumed.Add(1,
             new KeyValuePair<string, object?>("workflowId", ctx.Message.WorkflowId.ToString("D")),
-            new KeyValuePair<string, object?>("processorId", context.Id!.Value.ToString("D")));
+            new KeyValuePair<string, object?>("processorId", context.Id!.Value.ToString("D")),
+            new KeyValuePair<string, object?>(ProcessorMetrics.IdentityNameTag, ProcessorMetrics.IdentityNameOf(context)));
 
         // D-09/T-51-03: the broker MessageId is the slot-array branch key — fail-fast on null rather than
         // synthesize a Guid.Empty key that would collide across messages.

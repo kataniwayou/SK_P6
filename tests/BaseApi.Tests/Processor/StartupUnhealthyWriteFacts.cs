@@ -140,7 +140,7 @@ public sealed class StartupUnhealthyWriteFacts : IClassFixture<RedisFixture>
 
             var orchestrator = new ProcessorStartupOrchestrator(
                 identityClient, schemaClient, sourceHash, context, gate,
-                IdentityResolutionFacts.StubConnector(), IdentityResolutionFacts.StubMeterProviderHolder(),
+                IdentityResolutionFacts.StubConnector(), 
                 IdentityResolutionFacts.StubConfigTypeProvider(), writer, InstanceId,
                 options, clock, NullLogger<ProcessorStartupOrchestrator>.Instance);
 
@@ -241,7 +241,7 @@ public sealed class StartupUnhealthyWriteFacts : IClassFixture<RedisFixture>
 
             var orchestrator = new ProcessorStartupOrchestrator(
                 identityClient, schemaClient, sourceHash, context, gate,
-                IdentityResolutionFacts.StubConnector(), IdentityResolutionFacts.StubMeterProviderHolder(),
+                IdentityResolutionFacts.StubConnector(), 
                 IdentityResolutionFacts.StubConfigTypeProvider(), writer, InstanceId,
                 options, clock, NullLogger<ProcessorStartupOrchestrator>.Instance);
 

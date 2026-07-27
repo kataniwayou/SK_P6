@@ -73,7 +73,7 @@ public sealed class IdentityResolutionFacts
 
             var orchestrator = new ProcessorStartupOrchestrator(
                 identityClient, schemaClient, sourceHash, context, gate, StubConnector(),
-                StubMeterProviderHolder(), StubConfigTypeProvider(), StubLivenessWriter(), "pod-test",
+                StubConfigTypeProvider(), StubLivenessWriter(), "pod-test",
                 options, fakeClock,
                 NullLogger<ProcessorStartupOrchestrator>.Instance);
 
@@ -134,17 +134,10 @@ public sealed class IdentityResolutionFacts
     }
 
     /// <summary>
-    /// A real <see cref="MeterProviderHolder"/> over a minimal hermetic host MeterProvider (provider #1
-    /// with the placeholder resource). The orchestrator's Loop-A swap fires the production
-    /// <c>SwapTo</c>/<c>Build</c> path: building provider #2 does NOT open a live OTLP connection (the
-    /// gRPC channel is lazy), and <c>ForceFlush</c>/<c>Dispose</c> on #1 are safe with no collector.
-    /// Shared by every test that drives the orchestrator past identity-resolve (MLBL-03 / Plan 38-03).
-    /// </summary>
-    /// <summary>
     /// A stub <see cref="IConfigTypeProvider"/> returning the supplied <paramref name="configType"/> (or
     /// <see cref="GateAStubConfig"/> by default) so the orchestrator's Gate A has a concrete <c>TConfig</c>
     /// to reflect over WITHOUT a real <c>BaseProcessor&lt;TConfig&gt;</c> DI registration. Mirrors the
-    /// <see cref="StubConnector"/>/<see cref="StubMeterProviderHolder"/> seam pattern.
+    /// <see cref="StubConnector"/> seam pattern.
     /// </summary>
     internal static IConfigTypeProvider StubConfigTypeProvider(Type? configType = null)
     {
@@ -173,17 +166,6 @@ public sealed class IdentityResolutionFacts
     internal static ProcessorLivenessWriter StubLivenessWriter() =>
         new(Substitute.For<IConnectionMultiplexer>(), new ProcessorLivenessState(),
             Options.Create(new ProcessorLivenessOptions()), NullLogger<ProcessorLivenessWriter>.Instance);
-
-    internal static MeterProviderHolder StubMeterProviderHolder()
-    {
-        var hostProvider = Sdk.CreateMeterProviderBuilder()
-            .ConfigureResource(r => r
-                .AddService(serviceName: "processor-sample_3.5.0", serviceVersion: "3.5.0")
-                .AddAttributes(new[] { new KeyValuePair<string, object>("service.instance.id", "test-instance") }))
-            .AddMeter(BaseProcessor.Core.Observability.ProcessorMetrics.MeterName)
-            .Build();
-        return new MeterProviderHolder(hostProvider, "test-instance", "3.5.0");
-    }
 
     private static int GetIdentityCallCount(ProcessorTestHarness.ResponderSequence sequence)
     {
