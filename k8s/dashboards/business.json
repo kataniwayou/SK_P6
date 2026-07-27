@@ -216,6 +216,146 @@
           "legendFormat": "{{processorId}}"
         }
       ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Orchestrator unresolved steps in range",
+      "description": "DEDICATED fault panel (BPD-02, lint rule C2): its targets reference orchestrator_step_unresolved_total and nothing else, so the indicator is never buried as one series inside a combined graph. GUARDED (VER-01 Class B, lint rule C3): an OTel counter is not exported to Prometheus until its first increment, and a healthy stack should have zero unresolved steps - research F-4 measured 0 live series. Without 'or vector(0)' this panel renders 'No data', which a reviewer reads as 'no faults' when it actually means 'the panel is broken' (threat T-87-16). With the guard it renders an honest 0. Threshold: green base, red at 1 - the value is an integer step count, so 'red above 0' is 'red at 1'.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum(increase(orchestrator_step_unresolved_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) or vector(0)",
+          "legendFormat": "unresolved"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Processor dropped spawns in range",
+      "description": "DEDICATED fault panel (BPD-02, lint rule C2): a single metric only. GUARDED (VER-01 Class B, lint rule C3): processor_spawn_dropped_total has 0 live series on a healthy stack (research F-4) - it IS present in the 15-day __name__ index, so it has fired historically, but a green stack should drop zero spawns. Without the guard the panel renders 'No data' and is misread as 'no drops' (threat T-87-16). Threshold: green base, red at 1 - the value is an integer drop count, so 'red above 0' is 'red at 1'.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum(increase(processor_spawn_dropped_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) or vector(0)",
+          "legendFormat": "dropped spawns"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Keeper consumed - sent gap in range",
+      "description": "DEDICATED keeper fault panel (BPD-02 as amended, lint rule C2 matches this stat - not the timeseries conservation overlay - because its targets reference exactly the two keeper message counters). WHAT IT IS NOT: this is deliberately titled for the gap it computes, not for a reinject / drop-outcome breakdown, because NO SUCH COUNTER EXISTS. Phase 74 removed the legacy label-less reinject-drop counter in favour of the uniform consumed/sent pair, leaving keeper_messages_consumed, keeper_messages_sent and keeper_l2_probe as the keeper's only three instruments (KeeperMetrics.cs:50-52, research F-5). Reinject outcome now lives solely in Elasticsearch as attributes.ReinjectOutcome, and ES panels are out of scope for this milestone. GUARDED (VER-01 Class B, lint rule C3): both counters increment only during a recovery event and are absent from the entire 15-day __name__ index (Pitfall 6), so the guard is what makes a healthy stack render 0 instead of 'No data'. Threshold: green base, red at 1 - the value is an integer message count.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum(increase(keeper_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) - sum(increase(keeper_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) or vector(0)",
+          "legendFormat": "gap"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Keeper L2 probe heartbeat",
+      "description": "The 'keeper is alive and probing' heartbeat that accompanies the gap panel above; a healthy keeper holds this above zero. UNGUARDED ON PURPOSE - this is a VER-01 Class A signal. Unlike the three guarded fault stats and unlike the guarded keeper conservation overlay (panel 2), keeper_l2_probe_total HAS live series on a healthy stack (research: 2 series live), which is exactly why it is the panel that distinguishes 'keeper idle' from 'keeper dead'. Adding 'or vector(0)' here would demote it to Class B in plan 87-05's mechanical classifier and let a DEAD keeper render 0 and pass the live proof (threat T-87-20), so lint rule C7 forbids the guard on this expression.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (service_instance_id) (rate(keeper_l2_probe_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))",
+          "legendFormat": "{{service_instance_id}}"
+        }
+      ]
     }
   ]
 }
