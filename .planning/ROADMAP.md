@@ -56,7 +56,7 @@
 
 **Plans**: 6 plans (waves 1-4)
 
-  - [ ] 87-01-PLAN.md — Wave 1: hermetic dashboard lint gate (`scripts/phase-87-dashboard-lint.ps1` with the 31-name live-verified metric allowlist) + the shared dashboard contract in both `k8s/dashboards/*.json` (top-level shape, datasource/source/pod template variables, one verified panel each) (DASH-04, VAR-01..04, RTD-01, RTD-03, BPD-01..03)
+  - [x] 87-01-PLAN.md — Wave 1: hermetic dashboard lint gate (`scripts/phase-87-dashboard-lint.ps1` with the 31-name live-verified metric allowlist) + the shared dashboard contract in both `k8s/dashboards/*.json` (top-level shape, datasource/source/pod template variables, one verified panel each) (DASH-04, VAR-01..04, RTD-01, RTD-03, BPD-01..03)
   - [ ] 87-02-PLAN.md — Wave 2: Grafana k8s deployment — `k8s/23-grafana.yaml` (Service + Deployment + datasource ConfigMap + dashboard-provider ConfigMap, `emptyDir` not PVC) + the kustomization `configMapGenerator` for the dashboard JSONs + live apply/health smoke (DASH-01, DASH-02, DASH-03)
   - [ ] 87-03-PLAN.md — Wave 2: runtime dashboard panels — 17 panels over `process_runtime_dotnet_*` (GC, committed memory, thread pool, exceptions, contention, JIT, pods reporting, restarts), per-pod separable, honestly-titled CPU/uptime/working-set proxies (RTD-01, RTD-02, RTD-03, VAR-03, DASH-04)
   - [ ] 87-04-PLAN.md — Wave 2: business/pipeline dashboard panels — 14 panels: three conservation overlays, cross-tier + per-processor gaps, three `or vector(0)`-guarded fault stats, keeper L2 heartbeat, five WebApi ASP.NET Core request panels, `identityName` per-image discrimination (BPD-01..03, VAR-03, VAR-04, DASH-04)

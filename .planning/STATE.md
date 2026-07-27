@@ -4,13 +4,13 @@ milestone: v13.0.0
 milestone_name: Observability Dashboards
 status: executing
 stopped_at: Completed 86-05-PLAN.md
-last_updated: "2026-07-27T17:53:37.059Z"
-last_activity: 2026-07-27 -- Phase 87 planning complete
+last_updated: "2026-07-27T18:24:14.100Z"
+last_activity: 2026-07-27
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 15
-  completed_plans: 9
+  completed_plans: 10
   percent: 50
 ---
 
@@ -20,17 +20,17 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Milestone complete
+**Current focus:** Phase 87 — grafana-observability-dashboards
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
 
 ## Current Position
 
-Phase: 87 — Grafana Observability Dashboards (v13.0.0) — not planned yet
-Plan: —
+Phase: 87 (grafana-observability-dashboards) — EXECUTING
+Plan: 2 of 6
 Status: Ready to execute
-Last activity: 2026-07-27 -- Phase 87 planning complete
+Last activity: 2026-07-27
 Current focus: Phase 87 — awaiting `/gsd-plan-phase 87`
 
 ### Quick Tasks Completed
@@ -720,7 +720,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [█████████░] 94%
+Progress: [███████░░░] 67%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1113,6 +1113,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 86 P06 | 27min | 3 tasks | 6 files |
 | Phase 86 P07 | 44min | 3 tasks | 9 files |
 | Phase 86 P08 | 6min | 1 tasks | 4 files |
+| Phase 87 P01 | 35m | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1678,6 +1679,8 @@ Recent decisions affecting current work:
 - [Phase 86]: keeper BitHealthLoop beats the shared ILivenessHeartbeat FIRST (top of tick, before probe/bus) and bounds edge bus-ops with WaitAsync(3s), fixing the BIT-loop stale-under-broker-outage false-restart bug (T-86-12); retired keeper watchdog + L1 state deleted, /health/live now the shared LoopLivenessHealthCheck
 - [Phase ?]: 86-07: processor liveness beat moved ABOVE the IsHealthy gate (unconditional top-of-loop Beat + first-beat MarkReady); IsHealthy now gates ONLY the L2 write — fixes false-restart under down bus (HLTH-03/T-86-14)
 - [Phase ?]: 86-07: retired LivenessWatchdogHealthCheck (/health/live is now the shared timestamp-only LoopLivenessHealthCheck); kept IProcessorLivenessState + ProcessorLivenessWriter for the separate L2 gate (Pitfall 6)
+- [Phase ?]: 87-01: Get-MetricTokens scopes metric-name extraction to selector position (a family match is a METRIC only when followed by '{'); the rejected strip-clauses alternative misses the in-selector http_response_status_code collision on 87-04 Panel 13
+- [Phase ?]: 87-01: lint rule numbering is append-only (S15 after S14, C7/C8 after C6) because plans 87-02..87-05 already cite rule ids by number
 
 ### Roadmap Milestone Log
 
@@ -1789,7 +1792,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-26T18:09:51.641Z
+Last session: 2026-07-27T18:24:06.381Z
 Stopped at: Completed 86-05-PLAN.md
 Resume file: None
 
