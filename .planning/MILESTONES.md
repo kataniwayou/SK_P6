@@ -1,5 +1,27 @@
 # Steps API — Milestones
 
+## v12.0.0 Resilience & Health-Probe Hardening (Shipped: 2026-07-27)
+
+**Tag:** `v12.0.0`
+**Archives:** [milestones/v12.0.0-ROADMAP.md](milestones/v12.0.0-ROADMAP.md) · [milestones/v12.0.0-REQUIREMENTS.md](milestones/v12.0.0-REQUIREMENTS.md)
+**Phases completed:** 1 phase (86), 9 plans. **Requirements:** HLTH-01…HLTH-08 all satisfied.
+
+**Delivered:** Every service now tolerates an infrastructure outage (Postgres/Redis/RabbitMQ) without crash-looping. The category error that made keeper + processor crash-loop under an unreachable broker — a self-watchdog tagged `"live"` so an infra fault tripped *liveness* (restart) — is corrected: `/health/live` answers only "is my watchdog loop still turning?", `/health/ready` carries the required infra deps (NotReady, never restart), and recovery from a sustained outage is by operator restart, not self-heal (a hard readiness latch).
+
+**Key accomplishments:**
+
+- **One shared `BaseConsole.Core` liveness primitive (Phase 86, HLTH-01/03/06).** `ILivenessHeartbeat` + `LoopLivenessHealthCheck` (k=3 strict-boundary staleness over `TimeProvider`, `Interlocked` long-ticks), opt-in via `AddConsoleLivenessWatchdog`. Keeper (`BitHealthLoop`) + processor (`ProcessorLivenessHeartbeat`) `Beat()` as the literal first statement of their loop — before any infra I/O and above the `IsHealthy` gate (gate now guards only the L2 write); keeper edge bus-ops bounded with `WaitAsync(3s)` so a dead broker can't starve the beat. Orchestrator stays `self`-only. The two divergent per-service watchdogs (`KeeperLivenessWatchdogHealthCheck` + state, `BaseProcessor LivenessWatchdogHealthCheck`) retired/deleted.
+- **Hard readiness latch + Redis on readiness (HLTH-04/05/08).** `/health/ready` = required infra deps + (processor) identity+schema; a sticky no-self-heal latch (`LatchedReadinessHealthCheck` / `ApiLatchedReadinessHealthCheck`) holds Unhealthy until process restart once a required dep fails its failureThreshold window. Redis newly included; baseapi bus stays soft/Degraded and unlatched (publish-relationship, not a required dep).
+- **k8s startupProbes (HLTH-07).** `startupProbe → /health/startup` on all four deployments (30/31/32/33-*.yaml) with a ~150s grace window covering a ~40s rabbitmq cold start.
+- **Proven LIVE — twice (HLTH-02).** Broker-unreachable experiment on Docker-Desktop k8s (deployed under unique tags to defeat the `:local` stale-image trap): all four services stayed **`RESTARTS 0`** over 4+ minutes, went NotReady (`/health/live` 200, `/health/ready` 503), logged caught `BrokerUnreachableException`, recovered only on restart. Re-run against the code-review-fixed bits (`p86fix-8af3adc`) — same result; CR-01's sanitized readiness message confirmed live.
+- **Code review (advisory) surfaced + fixed a Critical info-disclosure.** CR-01: `/health/ready` could leak inner driver exception detail before the latch trips — fixed (both latch mirrors return a static message on every Unhealthy path). WR-01/02/03/04/06 + IN-01/03 fixed; WR-05 applied-then-reverted after post-fix verification caught it regressing a reachable-but-cold Redis to false NotReady.
+
+**Known deferred items at close:** 7 (all stale/orphaned pre-existing, none v12.0.0 regressions — see STATE.md → Deferred Items): 1 debug session (phase29, v3.x) + 6 quick-tasks with `missing` status (dangling index refs, incl. `260614-b5c` — the keeper self-watchdog that Phase 86 retired). v12.0.0 was operator-closed without `/gsd:audit-milestone` (single-phase milestone already verified 8/8 + live-proven twice).
+
+**⚠ Documented debt — v11.0.0 unarchived:** The prior milestone **v11.0.0 (Framework Data-Channel & Processor Boundary Hardening, phases 84–85)** is complete in work but was NEVER formally closed; the central `.planning/REQUIREMENTS.md` still tracks its DATA/PB requirements and phases 84–85 remain in `.planning/phases/`. v12.0.0 was therefore archived **phase-86-only** to avoid conflating them (the milestone-completion CLI's all-un-archived-phases sweep would otherwise mix 84/85 into v12.0.0). Close v11.0.0 separately when ready. (Same pattern as the noted v9.0.0 debt.)
+
+---
+
 ## v10.0.0 Orchestrator High Availability (Shipped: 2026-07-19)
 
 **Tag:** `v10.0.0`

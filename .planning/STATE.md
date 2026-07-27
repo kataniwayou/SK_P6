@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v12.0.0
 milestone_name: Resilience & Health-Probe Hardening
-status: milestone_complete
-stopped_at: Milestone complete (Phase 86 was final phase)
-last_updated: 2026-07-26T19:51:17.358Z
-last_activity: 2026-07-26
+status: shipped
+stopped_at: v12.0.0 SHIPPED & archived (Phase 86 only); v11.0.0 remains un-closed
+last_updated: 2026-07-27
+last_activity: 2026-07-27 — v12.0.0 shipped & archived (tag v12.0.0)
 progress:
-  total_phases: 3
-  completed_phases: 2
-  total_plans: 16
-  completed_plans: 16
-  percent: 67
+  total_phases: 1
+  completed_phases: 1
+  total_plans: 9
+  completed_plans: 9
+  percent: 100
 ---
 
 # Project State
@@ -27,11 +27,11 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 
 ## Current Position
 
-Phase: 86
-Plan: Not started
-Status: Milestone complete
-Last activity: 2026-07-26
-Current focus: Phase 86 — console/webapi health-liveness refactor (v12.0.0, first phase)
+Phase: — (v12.0.0 shipped)
+Plan: —
+Status: v12.0.0 SHIPPED & archived (tag v12.0.0); v11.0.0 (phases 84-85) remains un-closed
+Last activity: 2026-07-27
+Current focus: Awaiting next milestone (or close out v11.0.0 bookkeeping)
 
 ### Quick Tasks Completed
 
@@ -68,6 +68,18 @@ Current focus: Phase 86 — console/webapi health-liveness refactor (v12.0.0, fi
 > v3.7.0 (Keeper) — ✅ SHIPPED & ARCHIVED 2026-06-07 (tag `v3.7.0`). 10 phases (33-42), 32 plans, 37/37 requirements + live-proven (Phase-39 close gate 3×500 GREEN, triple-SHA net-zero). Archives: milestones/v3.7.0-{ROADMAP,REQUIREMENTS,MILESTONE-AUDIT}.md.
 
 ## Deferred Items
+
+Acknowledged at **v12.0.0 close (2026-07-27)** — **7 open artifacts** surfaced by the pre-close `audit-open` and acknowledged-all to proceed, all pre-existing/orphaned and **none v12.0.0 regressions** (v12.0.0's sole phase — Phase 86 — is clean: verified 8/8, code-reviewed + fixed, live broker-outage proof passed on both the original and the fixed bits): 1 stale debug session `phase29-scopeproof-no-completed-log` (v3.5.0-era, carried since v6.0.0) + 6 quick-tasks with status `missing` (dangling index references whose files no longer exist — `260614-2hf`, `260614-9jd`, `260614-b5c` [the keeper self-watchdog that Phase 86 RETIRED], `260615-dbf`, `260615-kgz`, plus `260726-f7x-scheduler-fire-resilience` which belongs to the branch's separate resilience-metric work, not Phase 86). v12.0.0 was operator-closed without a `/gsd-audit-milestone` (skipped — a single-phase milestone already verified 8/8 and live-proven twice). **v11.0.0 (phases 84-85) was NOT closed** — it remains un-archived and the central `REQUIREMENTS.md` still tracks its DATA/PB reqs. Optional cleanup: prune the dangling quick-task index refs to clear them from future audits.
+
+| Category | Item | Status |
+|----------|------|--------|
+| debug | phase29-scopeproof-no-completed-log | verifying (stale, v3.5.0-era) |
+| quick_task | 260614-2hf-keeper-recovery-endpoint-symmetric-remov | missing (orphaned ref) |
+| quick_task | 260614-9jd-remove-dead-skp-dlq-1-dead-letter-tier-c | missing (orphaned ref) |
+| quick_task | 260614-b5c-add-minimal-keeper-self-watchdog-timesta | missing (superseded by Phase 86) |
+| quick_task | 260615-dbf-unify-l2-slot-array-index-ttl-to-executi | missing (orphaned ref) |
+| quick_task | 260615-kgz-per-correlationid-executionid-multi-exec | missing (orphaned ref) |
+| quick_task | 260726-f7x-scheduler-fire-resilience-workflowfirejo | missing (branch resilience work, not Phase 86) |
 
 Acknowledged at **v8.0.0 close (2026-06-15, archived 2026-06-16)** — **32 open artifacts** surfaced by the pre-close `audit-open` and acknowledged-all to proceed: the same carried-over v3.x items below (UAT/verification `human_needed` on phases 08/09/32–40, 1 stale debug session `phase29-scopeproof`) PLUS **5 quick-task summaries** missing a STATUS line (`260614-2hf` / `260614-9jd` / `260614-b5c` / `260615-dbf` / `260615-kgz` — all done & committed) PLUS **Phase 62 (62-HUMAN-UAT pending + 62-VERIFICATION live half)** (carried from v7.0.0). **None are v8.0.0 regressions** — v8.0.0's own phases 63–68 are clean. v8.0.0 was operator-closed without a `/gsd-audit-milestone` (skipped) given the 7-scenario live capstone already proves the milestone end-to-end. Optional: stamp the 5 quick-task SUMMARYs with a STATUS line to clear them from future audits.
 

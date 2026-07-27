@@ -1,6 +1,6 @@
 # Steps API
 
-## Current Milestone: v12.0.0 Resilience & Health-Probe Hardening (Phase 86 complete — milestone ready for `/gsd-complete-milestone`)
+## Current Milestone: v12.0.0 Resilience & Health-Probe Hardening (✅ SHIPPED 2026-07-27, tag `v12.0.0` — archived phase-86-only; v11.0.0 remains un-closed)
 
 **v12.0.0 Goal:** Make every service tolerate infrastructure outages without crash-looping. `/health/live` answers only "is my watchdog loop still turning?" (restart is the sole remedy for a silently-dead loop); `/health/ready` answers "are my required infra deps reachable + am I bootstrapped?" (NotReady, never restart); recovery from a sustained outage is by operator restart, not self-heal (a hard readiness latch). One shared `BaseConsole.Core` liveness primitive replaces the two divergent per-service watchdogs. **Phase 86 (Console & WebApi Health/Liveness Refactor, HLTH-01..08) complete 2026-07-26** — verified 8/8 must-haves + live k8s broker-unreachable proof (all four services RESTARTS 0, NotReady, recover on restart). Details below under Current State.
 
