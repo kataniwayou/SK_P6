@@ -291,15 +291,19 @@ function Get-MetricTokens {
 }
 
 # S9 predicate — metric tokens outside the union of the three allowlists (T-87-14).
+# NOTE on the return shape: these helpers return a PLAIN array and every call site wraps the call in
+# @(...). The `return ,@(...)` unary-comma idiom is deliberately NOT used — it survives a scalar
+# assignment but emits a one-element array-of-array through `@(func())`, which silently turns "no
+# violations" into one violation whose name is the empty string.
 function Get-S9Violations {
     param([string[]]$Metric)
-    return , @(@($Metric) | Where-Object { $AllMetrics -notcontains $_ })
+    return @(@($Metric) | Where-Object { $AllMetrics -notcontains $_ })
 }
 
 # S15 predicate — bare tokens that are not KNOWN_LABELS (T-87-14, the position-scoping counterweight).
 function Get-S15Violations {
     param([string[]]$Bare)
-    return , @(@($Bare) | Where-Object { $KnownLabels -notcontains $_ })
+    return @(@($Bare) | Where-Object { $KnownLabels -notcontains $_ })
 }
 
 # ---------------------------------------------------------------------------
@@ -313,7 +317,7 @@ function Get-DashboardPanels {
         $flat += $p
         foreach ($n in @(Get-Prop $p 'panels' @())) { $flat += $n }
     }
-    return , $flat
+    return @($flat)
 }
 
 # ---------------------------------------------------------------------------
@@ -336,13 +340,13 @@ function Get-DashboardTargets {
             }
         }
     }
-    return , $rows
+    return @($rows)
 }
 
 # Extract the contents of every `by (...)` grouping clause in an expression.
 function Get-ByClauses {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Expr)
-    return , @([regex]::Matches($Expr, '\bby\s*\(([^)]*)\)') | ForEach-Object { $_.Groups[1].Value })
+    return @([regex]::Matches($Expr, '\bby\s*\(([^)]*)\)') | ForEach-Object { $_.Groups[1].Value })
 }
 
 function Test-SetEqual {
@@ -419,8 +423,8 @@ if ($SelfTest) {
     $selfFail = 0
     foreach ($f in $fixtures) {
         $tok  = Get-MetricTokens -Expr $f.Expr
-        $s9   = Get-S9Violations  -Metric $tok.Metric
-        $s15  = Get-S15Violations -Bare   $tok.Bare
+        $s9   = @(Get-S9Violations  -Metric $tok.Metric)
+        $s15  = @(Get-S15Violations -Bare   $tok.Bare)
 
         $problems = @()
         if (-not (Test-SetEqual $tok.Metric $f.Metric)) {
@@ -485,7 +489,7 @@ foreach ($spec in $selected) {
         Add-Failure -Rule 'S1' -File $rel -Remediation "not valid JSON: $($_.Exception.Message)"
         continue
     }
-    $panels = Get-DashboardPanels $json
+    $panels = @(Get-DashboardPanels $json)
     $docs += [pscustomobject]@{
         Key     = $spec.Key
         Uid     = $spec.Uid
@@ -493,7 +497,7 @@ foreach ($spec in $selected) {
         Raw     = $raw
         Json    = $json
         Panels  = $panels
-        Targets = (Get-DashboardTargets -Panels $panels -File $rel)
+        Targets = @(Get-DashboardTargets -Panels $panels -File $rel)
     }
 }
 
