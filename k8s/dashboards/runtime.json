@@ -393,6 +393,72 @@
           "legendFormat": "{{source}} / {{service_instance_id}}"
         }
       ]
+    },
+    {
+      "id": 16,
+      "type": "stat",
+      "title": "Pods reporting",
+      "description": "SUBSTITUTION (research F-2, RTD-02 amendment). The honest substitute for a per-class availability readout: this counts the pods currently exporting runtime series, per selected service class. It is NOT process uptime — no process_start_time_seconds exists anywhere in this stack's inventory (see the 'Process restarts in range' panel for the restart proxy). A drop in this number against the expected replica count is the signal to read.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 56 },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "count by (source) (process_runtime_dotnet_gc_collections_count_total{source=~\"$source\", service_instance_id=~\"$pod\", generation=\"gen0\"})",
+          "legendFormat": "{{source}}"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "Process restarts in range",
+      "description": "SUBSTITUTION (research F-2, RTD-02 amendment). A counter-reset proxy standing in for process uptime, which this stack does not emit: there is no process_start_time_seconds anywhere in the inventory, so an actual uptime readout cannot be built from what the instrumentation provides. CAVEAT (research assumption A4): a counter reset can ALSO be produced by the OTel collector's metric_expiration (5 min default) rather than by a real process restart, so a nonzero value here is a restart SIGNAL, not a certified restart count. Whether a stable stack produces spurious nonzero values is recorded by the live run in plan 87-05.",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 64 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "red", "value": 1 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "editorMode": "code",
+          "range": true,
+          "expr": "sum by (source, service_instance_id) (resets(process_runtime_dotnet_jit_methods_compiled_count_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range]))",
+          "legendFormat": "{{source}} / {{service_instance_id}}"
+        }
+      ]
     }
   ]
 }
