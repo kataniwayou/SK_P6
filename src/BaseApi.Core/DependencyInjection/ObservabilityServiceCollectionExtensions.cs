@@ -77,8 +77,13 @@ public static class ObservabilityServiceCollectionExtensions
             .WithMetrics(m => m
                 .SetResourceBuilder(ResourceBuilder.CreateDefault()
                     // MLBL-01/D-01: combined {name}_{version} (e.g. sk-api_3.2.0) so every Prom series
-                    // carries a single human label; service.version still set standalone (D-07).
-                    .AddService(serviceName: $"{serviceName}_{serviceVersion}", serviceVersion: serviceVersion)
+                    // carries a single human label.
+                    // SUPERSEDES D-07: `serviceVersion:` is deliberately NOT passed, so the metrics
+                    // resource carries NO service.version attribute and no service_version Prom label.
+                    // It was pure duplication -- the SAME `serviceVersion` local is already interpolated
+                    // into the combined name above. LOGS keep service.version: their bare service.name
+                    // has no version suffix (MLBL-04).
+                    .AddService(serviceName: $"{serviceName}_{serviceVersion}")
                     .AddAttributes(instanceAttrs))    // Phase 30 METRIC-01/02/03 — every metric carries service.instance.id; service_name={name}_{version} (MLBL-01)
                 // OpenTelemetry.Instrumentation.AspNetCore 1.15.0's metrics-side
                 // AddAspNetCoreInstrumentation is parameterless (no opts.Filter overload on

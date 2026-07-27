@@ -309,8 +309,10 @@ public sealed class ProcessorPipeline(
                     "SpawnToPost drop: send to -post exhausted ExecutionId={ExecutionId}", execId);   // never log Payload (T-70-10)
                 // IN-03: a spawn drop is NOT a dispatch dedup — count it on its own SpawnDropped signal so the
                 // dedup rate stays readable and the spawn-drop rate is observable under its real name.
+                // camelCase `processorId` -- MUST match the tag the two business counters use (D-07) so a
+                // query can join spawn-drops against them on one label name.
                 metrics.SpawnDropped.Add(1,
-                    new KeyValuePair<string, object?>("ProcessorId", context.Id!.Value.ToString("D")));
+                    new KeyValuePair<string, object?>("processorId", context.Id!.Value.ToString("D")));
             });
         // PB-03: no entryId / escalateDelete wiring here anymore — the entry delete + its DELETE-keeper
         // escalation moved INLINE to DeleteEntryTail (called from both completion paths in RunAsync).

@@ -47,7 +47,8 @@ public sealed class ProcessorMetrics
     /// <summary>IN-03 (Phase 70): <c>processor_spawn_dropped</c> — incremented when a Mode-2
     /// <c>SpawnToPost</c> send EXHAUSTS the bounded RetryLoop and is swallowed (best-effort spawn; the
     /// scheduler re-fires the whole entry). Its OWN counter so the spawn-drop rate is observable and is not
-    /// conflated with the unrelated dispatch signal. Tagged <c>ProcessorId</c> at the increment site.</summary>
+    /// conflated with the unrelated dispatch signal. Tagged camelCase <c>processorId</c> at the increment
+    /// site -- the SAME tag name the two business counters use (D-07), so all three join on one label.</summary>
     public Counter<long> SpawnDropped { get; }
 
     public ProcessorMetrics(IMeterFactory meterFactory)

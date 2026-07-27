@@ -170,3 +170,11 @@ data:
         # prometheus exporter (Phase 11 D-07; compose/otel-collector-config.yaml). That is
         # what makes `service.name` become the `service_name` Prom label — non-negotiable
         # for Phase 11 D-17 round-trip test assertions.
+        #
+        # DELIBERATELY NO LABEL SURGERY HERE. In production, Prometheus is ORG-OWNED — its
+        # scrape config is not ours to change, so honor_labels / metric_relabel_configs are
+        # NOT available levers and must never be load-bearing for our label shape. The
+        # exported_job / exported_instance duplicates are therefore fixed UPSTREAM, in the
+        # collector's metrics pipeline (see the `resource/prom_identity` processor), not here.
+        # Keeping this dev-local scrape config rule-free keeps it an honest stand-in for the
+        # org Prometheus.
