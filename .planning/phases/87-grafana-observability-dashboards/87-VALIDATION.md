@@ -1,10 +1,11 @@
 ---
 phase: 87
 slug: grafana-observability-dashboards
-status: draft
-nyquist_compliant: false
+status: approved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-07-27
+approved: 2026-07-27
 ---
 
 # Phase 87 — Validation Strategy
@@ -95,11 +96,13 @@ Task IDs are assigned at plan time. The authoritative requirement→test mapping
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 5s (quick gate)
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies — confirmed by gsd-plan-checker across all 6 plans
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references — the lint script, the verify script, the metric allowlist, and the verdict artifact are all owned by plans 87-01 and 87-05
+- [x] No watch-mode flags
+- [x] Feedback latency < 5s (quick gate). **Documented exception:** the two live-cluster proofs (87-05 Task 2, 87-06 Task 2) exceed it by necessity — that is the two-tier sampling rationale above, not a compliance gap
+- [x] `nyquist_compliant: true` set in frontmatter
 
-**Approval:** pending
+`wave_0_complete` stays `false` until execution actually authors `scripts/phase-87-dashboard-lint.ps1` and `scripts/phase-87-dashboards-verify.ps1` — the strategy is approved, the scripts do not yet exist.
+
+**Approval:** approved 2026-07-27

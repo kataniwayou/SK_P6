@@ -974,27 +974,29 @@ $ curl -s -u admin:admin -X POST -H 'Content-Type: application/json' \
 | A5 | The webapi's three missing GC gauges will populate once it performs GCs | FINDING F-3 | Medium — if they never populate under harness traffic, VER-01 needs those panels marked webapi-exempt. Verify during the live run. |
 | A6 | Adding a 9th port-forward to `phase-80-up.ps1` would perturb the resilience sweep | Grafana Deployment Shape | Low — the recommendation (option (a), self-owned forward) avoids the question entirely. |
 
-## Open Questions
+## Open Questions (ALL RESOLVED 2026-07-27)
 
-1. **OQ-1 — VER-01 vs. fault counters that are legitimately empty.**
+> All five were put to the user on 2026-07-27; the user confirmed every recommendation. REQUIREMENTS.md was amended accordingly in commit `3f10ded`, and ROADMAP.md's Phase-87 goal + success criteria were re-synced to match. The amended requirement wording — not the original — is what the Phase-87 plans build against.
+
+1. **OQ-1 — VER-01 vs. fault counters that are legitimately empty.** **→ RESOLVED: recommendation accepted.** VER-01 is now a two-class assertion — Class A must return ≥1 real sample, Class B renders a guarded `or vector(0)` value where `0` passes. Driving a fault scenario is explicitly NOT a precondition of the phase. Encoded mechanically in plan 87-01's lint rules C3/C7/C8 and plan 87-05's STEP F classifier.
    - *What we know:* `orchestrator_step_unresolved_total`, `processor_spawn_dropped_total`, `keeper_messages_consumed/sent_total` have zero live series on a healthy stack (F-4). `or vector(0)` on a `stat` panel makes them render "0" instead of "No data".
    - *What's unclear:* whether VER-01's "every panel renders non-empty" is satisfied by a guarded `0`, or whether the user wants a fault scenario driven so the counters actually fire.
    - *Recommendation:* ship `or vector(0)` guards, and split VER-01's assertion into **must-be->0** vs **must-return-exactly-one-sample** classes. Surface this to the user in discuss-phase — it is a requirement-interpretation decision, not a technical one. If they want real fault data, the plan needs a `scripts/phase-81-sweep.ps1` fault scenario as a VER-01 precondition, which is a materially bigger task.
 
-2. **OQ-2 — VAR-02 (`label_values()`) vs. VER-01 ("the live pod set").**
+2. **OQ-2 — VAR-02 (`label_values()`) vs. VER-01 ("the live pod set").** **→ RESOLVED: recommendation accepted.** `label_values()` is kept (VAR-02 unchanged); VER-01's dropdown check is softened to a superset assertion — every live pod must appear, extras are tolerated as Prometheus index granularity.
    - *What we know:* `label_values()` returned 4 keeper pods when 2 were alive, even at a 60-second window (F-7). An instant query returned exactly the 8 live pods, matching `kubectl` 8/8. This is Prometheus index granularity, not a Grafana bug — there is no setting that fixes it.
    - *What's unclear:* which requirement yields.
    - *Recommendation:* keep `label_values()` (VAR-02 is explicit and it is the idiomatic form), and **soften VER-01's dropdown assertion to a superset check** — "every live pod appears in the dropdown". Offer `query_result(count by (service_instance_id) (...))` + a `regex` extractor as an alternative if the user prefers an exact live list and is willing to amend VAR-02. Needs a user decision.
 
-3. **OQ-3 — RTD-02's CPU / uptime / working-set axes (F-2).**
+3. **OQ-3 — RTD-02's CPU / uptime / working-set axes (F-2).** **→ RESOLVED: recommendation accepted.** Honestly-titled proxies ship (GC-committed memory, counter-reset restart detection, GC-time-per-second); no panel may be titled "CPU", "Uptime", or "Working Set". The gap is recorded as an accepted limitation in plan 87-06's `87-FINDINGS.md`.
    - *What we know:* none of the three exists. The only routes to them are a `src/` change (forbidden) or a Prometheus scrape-config change (forbidden).
    - *Recommendation:* ship honestly-titled proxies ("GC committed memory", "Process restarts in range", "Pods reporting") and record the gap in the phase VERIFICATION as a known, accepted limitation. RTD-02's "*where the instrumentation provides it*" clause already licenses this, but it should be an explicit, visible decision rather than a silent omission.
 
-4. **OQ-4 — BPD-02's "keeper reinject/drop outcomes" panel (F-5).**
+4. **OQ-4 — BPD-02's "keeper reinject/drop outcomes" panel (F-5).** **→ RESOLVED: recommendation accepted.** Substituted by the keeper consumed−sent gap panel plus the `keeper_l2_probe_total` heartbeat, with the panel retitled for what it actually shows. Plan 87-01's rule C7 additionally forbids guarding the heartbeat, so a dead keeper cannot render `0` and pass the live proof.
    - *What we know:* no such counter exists; the legacy one was deliberately deleted in Phase 74. The signal lives only in Elasticsearch (`attributes.ReinjectOutcome`), and ES panels are out of scope.
    - *Recommendation:* substitute the keeper **consumed − sent gap** panel plus the `keeper_l2_probe_total` heartbeat, and rename the panel accordingly. Needs the user to accept the substitution.
 
-5. **OQ-5 — Grafana version pin: 12.3.9 vs 13.1.1.**
+5. **OQ-5 — Grafana version pin: 12.3.9 vs 13.1.1.** **→ RESOLVED: recommendation accepted.** Pinned to `grafana/grafana:12.3.9` (DASH-01 amended to state the pin and the reason).
    - *What we know:* both provision hand-authored classic JSON correctly (both verified live). Only the UI-export round-trip differs.
    - *Recommendation:* 12.3.9. If the user intends to author every panel by hand in the editor and never touch the UI, 13.1.1 is equally valid and newer. Low-stakes, but worth one line of confirmation.
 
