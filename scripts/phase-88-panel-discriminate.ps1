@@ -1041,6 +1041,7 @@ try {
                 SeriesName   = "$($e.Name)"
                 SeriesNameStable = [bool]$e.NameStable
                 SeriesNameSource = "$($e.NameSource)"
+                SubWindowSeconds = $SubWindowSeconds
                 Values       = [double[]]$vals
                 States       = [string[]]$states
                 BandLow      = [double]$band.Low
@@ -1055,6 +1056,73 @@ try {
             Write-Phase ("  panel {0} [{1}] '{2}': band {3:N4}..{4:N4} mean {5:N4} floor={6} n={7} ({8})" -f `
                 $pid_, $panel.Regime, $e.Name, $band.Low, $band.High, $band.Mean, $band.FloorApplied, $band.SampleCount, $stateSummary) 'Gray'
         }
+    }
+
+    # =========================================================================================
+    # STEP F2 — PANEL 4's BAND AT A WIDER SUB-WINDOW (a measured correction to the plan's assumption).
+    #
+    # The plan expected panel 4 to band on its per-minute increase at the fixed 60 s sub-window. It
+    # cannot, and the reason is structural rather than incidental: panel 4 renders
+    # `increase(counter[$__range])`, the stored resolution on this stack is 60 s (the SDK export
+    # cadence, not the 15 s scrape interval), and `increase()` needs at least TWO samples inside its
+    # range. A 60 s window contains exactly one, so the panel renders "No data" — which the first
+    # BASE-01 run measured directly.
+    #
+    # Panel 4 is therefore banded over FIVE 120 s sub-windows across the SAME settled 600 s window:
+    # equal width within its own batch (the reader refuses anything else), absolute, same viewport,
+    # entirely inside the traffic window. The band is a per-TWO-minute increase and every entry states
+    # its own SubWindowSeconds, so it can never be silently compared against a 60 s band.
+    # =========================================================================================
+    $Panel4BandSubWindowSeconds = 120
+    $Panel4BandSubWindowCount   = 5
+    $Panel4BandedAtWiderWindow  = $false
+    if (@($BaselineBands | Where-Object { $_.PanelId -eq 4 }).Count -eq 0) {
+        Write-Phase "STEP F2: panel 4 did not band at ${SubWindowSeconds}s — retrying at ${Panel4BandSubWindowSeconds}s x ${Panel4BandSubWindowCount} inside the same window"
+        $p4Wins = @(Get-PinnedWindowSeries -EndUtc $BaselineWindowEndUtc -SubWindowSeconds 120 -Count 5)
+        $p4Batch = Invoke-PanelReadBatch -PanelIds @('4') -Windows $p4Wins -ScreenshotDir $shotDir `
+                     -LocatorMode $LocatorMode -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight `
+                     -BasicAuthBase64 $adminB64
+        if ($p4Batch.State -eq 'ReaderMissing') {
+            Write-Phase "the panel reader became unavailable before the panel-4 retry: $($p4Batch.Error). Aborting." 'Red'; exit 63
+        }
+        $p4Vals   = @(Get-PanelSamples -Readings @($p4Batch.Readings) -PanelId '4')
+        $p4States = @(Get-PanelStates  -Readings @($p4Batch.Readings) -PanelId '4')
+        $p4State  = if (@($p4States).Count -gt 0) { (@($p4States | Select-Object -Unique) -join '|') } else { 'NoReading' }
+        if (@($p4Vals).Count -gt 0) {
+            $p4Band = Get-PanelBand -Values ([double[]]$p4Vals)
+            $BaselineBands += [pscustomobject]@{
+                PanelId      = 4
+                PanelTitle   = "$($Panels['4'].Title)"
+                PanelType    = "$($Panels['4'].Type)"
+                Regime       = 'C'
+                Guarded      = $false
+                SeriesIndex  = -1
+                SeriesName   = "$($Panels['4'].SeriesName)"
+                SeriesNameStable = $true
+                SeriesNameSource = 'staticLegend'
+                SubWindowSeconds = $Panel4BandSubWindowSeconds
+                Values       = [double[]]$p4Vals
+                States       = [string[]]$p4States
+                BandLow      = [double]$p4Band.Low
+                BandHigh     = [double]$p4Band.High
+                BandMean     = [double]$p4Band.Mean
+                BandSigma    = [double]$p4Band.Sigma
+                BandHalfWidth = [double]$p4Band.HalfWidth
+                FloorApplied = [bool]$p4Band.FloorApplied
+                SampleCount  = [int]$p4Band.SampleCount
+                PanelState   = $p4State
+            }
+            $Panel4BandedAtWiderWindow = $true
+            # The 60 s finding is REPLACED, not merely supplemented: panel 4 now has a band, so it is
+            # no longer unevaluable. The reason it could not band at 60 s is preserved in
+            # Panel4SubWindowNote, which is where a reader should look for it.
+            $UnevaluablePanels = @($UnevaluablePanels | Where-Object { "$_" -notmatch '^panel 4[ :(]' })
+            Write-Phase ("  panel 4 [C] band {0:N4}..{1:N4} mean {2:N4} floor={3} n={4} at {5}s ({6})" -f `
+                $p4Band.Low, $p4Band.High, $p4Band.Mean, $p4Band.FloorApplied, $p4Band.SampleCount, $Panel4BandSubWindowSeconds, $p4State) 'Gray'
+        } else {
+            Write-Phase "  panel 4 produced no numeric sample at ${Panel4BandSubWindowSeconds}s either ($p4State)." 'Yellow'
+        }
+        $ScreenshotPaths = @(@($ScreenshotPaths) + @(Get-ScreenshotPaths $p4Batch.Readings) | Select-Object -Unique)
     }
 
     # =========================================================================================
@@ -1099,13 +1167,20 @@ try {
     # =========================================================================================
     Write-Phase "STEP H: diagnostic proxy cross-check (diagnosis only — the rendered panel is the verdict)"
 
-    function Get-ProxyAggregateMean([string]$Query, [long]$S, [long]$E, [int]$Step) {
-        $res = Invoke-ProxyRangeQuery -Query $Query -StartUnix $S -EndUnix $E -StepSeconds $Step
+    # NOTE ON THE PARAMETER NAMES — they are deliberately long, and a single-letter name here is a
+    # BUG, not a style choice. PowerShell variable names are case-INSENSITIVE, so a `[long]$S`
+    # parameter and a `foreach ($s in ...)` loop variable are the SAME variable; the parameter's type
+    # constraint is then re-enforced on the loop assignment and every call throws
+    # "Cannot convert @{metric=; values=System.Object[]} ... to System.Int64". That is exactly how the
+    # first BASE-01 run lost its entire diagnostic cross-check. (Same trap as 88-03 deviation 5, in a
+    # form where the type constraint makes it fail loudly instead of silently.)
+    function Get-ProxyAggregateMean([string]$PromQuery, [long]$StartUnix, [long]$EndUnix, [int]$StepSeconds) {
+        $res = Invoke-ProxyRangeQuery -Query $PromQuery -StartUnix $StartUnix -EndUnix $EndUnix -StepSeconds $StepSeconds
         $byTs = @{}
-        foreach ($s in @($res.data.result)) {
-            $sn = @(Get-PropertyNames $s)
+        foreach ($series in @($res.data.result)) {
+            $sn = @(Get-PropertyNames $series)
             if ($sn -notcontains 'values') { continue }
-            foreach ($v in @($s.values)) {
+            foreach ($v in @($series.values)) {
                 $ts = "$($v[0])"
                 $raw = "$($v[1])"
                 $val = 0.0
@@ -1134,32 +1209,51 @@ try {
             $tgts = @($dp.targets)
             if ($tgts.Count -eq 0) { continue }
 
-            $expr = "$($tgts[0].expr)"
-            # Substitute Grafana's macros with what THIS run derived. $__range becomes the sub-window
-            # width, because that is the range the banded reading was taken over.
-            $q = $expr.Replace('$__rate_interval', "${riForQuery}s").Replace('$__range', "${SubWindowSeconds}s")
-            $q = $q.Replace('$source', '.*').Replace('$pod', '.*')
-
-            $comparable = ($expr -notmatch 'histogram_quantile')
-            $reason = if ($comparable) { '' } else { 'histogram_quantile is a per-series quantile; summing across series is not a meaningful aggregate, so no agreement is asserted' }
-
+            # EVERY target is queried, not just the first. The rendered side of the comparison is the
+            # sum of ALL the panel's banded series means, so comparing it against one target of a
+            # multi-target panel would guarantee a mismatch and make the control useless on exactly
+            # the four conservation panels it matters most for.
+            $comparable = $true
+            $reason = ''
+            $queries = @()
             $proxyMean = $null
-            try { $proxyMean = Get-ProxyAggregateMean $q $winStartUnix $winEndUnix $SubWindowSeconds }
-            catch { $reason = "proxy query failed: $($_.Exception.Message)"; $comparable = $false }
 
-            # The panel side of the comparison: the SUM of the first target's banded series means.
-            # (The proxy query above is the FIRST target only, so only the series it produces are
-            #  summed — a two-target panel is compared on its first target, and that is stated here
-            #  rather than left for a reader to infer.)
+            foreach ($tg in $tgts) {
+                $expr = "$($tg.expr)"
+                if ($expr -match 'histogram_quantile') {
+                    $comparable = $false
+                    $reason = 'histogram_quantile is a per-series quantile; summing across series is not a meaningful aggregate, so no agreement is asserted'
+                }
+                # Substitute Grafana's macros with what THIS run derived. $__range becomes the
+                # sub-window width, because that is the range the banded reading was taken over.
+                $q = $expr.Replace('$__rate_interval', "${riForQuery}s").Replace('$__range', "${SubWindowSeconds}s")
+                $q = $q.Replace('$source', '.*').Replace('$pod', '.*')
+                $queries += $q
+
+                try {
+                    $m = Get-ProxyAggregateMean $q $winStartUnix $winEndUnix $SubWindowSeconds
+                    if ($null -ne $m) {
+                        if ($null -eq $proxyMean) { $proxyMean = 0.0 }
+                        $proxyMean += [double]$m
+                    }
+                }
+                catch {
+                    # The message is kept verbatim — it is the diagnosis. It is SANITISED of the
+                    # literal below so a captured error can never be mistaken by the depth guard for
+                    # a truncated serialisation.
+                    $reason = "proxy query failed: $($_.Exception.Message)"
+                    $comparable = $false
+                }
+            }
+
             $panelSum = $null
             $mine = @($BaselineBands | Where-Object { $_.PanelId -eq [int]$dpId })
             if (@($mine).Count -gt 0) {
                 $panelSum = 0.0
-                foreach ($m in $mine) { $panelSum += [double]$m.BandMean }
-                if (@($tgts).Count -gt 1) {
-                    $reason = (("$reason " + "panel has $(@($tgts).Count) targets; the proxy query covers the FIRST only, so the sums are not expected to match exactly").Trim())
-                    $comparable = $false
-                }
+                foreach ($m2 in $mine) { $panelSum += [double]$m2.BandMean }
+            } else {
+                $comparable = $false
+                $reason = (("$reason " + 'the panel produced no band, so there is nothing to compare the proxy value against').Trim())
             }
 
             $agrees = $null
@@ -1167,18 +1261,19 @@ try {
                 $tol = [Math]::Max(0.10 * [Math]::Abs([double]$panelSum), 0.01)
                 $agrees = ([Math]::Abs([double]$proxyMean - [double]$panelSum) -le $tol)
                 if (-not $agrees) {
-                    $DiagnosticDisagreements += "panel ${dpId}: rendered band-mean sum $panelSum vs proxy aggregate mean $proxyMean (tolerance $tol)"
+                    $DiagnosticDisagreements += "panel ${dpId} ($($Panels[$dpId].Title)): rendered band-mean sum $panelSum vs proxy aggregate mean $proxyMean (tolerance $tol) — the RENDERED value remains the verdict; this disagreement is recorded as a finding"
                 }
             }
 
             $DiagnosticQueryValues += [pscustomobject]@{
                 PanelId      = [int]$dpId
-                Query        = $q
+                TargetCount  = @($tgts).Count
+                Queries      = [string[]]$queries
                 ProxyMean    = $proxyMean
                 PanelMeanSum = $panelSum
                 Comparable   = [bool]$comparable
                 Agrees       = $agrees
-                Reason       = "$reason"
+                Reason       = ("$reason" -replace 'System\.Object\[\]', 'System.Object-array')
             }
             Write-Phase ("  panel {0}: proxy={1} panel={2} comparable={3} agrees={4}" -f $dpId, $proxyMean, $panelSum, $comparable, $agrees) 'Gray'
         }
@@ -1268,6 +1363,11 @@ try {
 
         BaselineBands                = @($BaselineBands)
 
+        Panel4BandSubWindowSeconds   = $Panel4BandSubWindowSeconds
+        Panel4BandSubWindowCount     = $Panel4BandSubWindowCount
+        Panel4BandedAtWiderWindow    = $Panel4BandedAtWiderWindow
+        Panel4SubWindowNote          = 'MEASURED, and it corrects the plan''s assumption: panel 4 renders "No data" at a 60 s sub-window. increase() requires at least TWO samples inside its range, and the stored resolution on this stack is 60 s (the SDK export cadence, not the 15 s scrape interval), so a 60 s window contains exactly one. Panel 4 is therefore banded over five 120 s sub-windows inside the SAME settled 600 s window, and every band entry states its own SubWindowSeconds so a 120 s band can never be silently compared against a 60 s one.'
+
         RangeCumulativeLevelBaseline = $RangeCumulativeLevelBaseline
         RangeCumulativeWindowSeconds = $RangeCumulativeWindowSeconds
         RangeCumulativeNote          = 'Panel 4 renders increase(...[$__range]), so its value depends on the VISIBLE window width. This wide-window level is what an operator sees on the shipped dashboard; it grows on a HEALTHY stack too. It is recorded for the HAND-02 misleading-by-default list and is NEVER scored as movement — panel 4 is scored on its banded per-minute value instead.'
@@ -1312,9 +1412,15 @@ try {
     # 'System.Object[]', destroying the very evidence that makes the band recomputable (T-88-18).
     ([pscustomobject]$report) | ConvertTo-Json -Depth 10 | Set-Content -Path $reportPath -Encoding utf8
 
+    # The depth guard (T-88-18) asserts that no JSON VALUE is the bare string 'System.Object[]', which
+    # is the signature of a nested array serialised as its type name instead of its contents. It is
+    # deliberately STRUCTURAL rather than a substring search: the first BASE-01 run tripped a
+    # substring form on a captured exception MESSAGE that merely mentioned the type, which is a false
+    # positive — the message is evidence, not truncation. A guard that cries wolf on its own diagnostic
+    # text would eventually be disabled, and then the real truncation it exists to catch would ship.
     $written = Get-Content $reportPath -Raw
-    if ($written -match 'System\.Object\[\]') {
-        Write-Phase "the written artifact contains a literal System.Object[] — the serialisation depth is too shallow." 'Red'
+    if ($written -match '(?m)(:\s*"System\.Object\[\]"|^\s*"System\.Object\[\]"\s*,?\s*$)') {
+        Write-Phase "the written artifact carries a JSON VALUE of 'System.Object[]' — the serialisation depth is too shallow." 'Red'
         exit 66
     }
     Write-Phase "verdict artifact: $reportPath" 'Green'
