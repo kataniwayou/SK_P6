@@ -332,11 +332,25 @@ try {
             notes = 'the HA tier is 3 replicas — the stale phase-80 map says 1, which is why no map is used'
         }
         'SCALE-03' = @{
+            # DWELL MEASURED, NOT ASSUMED (88-06 deviation). Plan 88-06 tables 240 s. A read-only
+            # query against the wave-0 probe's OWN recorded rollout (keeper-99b8c574b-29mzq, whose
+            # last real sample was 16:47:30Z) measured that `rate(counter[240s])` for a dead pod
+            # survives roughly 180 s past that last sample — the 240 s lookback keeps producing a
+            # (decaying) value until fewer than two samples remain inside it. At a 240 s dwell the
+            # panel would therefore still be RENDERING for most of the outage and could not produce
+            # the TWO CONSECUTIVE NoData sub-windows the plan's own acceptance criterion requires.
+            # 480 s leaves ~4 clean NoData sub-windows at the end of the after window.
             mode = 'scenario'; lever = 'scale'; targetTier = 'keeper'; seamTier = ''; seamVar = ''
-            triggerSeamTier = ''; triggerSeamVar = ''; dwellSeconds = 240
+            triggerSeamTier = ''; triggerSeamVar = ''; dwellSeconds = 480
             panelIds = @('9')
             predictedDirection = @{ '9' = 'nodata' }
             crossTalkPanels = @('1','3','10','12')
+            # OBSERVED, never scored and never a control: a keeper that is not running consumes
+            # nothing, so panels 2 and 8 cannot open a gap under THIS fault. The claim is measured
+            # here rather than asserted, so a later reader cannot conclude the scenario should have
+            # moved them (that is what the ZERO-03 seam scenario in 88-07 exists for).
+            observePanels = @('2','8')
+            humanSummarySuffix = 'panels 2 and 8 remained at 0 throughout this outage, and that is CORRECT rather than a missed signal: a keeper scaled to zero consumes nothing, so no keeper consumed-minus-sent gap can open from a keeper outage. Panel 8 needs the ZERO-03 seam scenario (plan 88-07), which arms PROCESSOR_DEFEAT_READ to CREATE a recovery event and KEEPER_DEFEAT_REINJECT to suppress the reinject.'
             requiresRebaseline = $true; status = 'Locked'; statusReason = ''
             decidedBy = 'PQ-02 TimeseriesLegendParsed=true (panel 9 was the PQ-02 subject)'
             notes = 'panel 9 is unguarded, so the predicted direction is NoData rather than a value change'
@@ -897,6 +911,26 @@ try {
         $Findings                 = @()
         $rebaseCap                = $null
         $TrafficWorkflowId        = ''
+        # The tier this row SCALED, read live by the sequencer before and re-read after. Kept as a
+        # SCALAR beside the per-tier maps because the phase's whole T-88-02 control is "this tier went
+        # down at N and came back at N" — a map does not state that, and the acceptance criteria of
+        # every scale scenario assert the scalar directly.
+        $ScaledTierName           = ''
+        $ScaledReplicasBefore = $null
+        $ScaledReplicasAfter  = $null
+        # Regime C, recorded and NEVER scored (the wide-window level an operator actually sees).
+        $RangeCumulativeLevelAfter    = $null
+        $RangeCumulativeWindowSeconds = 3600
+        # Panels captured for the RECORD only: not asserted, not a cross-talk control.
+        $ObservedPanels           = @()
+        # A prediction the MEASUREMENT corrected. The panel still discriminated (its rendered reading
+        # left its healthy band, or the panel emptied), but the direction the plan predicted is not
+        # the direction the stack produced. That is a finding, not a pass, so it degrades the verdict.
+        $PredictionsCorrected     = @()
+        # Did pipeline traffic actually resume after the tier came back? Without this, a post-fault
+        # reading measures an IDLE stack rather than a RECOVERED one and nobody can tell.
+        $TrafficResumedAfterRestore = $null
+        $TrafficResumeDetail        = ''
 
         $shotDir  = Join-Path $screenshotRoot $canonicalId
         $lever    = "$($scenario.lever)"
@@ -1476,7 +1510,15 @@ try {
         # the fault; its bounds are recorded so a reader can see which window it was.
         # =====================================================================================
         Write-Phase "STEP S4: pre-arm baseline (recorded, not authoritative)"
-        $capturePanels = [string[]]@(@($subjects) + @($controls) | Select-Object -Unique)
+        # Observed-only panels ride along in the SAME batch as the claim and its controls, so their
+        # reading is taken in the same windows rather than adjacent to them. They are recorded and
+        # never scored — see $ObservedPanels.
+        $observeOnly = @()
+        if ($scenario.Contains('observePanels')) {
+            $observeOnly = @(@($scenario.observePanels) | ForEach-Object { "$_" } |
+                Where-Object { (@($subjects) -notcontains "$_") -and (@($controls) -notcontains "$_") })
+        }
+        $capturePanels = [string[]]@(@($subjects) + @($controls) + @($observeOnly) | Select-Object -Unique)
         $preArmEnd = ([datetime]::UtcNow).AddSeconds(-$ExportTrailSeconds)
         $preArmCap = Invoke-Phase88Capture -PanelIdList $capturePanels -EndUtc $preArmEnd `
                        -Count $AfterSubWindowCount -Panel4Count $Panel4AfterCount -ShotDir $shotDir -Label 'pre-arm'
@@ -1630,11 +1672,37 @@ try {
                 Write-Phase "the scale fault failed as INFRASTRUCTURE: $($sf.Detail)" 'Red'
                 exit 60
             }
+            $ScaledTierName           = "$($sf.Tier)"
+            $ScaledReplicasBefore = [int]$sf.ReplicasBefore
+            $ScaledReplicasAfter  = [int]$sf.ReplicasAfter
             $scaledTier = ''   # the sequencer restored it and CLAIMED the restore; no teardown scale is owed
             $afterEnd   = [datetime]::Parse("$($sf.FaultEndUtc)", $null, [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal)
             $afterStart = $afterEnd.AddSeconds(-$afterSpan)
             Write-Phase "  waiting ${ExportTrailSeconds}s so the fault window is fully exported..." 'Gray'
             Start-Sleep -Seconds $ExportTrailSeconds
+
+            # ---- DID THE PIPELINE ACTUALLY COME BACK? -------------------------------------------
+            # Scaling the orchestrator to zero also stops the Quartz cron that drives v8-fanout-proof.
+            # If the cron does not resume, every later reading measures an IDLE stack rather than a
+            # RECOVERED one, and nothing in the artifact would say so. Measured through the SAME
+            # datasource proxy the panels read, over the window that has just elapsed since restore.
+            try {
+                $resumeEnd   = ([DateTimeOffset]::UtcNow).ToUnixTimeSeconds()
+                $resumeStart = $resumeEnd - $ExportTrailSeconds
+                $resumeMean  = Get-ProxyAggregateMean 'sum(rate(orchestrator_messages_sent_total[240s]))' $resumeStart $resumeEnd 60
+                if ($null -ne $resumeMean -and [double]$resumeMean -gt 0) {
+                    $TrafficResumedAfterRestore = $true
+                    $TrafficResumeDetail = ("pipeline traffic CONFIRMED resumed after the restore: sum(rate(orchestrator_messages_sent_total[240s])) averaged {0:N4} ops/s over the {1}s export trail that followed the restore, measured through the same datasource proxy the panels read. Without this check the post-fault state could not be told apart from an idle stack." -f [double]$resumeMean, $ExportTrailSeconds)
+                } else {
+                    $TrafficResumedAfterRestore = $false
+                    $TrafficResumeDetail = "pipeline traffic did NOT measurably resume in the ${ExportTrailSeconds}s after the restore (orchestrator send rate read '$resumeMean'). Recorded as a finding rather than assumed away."
+                    $Findings += $TrafficResumeDetail
+                }
+            } catch {
+                $TrafficResumedAfterRestore = $null
+                $TrafficResumeDetail = "the traffic-resumption check could not be evaluated: $($_.Exception.Message)"
+            }
+            Write-Phase "  $TrafficResumeDetail" $(if ($TrafficResumedAfterRestore) { 'Gray' } else { 'Yellow' })
         }
         else {
             # `seam` — the seam is already armed, so the trigger is the WORKLOAD that exercises it.
@@ -1675,6 +1743,58 @@ try {
             $ReaderUnavailable = $true
         }
 
+        # ---- STEP S6b — PANEL 4's WIDE-WINDOW LEVEL, RECORDED AND NEVER SCORED ---------------
+        # Panel 4 is `increase(...[$__range])`, so its value depends on the VISIBLE window width.
+        # The number scored above is a per-120 s increase against a 120 s band. THIS is the number an
+        # operator actually sees on the shipped dashboard at its default range — and it grows on a
+        # HEALTHY stack too, which is precisely why applying a Regime-A band to it would be a
+        # guaranteed false positive. It is recorded for the HAND-02 misleading-by-default list and
+        # takes no part in any Moved computation.
+        if (@($capturePanels) -contains '4') {
+            Write-Phase "STEP S6b: panel 4 wide-window range-cumulative level (${RangeCumulativeWindowSeconds}s, recorded NOT scored)"
+            try {
+                $wideWins  = @(Get-PinnedWindowSeries -EndUtc $afterEnd -SubWindowSeconds $RangeCumulativeWindowSeconds -Count 1)
+                $wideBatch = Invoke-PanelReadBatch -PanelIds @('4') -Windows $wideWins -ScreenshotDir $shotDir `
+                               -LocatorMode $LocatorMode -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight `
+                               -BasicAuthBase64 $adminB64
+                $wideVals = @(Get-PanelSamples -Readings @($wideBatch.Readings) -PanelId '4')
+                if (@($wideVals).Count -gt 0) {
+                    $RangeCumulativeLevelAfter = [double]$wideVals[0]
+                    Write-Phase "  panel 4 wide level = $RangeCumulativeLevelAfter over $($wideWins[0].FromUtc) -> $($wideWins[0].ToUtc) (NOT scored)" 'Gray'
+                } else {
+                    Write-Phase "  panel 4 wide capture produced no numeric value (state recorded)." 'Yellow'
+                }
+                $ScenarioScreenshotPaths = @(@($ScenarioScreenshotPaths) + @(Get-ScreenshotPaths $wideBatch.Readings) | Select-Object -Unique)
+            } catch {
+                Write-Phase "  the wide panel-4 capture failed: $($_.Exception.Message)" 'Yellow'
+            }
+        }
+
+        # ---- STEP S6c — OBSERVED-ONLY PANELS -------------------------------------------------
+        # Recorded so a claim ABOUT them is a measurement. Never scored, never a control.
+        foreach ($o in @($observeOnly)) {
+            $rdObs = Get-Phase88PanelReading -Capture $afterCap -PanelId $o
+            $obsSeries = @()
+            foreach ($e in @($rdObs.Entries)) {
+                $obsSeries += [pscustomobject]@{
+                    SeriesIndex = [int]$e.Index
+                    SeriesName  = "$($e.Name)"
+                    AfterValues = [double[]]@($e.Values)
+                }
+            }
+            $ObservedPanels += [pscustomobject]@{
+                PanelId          = [int]$o
+                PanelTitle       = "$($Panels[$o].Title)"
+                Regime           = "$($Panels[$o].Regime)"
+                SubWindowSeconds = [int]$rdObs.SubWindowSeconds
+                AfterStates      = [string[]]@($rdObs.States)
+                SeriesResults    = @($obsSeries)
+                Scored           = $false
+                Note             = 'OBSERVED ONLY — recorded so the scenario can state what this panel did without asserting it. It is neither a subject nor a cross-talk control.'
+            }
+            Write-Phase ("  observed panel {0}: [{1}]" -f $o, (@($obsSeries | ForEach-Object { "$($_.SeriesName)=$((@($_.AfterValues) -join ','))" }) -join ' | ')) 'Gray'
+        }
+
         # =====================================================================================
         # STEP S7 — RESTORE AND DISARM, THEN ASSERT. Done BEFORE scoring so the stack is never held
         # in a faulted state while numbers are crunched.
@@ -1694,6 +1814,14 @@ try {
         }
         $restore = Assert-StackRestored -Tiers $Tiers -ExpectedReplicas $preReplicas -ExpectedImages $preImages
         foreach ($t in $Tiers) { $ReplicasAfterMap[$t] = Get-LiveReplicas -Tier $t }
+        # The scaled tier's count is re-read HERE, independently of the sequencer's own claim, so the
+        # artifact's scalar ReplicasAfter is a fresh live read rather than an echo of the value the
+        # mutation reported. This is the T-88-02 control against the stale phase-80 replica map, whose
+        # `orchestrator = 1` would silently amputate the Phase-83 HA tier.
+        if (-not [string]::IsNullOrWhiteSpace($ScaledTierName)) {
+            $ScaledReplicasAfter = [int](Get-LiveReplicas -Tier $ScaledTierName)
+            Write-Phase "  scaled tier '$ScaledTierName': before=$ScaledReplicasBefore after=$ScaledReplicasAfter (re-read live)" 'Gray'
+        }
         Write-Phase "  restore: SeamVarsClean=$($restore.SeamVarsClean) ReplicasRestored=$($restore.ReplicasRestored) ImagesUnchanged=$($restore.ImagesUnchanged)" 'Gray'
 
         # =====================================================================================
@@ -1718,9 +1846,16 @@ try {
             # 'slope-up' is Regime C's form of 'up' on the per-window band; 'up-then-nodata' is TWO
             # assertions over one capture (panel 5 spikes while the stale series is still present,
             # then empties when it expires) and either satisfies it.
+            #
+            # 'down' INCLUDES 'nodata' by the plan's own definition. 88-06 states it verbatim for
+            # SCALE-02 — "both legend Means fall below their DISC-01 band ... OR that the panel
+            # reaches NoData — EITHER is the predicted `down` direction" — and again for SCALE-01's
+            # panel 3, "down (toward 0 / NoData)". A rate panel whose tier is gone stops rendering
+            # once fewer than two samples remain inside the 240 s lookback; refusing to score that as
+            # a fall would be the phase's sixth pitfall applied to a panel other than 9.
             $valueDirections = switch ($dirToken) {
                 'up'             { @('up') }
-                'down'           { @('down') }
+                'down'           { @('down', 'nodata') }
                 'nonzero'        { @('nonzero') }
                 'slope-up'       { @('up') }
                 'up-then-nodata' { @('up', 'nodata') }
@@ -1778,6 +1913,141 @@ try {
                 }
             }
 
+            # ---- PANEL-LEVEL NoData ---------------------------------------------------------
+            # A panel that renders "No data" has NO legend series, so the per-series loop above never
+            # executes and a purely series-based scorer would report "nothing moved" for a panel that
+            # emptied completely. That is the phase's sixth pitfall in its most damaging form: on
+            # panel 9 — deliberately UNGUARDED so a dead keeper is visible rather than comfortable —
+            # NoData IS the discrimination signal. It is therefore evaluated against the panel's own
+            # STATES, independently of any band, whenever the predicted direction admits it.
+            $PanelStateMove = $null
+            if (@($valueDirections) -contains 'nodata') {
+                $PanelStateMove = Test-PanelMoved -Band ([pscustomobject]@{ Low = 0.0; High = 0.0 }) `
+                                    -AfterValues ([double[]]@()) -AfterStates ([string[]]@($rdAfter.States)) `
+                                    -Direction 'nodata' -MinConsecutive 2
+                if ($PanelStateMove.Moved) {
+                    $anySeriesMoved = $true
+                    $anyFalsifiable = $true
+                    $seriesResults += [pscustomobject]@{
+                        SeriesIndex               = -2
+                        SeriesName                = '(panel state)'
+                        BandLow                   = $null
+                        BandHigh                  = $null
+                        BandSampleCount           = 0
+                        BandSubWindowSeconds      = [int]$rdAfter.SubWindowSeconds
+                        AfterValues               = [double[]]@()
+                        Moved                     = $true
+                        ConsecutiveSamplesOutside = [int]$PanelStateMove.ConsecutiveSamplesOutside
+                        Falsifiable               = $true
+                        Note                      = "PANEL-LEVEL NoData: the panel rendered no series at all for $($PanelStateMove.ConsecutiveSamplesOutside) consecutive sub-window(s). The discrimination signal is the panel STATE, not a series value — scored as MOVED, not as a read failure."
+                    }
+                }
+            }
+
+            # ---- DID THE PREDICTION HOLD? ----------------------------------------------------
+            # When the predicted direction produced nothing, the OTHER directions are evaluated too —
+            # not to manufacture a pass, but because "the panel left its healthy band under this
+            # fault" and "it left it the way we guessed" are two different claims and the artifact
+            # must be able to state them separately. A panel that moved the other way HAS
+            # discriminated (DISC-02), and the wrong prediction is a loud FINDING that degrades the
+            # verdict to Inconclusive rather than being quietly absorbed into a Pass.
+            $ObservedDirection = if ($anySeriesMoved) { $dirToken } else { '' }
+            $PredictionHeld    = [bool]$anySeriesMoved
+            if (-not $anySeriesMoved) {
+                foreach ($alt in @('down', 'up', 'nonzero', 'nodata')) {
+                    if (@($valueDirections) -contains $alt) { continue }
+                    foreach ($e in @($rdAfter.Entries)) {
+                        $band = Find-Phase88Band -Bands $ScoringBands -PanelId ([int]$p) -SeriesName "$($e.Name)" -SeriesIndex ([int]$e.Index)
+                        if ($null -eq $band) { continue }
+                        if ([int]$band.SampleCount -lt $MinBandSamples) { continue }
+                        $altM = Test-PanelMoved -Band ([pscustomobject]@{ Low = [double]$band.BandLow; High = [double]$band.BandHigh }) `
+                                  -AfterValues ([double[]]@($e.Values)) -AfterStates ([string[]]@($rdAfter.States)) `
+                                  -Direction $alt -MinConsecutive 2
+                        if (-not $altM.Moved) { continue }
+                        $ObservedDirection = $alt
+                        $anySeriesMoved    = $true
+                        $anyFalsifiable    = $true
+                        $seriesResults += [pscustomobject]@{
+                            SeriesIndex               = [int]$e.Index
+                            SeriesName                = "$($e.Name)"
+                            BandLow                   = [double]$band.BandLow
+                            BandHigh                  = [double]$band.BandHigh
+                            BandSampleCount           = [int]$band.SampleCount
+                            BandSubWindowSeconds      = [int]$band.SubWindowSeconds
+                            AfterValues               = [double[]]@($e.Values)
+                            Moved                     = $true
+                            ConsecutiveSamplesOutside = [int]$altM.ConsecutiveSamplesOutside
+                            Falsifiable               = $true
+                            Note                      = "MEASURED DIRECTION '$alt', which is NOT the predicted '$dirToken'. The panel discriminated; the prediction did not hold."
+                        }
+                        break
+                    }
+                    if ($anySeriesMoved) { break }
+                }
+                if ($anySeriesMoved) {
+                    $PredictionHeld = $false
+                    $corr = "panel ${p} ($($panel.Title)): predicted '$dirToken' but MEASURED '$ObservedDirection'. The panel DID discriminate — its rendered reading left the healthy band for at least 2 consecutive sub-windows — but the direction the plan predicted is not the direction this stack produced. Recorded verbatim; the verdict is degraded to Inconclusive rather than absorbing a wrong model into a Pass."
+                    $PredictionsCorrected += $corr
+                    $Findings += $corr
+                    Write-Phase "  panel $p : MOVED but AGAINST the prediction ($dirToken -> $ObservedDirection)" 'Yellow'
+                }
+            }
+
+            # ---- PANEL 5's TWO AFTER-SEGMENTS -------------------------------------------------
+            # 'up-then-nodata' is TWO behaviours over ONE capture and both must be recorded: the gap
+            # SPIKES while the dead tier's stale series still satisfy the binary `-`'s label match,
+            # then the panel EMPTIES once fewer than two samples remain inside the lookback and no
+            # label set matches at all. The spike is the useful signal and the emptiness is the trap;
+            # the trap is a HAND-02 row. Segments are cut from the SAME sub-window series, so no extra
+            # capture is taken and the two segments are directly comparable by construction.
+            $EarlySegment = $null
+            $LateSegment  = $null
+            $SegmentBehaviourObserved = ''
+            if ($dirToken -eq 'up-then-nodata') {
+                $w = [int]$rdAfter.SubWindowSeconds
+                if ($w -lt 1) { $w = $SubWindowSeconds }
+                $earlyCount = [int][Math]::Min(@($rdAfter.States).Count, [Math]::Ceiling(240.0 / $w))
+                $lateStart  = [int][Math]::Min(@($rdAfter.States).Count, [Math]::Floor(300.0 / $w))
+                $earlyStates = [string[]]@(@($rdAfter.States) | Select-Object -First $earlyCount)
+                $lateStates  = [string[]]@(@($rdAfter.States) | Select-Object -Skip $lateStart)
+                $earlySeries = @(); $lateSeries = @()
+                foreach ($e in @($rdAfter.Entries)) {
+                    $ev = @($e.Values)
+                    $earlySeries += [pscustomobject]@{ SeriesIndex = [int]$e.Index; SeriesName = "$($e.Name)"; Values = [double[]]@(@($ev) | Select-Object -First $earlyCount) }
+                    $lateSeries  += [pscustomobject]@{ SeriesIndex = [int]$e.Index; SeriesName = "$($e.Name)"; Values = [double[]]@(@($ev) | Select-Object -Skip $lateStart) }
+                }
+                $earlyNoData = (@($earlyStates | Where-Object { "$_" -eq 'NoData' }).Count -gt 0)
+                $lateNoData  = (@($lateStates  | Where-Object { "$_" -eq 'NoData' }).Count -gt 0)
+                $EarlySegment = [pscustomobject]@{
+                    Label            = 'early (the first ~240 s of the outage — the stale series still exist, so the binary `-` still matches and the gap should SPIKE to the sending tier''s full rate)'
+                    SubWindowSeconds = $w
+                    SubWindowCount   = $earlyCount
+                    States           = $earlyStates
+                    SeriesValues     = @($earlySeries)
+                    ContainsNoData   = $earlyNoData
+                }
+                $LateSegment = [pscustomobject]@{
+                    Label            = 'late (after roughly 300 s — fewer than two samples remain inside the lookback, no label set matches, and the panel should be EMPTY rather than high)'
+                    SubWindowSeconds = $w
+                    SubWindowCount   = @($lateStates).Count
+                    States           = $lateStates
+                    SeriesValues     = @($lateSeries)
+                    PanelStateAfter  = if (@($lateStates).Count -gt 0) { (@($lateStates | Select-Object -Unique) -join '|') } else { 'NoReading' }
+                    ContainsNoData   = $lateNoData
+                }
+                $spiked = $false
+                foreach ($sr in @($seriesResults)) {
+                    if ([int]$sr.SeriesIndex -lt 0) { continue }
+                    if ($sr.Moved -and [int]$sr.ConsecutiveSamplesOutside -ge 2) { $spiked = $true }
+                }
+                $SegmentBehaviourObserved =
+                    if ($spiked -and $lateNoData) { 'BOTH: the gap spiked while the stale series persisted AND the panel emptied afterwards — the predicted spike-then-empty transition was observed end to end.' }
+                    elseif ($spiked)              { 'SPIKE ONLY: the gap rose out of its band while the stale series persisted, and the panel had not emptied by the end of the after window.' }
+                    elseif ($lateNoData)          { 'EMPTY WITHOUT SPIKING: the panel went to No data without ever rising out of its band. This is a MEASUREMENT, not a failure — it is carried to the HAND-02 misleading-by-default list verbatim.' }
+                    else                          { 'NEITHER: no spike and no emptying were observed in this after window.' }
+                Write-Phase "  panel $p segments: $SegmentBehaviourObserved" 'Gray'
+            }
+
             # The panel's SCORED series: the mover with the longest consecutive run, or — when
             # nothing moved — the strongest candidate, so the artifact shows the best evidence there
             # was rather than an arbitrary row.
@@ -1823,6 +2093,13 @@ try {
                 SeriesName                = if ($null -ne $scored) { "$($scored.SeriesName)" } else { '' }
                 ScoredSeriesIndex         = if ($null -ne $scored) { [int]$scored.SeriesIndex } else { -99 }
                 PredictedDirection        = $dirToken
+                ObservedDirection         = $ObservedDirection
+                PredictionHeld            = $PredictionHeld
+                PanelStateMoveApplied     = ($null -ne $PanelStateMove -and $PanelStateMove.Moved)
+                PanelStateNoDataRun       = if ($null -ne $PanelStateMove) { [int]$PanelStateMove.ConsecutiveSamplesOutside } else { 0 }
+                EarlyAfterSegment         = $EarlySegment
+                LateAfterSegment          = $LateSegment
+                SegmentBehaviourObserved  = $SegmentBehaviourObserved
                 BandLow                   = if ($null -ne $scored) { $scored.BandLow } else { $null }
                 BandHigh                  = if ($null -ne $scored) { $scored.BandHigh } else { $null }
                 BandSource                = $ScoringBandSource
@@ -1958,13 +2235,18 @@ try {
                 $dpId = "$($dp.id)"
                 if (@($subjects) -notcontains $dpId) { continue }
                 $comparable = $true; $reason = ''; $queries = @(); $proxyMean = $null
+                # $__range must be substituted with the width the PANEL was actually read at. Panel 4
+                # is read in its own 120 s batch (88-04 measured that it renders "No data" at 60 s),
+                # so substituting the 60 s sub-window here would compare the rendered value against a
+                # proxy computed over half its window and manufacture a false disagreement.
+                $dpRangeSeconds = if ($dpId -eq '4') { $Panel4SubWindowSeconds } else { $SubWindowSeconds }
                 foreach ($tg in @($dp.targets)) {
                     $expr = "$($tg.expr)"
                     if ($expr -match 'histogram_quantile') {
                         $comparable = $false
                         $reason = 'histogram_quantile is a per-series quantile; summing across series is not a meaningful aggregate, so no agreement is asserted'
                     }
-                    $q = $expr.Replace('$__rate_interval', "${riScenario}s").Replace('$__range', "${SubWindowSeconds}s")
+                    $q = $expr.Replace('$__rate_interval', "${riScenario}s").Replace('$__range', "${dpRangeSeconds}s")
                     $q = $q.Replace('$source', '.*').Replace('$pod', '.*')
                     $queries += $q
                     try {
@@ -2045,6 +2327,10 @@ try {
         $verdict = 'Pass'
         if (-not $restore.Ok -or $AnyPanelFailed -or -not $CrossTalkHeld) { $verdict = 'Fail' }
         elseif (@($UnevaluablePanels).Count -gt 0 -or $ReaderUnavailable -or -not $AllMoved) { $verdict = 'Inconclusive' }
+        # A prediction the measurement corrected is a FINDING, not a pass. The panel discriminated —
+        # which is what DISC-02 asks — but the phase's model of it was wrong, and a Pass here would
+        # bury that. Degrade, never upgrade: a Fail already established above is never softened.
+        elseif (@($PredictionsCorrected).Count -gt 0) { $verdict = 'Inconclusive' }
 
         $human = "phase-88 $canonicalId verdict=${verdict}: lever=$lever trigger='$TriggerKind' | " +
                  "$(@($PanelResults | Where-Object { $_.Moved }).Count)/$(@($subjects).Count) asserted panel(s) moved " +
@@ -2056,6 +2342,21 @@ try {
                  "load=$LoadShape ~$HostLoadRequests req | diagnosticAgrees=$DiagnosticAgreesWithPanel | " +
                  "unevaluable=$(@($UnevaluablePanels).Count) findings=$(@($Findings).Count) | " +
                  "stack clean: seamVars=$($restore.SeamVarsClean) replicas=$($restore.ReplicasRestored) images=$($restore.ImagesUnchanged)"
+
+        if (-not [string]::IsNullOrWhiteSpace($ScaledTierName)) {
+            $human += " | scaled tier '$ScaledTierName' $ScaledReplicasBefore -> 0 -> $ScaledReplicasAfter (both read LIVE, never from a table)"
+        }
+        if ($null -ne $TrafficResumedAfterRestore) {
+            $human += " | trafficResumedAfterRestore=$TrafficResumedAfterRestore"
+        }
+        if (@($PredictionsCorrected).Count -gt 0) {
+            $human += " | PREDICTION CORRECTED BY MEASUREMENT on $(@($PredictionsCorrected).Count) panel(s) — see PredictionsCorrectedByMeasurement[]"
+        }
+        # A row may append a statement it is REQUIRED to make about panels it observed but did not
+        # assert, so a later reader cannot conclude the scenario should have moved them.
+        if ($scenario.Contains('humanSummarySuffix') -and -not [string]::IsNullOrWhiteSpace("$($scenario.humanSummarySuffix)")) {
+            $human += " || $($scenario.humanSummarySuffix)"
+        }
 
         $report = [ordered]@{
             ScenarioId                = $canonicalId
@@ -2085,8 +2386,17 @@ try {
             RolloutUtc                = $RolloutUtc
             RolloutNote               = 'EXPECTED ARTIFACT, not a result. `kubectl set env` and `kubectl scale` mint NEW pods with NEW service_instance_id values, and a k8s restart never RESETS a series — it starts a new one. Every by(service_instance_id) panel therefore gains series at this moment and every aggregate briefly dips; that dip must NOT be scored, which is why the scoring band for any rollout scenario is re-captured afterwards.'
 
-            ReplicasBefore            = $ReplicasBeforeMap
-            ReplicasAfter             = $ReplicasAfterMap
+            # SCALAR for a row whose lever SCALED a tier — that tier's live-read count before the
+            # mutation and its independently re-read count afterwards. The per-tier maps are kept
+            # alongside under *ByTier. A row that scaled nothing keeps the map in the scalar slot, and
+            # ReplicasFieldNote states which shape this artifact carries so the 88-08 roll-up can
+            # never mistake one for the other.
+            ReplicasBefore            = if ($null -ne $ScaledReplicasBefore) { [int]$ScaledReplicasBefore } else { $ReplicasBeforeMap }
+            ReplicasAfter             = if ($null -ne $ScaledReplicasAfter)  { [int]$ScaledReplicasAfter }  else { $ReplicasAfterMap }
+            ScaledTier                = $ScaledTierName
+            ReplicasBeforeByTier      = $ReplicasBeforeMap
+            ReplicasAfterByTier       = $ReplicasAfterMap
+            ReplicasFieldNote         = if ($null -ne $ScaledReplicasBefore) { "this row SCALED '$ScaledTierName', so ReplicasBefore/ReplicasAfter are SCALARS for that tier (read live before the mutation, re-read live after the restore); the full four-tier maps are in ReplicasBeforeByTier/ReplicasAfterByTier" } else { 'this row scaled no tier, so ReplicasBefore/ReplicasAfter carry the four-tier MAPS (identical to ReplicasBeforeByTier/ReplicasAfterByTier)' }
             ReplicasRestored          = $restore.ReplicasRestored
             SeamVarsAfter             = @($restore.SeamVarsFound)
             SeamVarsClean             = $restore.SeamVarsClean
@@ -2123,6 +2433,19 @@ try {
             DiagnosticAgreesWithPanel = $DiagnosticAgreesWithPanel
             DiagnosticDisagreements   = @($DiagnosticDisagreements)
             DiagnosticNote            = 'The RENDERED panel is the verdict. These proxy query_range values are DIAGNOSIS only; a disagreement is a finding to record, never an error to reconcile away.'
+
+            RangeCumulativeLevelAfter    = $RangeCumulativeLevelAfter
+            RangeCumulativeWindowSeconds = $RangeCumulativeWindowSeconds
+            RangeCumulativeNote          = 'Panel 4 (Regime C) at its WIDE default range — the number an operator actually sees on the shipped dashboard. RECORDED AND NEVER SCORED: it grows on a demonstrably healthy stack too, so applying a Regime-A band to it would be a guaranteed false positive. Panel 4''s Moved computation uses only the per-120 s value scored against a 120 s band.'
+
+            ObservedPanels            = @($ObservedPanels)
+            ObservedPanelsNote        = 'Panels captured for the RECORD only — neither asserted nor used as a cross-talk control. They exist so a statement the scenario must make about them is a measurement rather than an assertion.'
+
+            TrafficResumedAfterRestore = $TrafficResumedAfterRestore
+            TrafficResumeDetail        = $TrafficResumeDetail
+
+            PredictionsCorrectedByMeasurement = [string[]]@($PredictionsCorrected)
+            PredictionNote            = 'A panel whose PredictionHeld is false MOVED — it left its healthy band, or emptied, for at least two consecutive sub-windows — but not in the direction this plan predicted. DISC-02 asks whether the panel discriminates, and it does; the wrong prediction is a finding carried to the HAND-02 misleading-by-default list, and it degrades the verdict to Inconclusive so that a wrong model can never be absorbed into a Pass.'
 
             NewSeriesAfter            = [string[]]@($NewSeriesAfter)
             Findings                  = [string[]]@($Findings)

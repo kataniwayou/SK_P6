@@ -421,3 +421,18 @@ offline-bundle/
 # Offline NuGet feed — force-track despite the global *.nupkg ignore above
 !nugets/
 !nugets/*.nupkg
+
+# Phase 88 rendered-panel screenshots — evidence, NEVER a verdict.
+#
+# Every measured number a Phase-88 claim rests on lives in the analyzer-reports/phase-88-*.json
+# artifacts, which carry Values[], States[], the window bounds, the sub-window width and the viewport,
+# so any band or movement is recomputable from the JSON alone without opening a single PNG. A scenario
+# capture costs ~6-12 MB and the ladder adds one per rung; permanently loading the repo with ~90 MB of
+# pictures of HEALTHY panels buys corroboration nobody rereads.
+#
+# POLICY (locked at plan 88-06, user decision): commit ONLY the captures for panels scored Fail or
+# Inconclusive, plus ONE representative capture per scenario — anything that did not cleanly pass must
+# stay visually auditable by a third party. Those files are force-added (`git add -f`); everything else
+# stays on disk and is ignored here. The ~23 MB already committed by 88-03/88-04/88-05 is left exactly
+# as it is: it is history, not a precedent to extend.
+analyzer-reports/phase-88-screenshots/
