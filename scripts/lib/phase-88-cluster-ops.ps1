@@ -48,18 +48,60 @@
         62  could not read live replicas or image
         65  restore assertion failed
 
-    EXPORTED SURFACE (Task 1)
+    EXPORTED SURFACE
         Get-LiveReplicas      -Tier                        -> [int]      (-1 on ANY failure)
         Get-LiveImage         -Tier                        -> [string]   ('' on ANY failure)
         Get-TierPodNames      -Tier                        -> [string[]] (running pod names)
         Wait-TierSettled      -Tier [-TimeoutSeconds]      -> [bool]     (never throws)
         Invoke-TierScaleFault -Tier -DwellSeconds          -> result hashtable (see below)
+        Set-Phase88Seam       -Tier -Name [-Value '1']     -> result hashtable
+        Clear-Phase88Seam     -Tier -Name                  -> result hashtable
+        Assert-StackRestored  -Tiers -ExpectedReplicas -ExpectedImages -> claim hashtable
 
     POD NAMES ARE THE DISC-06 DISCONTINUITY RECORD
         A pod name IS the service_instance_id label value the dashboard's per-pod panels group by.
         Capturing the running set before and after a rollout is what makes the rollout discontinuity
         RECORDABLE (RolloutOldInstanceIds / RolloutNewInstanceIds) instead of being scored as
         movement — the Pitfall-2 trap that would void every before/after assertion in the phase.
+        Both mutating paths capture it: the scale fault AND the seam arm, because arming a seam
+        rewrites the Deployment env and therefore rolls the pods exactly as a scale does.
+
+    THE SEAM MECHANISM, AND THE CALLER CONTRACT THAT MAKES IT SAFE  (DISC-05 / T-88-03)
+        A seam is armed and disarmed at RUNTIME on the live Deployment env — no manifest is edited.
+        Editing one would be pointless as well as forbidden: a kustomize re-apply would strip the
+        edit, and it would also revert all four app Deployments to the manifests' stale image pins,
+        whose bits emit no `source` resource attribute — which makes every correct dashboard look
+        broken (87-FINDINGS.md §9, measured). Arming:
+
+            kubectl -n skp set env deployment/keeper KEEPER_DEFEAT_REINJECT=1
+
+        and the trailing hyphen is what REMOVES the variable again:
+
+            kubectl -n skp set env deployment/keeper KEEPER_DEFEAT_REINJECT-
+
+        DISARM-IN-FINALLY IS A HARD CONTRACT, NOT A CONVENIENCE. The caller MUST invoke
+        Clear-Phase88Seam from its OUTER finally block — never on the happy path only. Clear is
+        deliberately idempotent (removing an absent variable is a no-op rollout) precisely so it can
+        be called unconditionally, including when the seam was never armed or the run was
+        interrupted. A seam left armed poisons every later scenario in this phase AND every later
+        resilience sweep, and the failure presents as an inexplicable conservation violation with no
+        pointer back to its cause. Assert-StackRestored then re-reads the live env and FAILS on any
+        residue: assert, never assume.
+
+        Each arm and each disarm triggers a rollout, so the sequence a scenario must follow is
+        arm -> settle -> re-baseline -> trigger -> capture -> restore -> disarm -> assert. The
+        re-baseline is not optional (DISC-06): without it the restart and the fault signal are
+        indistinguishable and the assertion is void.
+
+    WHAT THIS LIBRARY DELIBERATELY DOES NOT SUPPORT  (T-88-15)
+        The reinject-DELAY seam at src/Keeper/Recovery/ReinjectConsumer.cs:55,
+        KEEPER_REINJECT_DELAY_MS, is NOT in the seam allow-list and this library will never issue
+        it. It is uncommitted, working-tree-only, so the deployed keeper:tags-const-1544 image may
+        not contain it at all — a scenario built on it could arm a variable the running bits ignore
+        and then score the resulting no-op as a finding. No Phase-88 scenario needs it: panel 8's
+        gap requires the keeper to consume and not send, which is exactly what the committed
+        suppress-send seam does on its own. Assert-StackRestored still SCANS for it, because
+        "we never set it" is not the same claim as "it is not there".
 
 .NOTES
     Dev/ops-only tooling. No product source is touched and no manifest is edited: this library exists
@@ -82,11 +124,21 @@ $script:Phase88TierKind = @{
     'processor-sample' = 'deployment'
 }
 
-# (tier -> the seam vars that tier's image actually honours). Populated for the arm/disarm surface;
-# the scale sequencer never reads it.
+# (tier -> the seam vars that tier's image actually honours). A (tier, name) PAIR must be in this
+# table: keeper/PROCESSOR_DEFEAT_READ is as invalid as orchestrator/anything, because arming a seam
+# on an image that does not read it produces a no-op rollout that a scenario would then score.
 $script:Phase88Seams = @{
     'keeper'           = @('KEEPER_DEFEAT_REINJECT')
     'processor-sample' = @('PROCESSOR_DEFEAT_READ')
+}
+
+# Removal arguments as STATIC LITERALS rather than "$Name + '-'" built at call time. The trailing
+# hyphen is the whole disarm mechanism, so it is spelled out once, here, where it is reviewable —
+# and, like every other workload/variable token in this file, it is SELECTED from a table rather
+# than assembled from a parameter (T-88-01).
+$script:Phase88SeamRemoveArg = @{
+    'KEEPER_DEFEAT_REINJECT' = 'KEEPER_DEFEAT_REINJECT-'
+    'PROCESSOR_DEFEAT_READ'  = 'PROCESSOR_DEFEAT_READ-'
 }
 
 # -------------------------------------------------------------------------------------------------
@@ -101,6 +153,25 @@ function Resolve-Phase88Tier {
     if ([string]::IsNullOrWhiteSpace($Tier)) { return $null }
     foreach ($known in $script:Phase88Tiers) {
         if ([string]::Equals($known, $Tier, [System.StringComparison]::Ordinal)) { return $known }
+    }
+    return $null
+}
+
+# -------------------------------------------------------------------------------------------------
+# Ordinal resolution of a (tier, seam-name) PAIR to the table's own seam-name string. Returns $null
+# unless BOTH the tier is an allow-listed tier AND the name is one this tier's image actually reads.
+# -------------------------------------------------------------------------------------------------
+function Resolve-Phase88Seam {
+    [CmdletBinding()]
+    param([string]$Tier, [string]$Name)
+
+    $t = Resolve-Phase88Tier $Tier
+    if ($null -eq $t) { return $null }
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $null }
+    if (-not $script:Phase88Seams.ContainsKey($t)) { return $null }
+
+    foreach ($known in @($script:Phase88Seams[$t])) {
+        if ([string]::Equals($known, $Name, [System.StringComparison]::Ordinal)) { return $known }
     }
     return $null
 }
@@ -384,5 +455,218 @@ function Invoke-TierScaleFault {
         $result.Detail = "restore claim failed: '$t' reads $after replica(s), expected $replicasBefore."
     }
     $result.Ok = ($result.FailureCode -eq 0)
+    return $result
+}
+
+# -------------------------------------------------------------------------------------------------
+# ARM a fault seam on the live Deployment env. Runtime only — no manifest is edited (see the header).
+#
+# The (Tier, Name) PAIR is validated against the static seam table before anything is issued, so a
+# mismatched pair (keeper/PROCESSOR_DEFEAT_READ, orchestrator/anything) costs nothing and touches
+# nothing. -Value is validated too: it is the one caller-supplied string that reaches a command line,
+# and PROCESSOR_DEFEAT_READ legitimately carries a step label rather than a flag.
+#
+# PodNamesBefore/PodNamesAfter are returned even on partial failure. Arming rewrites the Deployment
+# env and therefore ROLLS THE PODS: that discontinuity is a DISC-06 record the caller owes its
+# artifact, and a caller that could not obtain it because the arm half-failed would be unable to say
+# what it had already caused.
+# -------------------------------------------------------------------------------------------------
+function Set-Phase88Seam {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Tier,
+        [Parameter(Mandatory)][string]$Name,
+        [string]$Value = '1'
+    )
+
+    $result = @{
+        Ok             = $false
+        FailureCode    = 0
+        Tier           = $Tier
+        Name           = $Name
+        Value          = $Value
+        Armed          = $false
+        PodNamesBefore = @()
+        PodNamesAfter  = @()
+        ArmedUtc       = $null
+        Detail         = ''
+    }
+
+    $t = Resolve-Phase88Tier $Tier
+    $seam = Resolve-Phase88Seam -Tier $Tier -Name $Name
+    if ($null -eq $t -or $null -eq $seam) {
+        $result.FailureCode = 61
+        $result.Detail = "('$Tier', '$Name') is not an allow-listed Phase-88 seam pair — no command issued."
+        return $result
+    }
+    if ("$Value" -notmatch '^[A-Za-z0-9_.:-]{1,64}$') {
+        $result.FailureCode = 61
+        $result.Detail = "seam value '$Value' is not a permitted token — no command issued."
+        return $result
+    }
+
+    $result.PodNamesBefore = (Get-Phase88PodResult -Tier $t).Names
+
+    $arm = Invoke-Phase88Ctl -Arguments @('set', 'env', "deployment/$t", "$seam=$Value")
+    if (-not $arm.Ok) {
+        $result.FailureCode = 61
+        $result.Detail = "arming '$seam' on '$t' failed (exit $($arm.ExitCode)): $($arm.Error)"
+        $result.PodNamesAfter = (Get-Phase88PodResult -Tier $t).Names
+        return $result
+    }
+    $result.Armed = $true
+
+    if (-not (Wait-TierSettled -Tier $t -TimeoutSeconds 180)) {
+        $result.FailureCode = 61
+        $result.Detail = "'$t' did not settle within 180s after arming '$seam' — the seam IS armed; the caller's finally must still disarm it."
+        $result.PodNamesAfter = (Get-Phase88PodResult -Tier $t).Names
+        return $result
+    }
+
+    $result.PodNamesAfter = (Get-Phase88PodResult -Tier $t).Names
+    $result.ArmedUtc = ([DateTimeOffset]::UtcNow).ToString('o')
+    $result.Ok = $true
+    return $result
+}
+
+# -------------------------------------------------------------------------------------------------
+# DISARM a fault seam. The trailing hyphen in the removal argument is the mechanism; the argument is
+# a static table literal, never assembled here.
+#
+# SAFE TO CALL WHEN THE SEAM WAS NEVER ARMED — removing an absent variable is a no-op rollout — so a
+# caller can and MUST invoke this unconditionally from its outer finally, without tracking whether
+# the arm succeeded. That property is the whole point: an interrupted run still disarms.
+# -------------------------------------------------------------------------------------------------
+function Clear-Phase88Seam {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Tier,
+        [Parameter(Mandatory)][string]$Name
+    )
+
+    $result = @{
+        Ok          = $false
+        FailureCode = 0
+        Tier        = $Tier
+        Name        = $Name
+        ClearedUtc  = $null
+        Detail      = ''
+    }
+
+    $t = Resolve-Phase88Tier $Tier
+    $seam = Resolve-Phase88Seam -Tier $Tier -Name $Name
+    if ($null -eq $t -or $null -eq $seam -or -not $script:Phase88SeamRemoveArg.ContainsKey($seam)) {
+        $result.FailureCode = 61
+        $result.Detail = "('$Tier', '$Name') is not an allow-listed Phase-88 seam pair — no command issued."
+        return $result
+    }
+
+    $removeArg = $script:Phase88SeamRemoveArg[$seam]      # static literal: '<NAME>-'
+    $clear = Invoke-Phase88Ctl -Arguments @('set', 'env', "deployment/$t", $removeArg)
+    if (-not $clear.Ok) {
+        $result.FailureCode = 61
+        $result.Detail = "disarming '$seam' on '$t' failed (exit $($clear.ExitCode)): $($clear.Error)"
+        return $result
+    }
+
+    if (-not (Wait-TierSettled -Tier $t -TimeoutSeconds 180)) {
+        $result.FailureCode = 61
+        $result.Detail = "'$t' did not settle within 180s after disarming '$seam' — verify with Assert-StackRestored before trusting any later capture."
+        return $result
+    }
+
+    $result.ClearedUtc = ([DateTimeOffset]::UtcNow).ToString('o')
+    $result.Ok = $true
+    return $result
+}
+
+# -------------------------------------------------------------------------------------------------
+# The restore CLAIM SET. Three explicit booleans intended to become claim fields in every scenario
+# artifact — the alternative is a scenario that assumes it left the stack clean, which is how a
+# left-armed seam survives to poison the next run.
+#
+# -ExpectedReplicas / -ExpectedImages are the values the caller READ from the live deployments
+# BEFORE its scenario (Get-LiveReplicas / Get-LiveImage). They are deliberately not defaults and not
+# a table in this file: a hardcoded expectation is the same defect as a hardcoded restore.
+#
+# Fail-closed throughout: a tier that cannot be READ is a failed claim, not an absent one. A missing
+# expectation is a failed claim too — an unstated expectation cannot be satisfied.
+# -------------------------------------------------------------------------------------------------
+function Assert-StackRestored {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string[]]$Tiers,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$ExpectedReplicas,
+        [Parameter(Mandatory)][System.Collections.IDictionary]$ExpectedImages
+    )
+
+    $result = @{
+        Ok                = $false
+        FailureCode       = 0
+        SeamVarsClean     = $true
+        ReplicasRestored  = $true
+        ImagesUnchanged   = $true
+        SeamVarsFound     = @()
+        ReplicaMismatches = @()
+        ImageMismatches   = @()
+        UnknownTiers      = @()
+        CheckedUtc        = ([DateTimeOffset]::UtcNow).ToString('o')
+    }
+
+    foreach ($requested in @($Tiers)) {
+        $t = Resolve-Phase88Tier $requested
+        if ($null -eq $t) {
+            $result.UnknownTiers += "$requested"
+            $result.SeamVarsClean = $false
+            $result.ReplicasRestored = $false
+            $result.ImagesUnchanged = $false
+            continue
+        }
+
+        # --- seam residue: read the live Deployment env and match the residue pattern -------------
+        $envRead = Invoke-Phase88Ctl -Arguments @('get', 'deploy', $t, '-o', 'jsonpath={.spec.template.spec.containers[0].env}')
+        if (-not $envRead.Ok) {
+            $result.SeamVarsClean = $false
+            $result.SeamVarsFound += "${t}:env-read-failed"
+        } elseif (("$($envRead.Output)") -match 'DEFEAT|REINJECT_DELAY') {
+            $result.SeamVarsClean = $false
+            $result.SeamVarsFound += $t
+        }
+
+        # --- replica restore ----------------------------------------------------------------------
+        $liveReplicas = Get-LiveReplicas -Tier $t
+        if (-not $ExpectedReplicas.Contains($t)) {
+            $result.ReplicasRestored = $false
+            $result.ReplicaMismatches += "${t}: no expected replica count supplied (live=$liveReplicas)"
+        } else {
+            $wantReplicas = [int]$ExpectedReplicas[$t]
+            if ($liveReplicas -lt 0) {
+                $result.ReplicasRestored = $false
+                $result.ReplicaMismatches += "${t}: replica read failed (expected $wantReplicas)"
+            } elseif ($liveReplicas -ne $wantReplicas) {
+                $result.ReplicasRestored = $false
+                $result.ReplicaMismatches += "${t}: live=$liveReplicas expected=$wantReplicas"
+            }
+        }
+
+        # --- image unchanged ----------------------------------------------------------------------
+        $liveImage = Get-LiveImage -Tier $t
+        if (-not $ExpectedImages.Contains($t)) {
+            $result.ImagesUnchanged = $false
+            $result.ImageMismatches += "${t}: no expected image supplied (live='$liveImage')"
+        } else {
+            $wantImage = "$($ExpectedImages[$t])"
+            if ([string]::IsNullOrWhiteSpace($liveImage)) {
+                $result.ImagesUnchanged = $false
+                $result.ImageMismatches += "${t}: image read failed (expected '$wantImage')"
+            } elseif (-not [string]::Equals($liveImage, $wantImage, [System.StringComparison]::Ordinal)) {
+                $result.ImagesUnchanged = $false
+                $result.ImageMismatches += "${t}: live='$liveImage' expected='$wantImage'"
+            }
+        }
+    }
+
+    $result.Ok = ($result.SeamVarsClean -and $result.ReplicasRestored -and $result.ImagesUnchanged)
+    if (-not $result.Ok) { $result.FailureCode = 65 }
     return $result
 }
