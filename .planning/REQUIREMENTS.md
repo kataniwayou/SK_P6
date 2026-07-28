@@ -43,6 +43,27 @@ No production source code changes: every label and series the dashboards consume
   Both dropdowns must enumerate the 4 service classes exactly. The pod dropdown is asserted as a **superset** — every live pod appears — not as an exact live list *(amended 2026-07-27, OQ-2 / research F-7)*: `label_values()` reads the Prometheus index and returns recently-dead pods too (measured: 4 keeper pods listed while 2 were alive, even at a 60-second window). This is index granularity, not a Grafana setting, and VAR-02's `label_values()` mandate is kept as-is.
 - [x] **VER-02**: Portability is demonstrated, not assumed: the dashboards are proven to load from the repo JSON alone after a Grafana pod delete/recreate (no PVC, no manual step).
 
+### DISC — Panel Discrimination — Phase 88
+
+Roadmap Success-Criterion mapping for the whole Phase-88 family: **SC1→DISC-01, SC2→DISC-02+HAND-04, SC3→DISC-03, SC4→DISC-04, SC5→DISC-05, SC6→DISC-06, SC7→DISC-07, SC8→HAND-01, SC9→HAND-02+HAND-03+HAND-04.** VER-01's two-class assertion (Class A must return a real sample; Class B may render a guarded `0`) is a **prerequisite** of this phase, not a deliverable of it — Phase 87 satisfied it, and Phase 88 starts from a dashboard already proven to render.
+
+- [ ] **DISC-01**: Every one of the fourteen business panels has a recorded healthy baseline band — captured from a settled stack over an **absolute, pinned** time window at a fixed browser viewport, read from the rendered panel — stated as a numeric interval plus the regime it belongs to (rate / zero-floor / range-cumulative).
+- [ ] **DISC-02**: Each of the fourteen panels has been observed **changing in the predicted direction** under the fault it exists to reveal, asserted from the rendered Grafana panel via Playwright, with the movement outside its DISC-01 band for **≥ 2 consecutive 60 s samples** — or is recorded in an accepted-unproven register naming the reason its fault could not be driven safely.
+- [ ] **DISC-03**: Every scenario carries a cross-talk control: an explicit, pre-declared list of panels the fault should **not** affect, each asserted to have remained inside its DISC-01 band for the whole fault window. A scenario with an empty cross-talk list is a defect.
+- [ ] **DISC-04**: Panels 2 (`Keeper consumed vs sent`) and 8 (`Keeper consumed − sent gap`) have each been observed **non-zero** during a real recovery event — panel 2 with keeper reinject intact (consumed and sent both move, gap stays 0), panel 8 with the reinject suppressed (consumed moves, sent does not, gap goes red).
+- [ ] **DISC-05**: A repeatable, runtime-only mechanism exists for arming and disarming the Phase-79 fault seams on the k8s stack. It edits **no manifest**, and after every scenario the stack is asserted restored: **zero** seam env vars on `keeper` and `processor-sample`, replica counts equal to the values read from the live deployments **before** the scenario, and images unchanged.
+- [ ] **DISC-06**: Every seam-dependent or `kubectl scale`-dependent scenario **re-captures its baseline after** the resulting rollout has settled (all replicas Ready, ≥ 2 export cadences elapsed), and the rollout discontinuity — the old/new `service_instance_id` pair and its timestamp — is recorded in the scenario artifact as an **expected artifact**, never scored as movement.
+- [ ] **DISC-07**: The minimum detectable fault duration is measured by a step-ladder of controlled fault durations and recorded **per regime** — separately for counter-backed panels (where the event survives but its timing is smeared by the 240 s rate window) and gauge-backed panels (where an event between two 60 s exports is lost entirely).
+
+### HAND — Handoff Readiness — Phase 88
+
+- [ ] **HAND-01**: A symptom → panel → action runbook exists covering every abnormal state this phase drove, each row citing the scenario id that proved it and the measured before/after values.
+- [ ] **HAND-02**: A handoff readiness verdict is recorded, listing (a) blocking gaps, (b) every panel that misleads by default — at minimum the structural offsets on panels 4 and 5, the axis-zoom on panel 9, and the guarded zeros on 2/6/7/8/13 — and (c) each panel's accepted-unproven status where applicable.
+- [ ] **HAND-03**: Each panel is scored against a fixed six-question practicality rubric (nameable / falsifiable / discriminating / actionable / non-misleading / reachable), yes-partial-no, no weights, with the dashboard verdict stated as the blocking-gap list rather than an aggregate score. Supports Success Criterion 9.
+- [ ] **HAND-04**: An accepted-unproven register records panel 7 (`processor_spawn_dropped`, user-decided this session) and any panel a Wave-0 probe shows cannot be driven safely, each with its reason, the log-based corroboration route maintenance should use instead, and what would be needed to prove it in a future phase. Supports Success Criteria 2 and 9.
+
+Note: DISC-02's "fourteen panels" and HAND-04's register are the same set partitioned two ways. The register is the single source of truth for what is unproven, so the two cannot drift apart.
+
 ## Future Requirements (deferred — future Kafka milestone)
 
 - **KIMP-01**: A KafkaImporter processor, triggered by the scheduler as a Mode-2 entry step (`executionId == Guid.Empty`), consumes up to N messages per dispatch from a configured topic and consumer group.
@@ -84,3 +105,14 @@ No production source code changes: every label and series the dashboards consume
 | VAR-04 | 87 | Complete |
 | VER-01 | 87 | Complete |
 | VER-02 | 87 | Complete |
+| DISC-01 | 88 | Pending |
+| DISC-02 | 88 | Pending |
+| DISC-03 | 88 | Pending |
+| DISC-04 | 88 | Pending |
+| DISC-05 | 88 | Pending |
+| DISC-06 | 88 | Pending |
+| DISC-07 | 88 | Pending |
+| HAND-01 | 88 | Pending |
+| HAND-02 | 88 | Pending |
+| HAND-03 | 88 | Pending |
+| HAND-04 | 88 | Pending |
