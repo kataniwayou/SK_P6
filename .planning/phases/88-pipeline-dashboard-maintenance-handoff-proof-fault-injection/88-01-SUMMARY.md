@@ -45,6 +45,11 @@ patterns-established:
   - "Env contract cleared in a finally so a later batch cannot inherit a stale WINDOWS value and silently read the wrong time range"
   - "NoData modelled as a first-class panel STATE with its own movement direction, not as a read failure"
 
+# Copied from this plan's `requirements` frontmatter — these are the ids this plan SERVES, i.e. the
+# ones whose registration and reading mechanism it delivers. NONE of them is PROVEN yet: their
+# traceability rows in .planning/REQUIREMENTS.md deliberately remain `Pending` until the later plans
+# capture the baselines (88-04), drive the faults (88-05..88-08), and write the runbook/verdict
+# (88-09..88-11). See deviation 3.
 requirements-completed: [DISC-01, DISC-02, DISC-03, DISC-07, HAND-01, HAND-02, HAND-03, HAND-04]
 
 # Metrics
@@ -112,10 +117,18 @@ completed: 2026-07-28
 - **Verification:** Both forbidden-token checks (`.k8s-portforward-pids`, `docker compose`) return no match; the `##PANEL-BATCH-END##` presence check still matches.
 - **Committed in:** `1ab7113` (Task 3 commit)
 
+**3. [Rule 1 - Bug] Reverted a state-update pass that marked eight unproven requirements Complete**
+- **Found during:** Post-task state updates
+- **Issue:** The standard `requirements mark-complete` step (fed from this plan's `requirements` frontmatter) flipped DISC-01, DISC-02, DISC-03, DISC-07 and HAND-01..04 to `[x]` / `Complete`. That asserts falsehoods of exactly the kind this phase exists to eliminate: DISC-01 claims every panel has a recorded baseline band (zero have been captured), DISC-02 claims every panel has been seen moving under its fault (none has), HAND-01 claims a runbook exists (it does not). It also contradicted Task 1's own acceptance criteria, which require each row to read `| ID | 88 | Pending |`.
+- **Fix:** `git checkout -- .planning/REQUIREMENTS.md` to restore the committed state. All eleven Phase-88 rows are `Pending`; zero are `Complete`. This plan REGISTERS the family and builds the reading mechanism — the proofs land in 88-04 through 88-11, and each of those plans should mark only what it actually proved.
+- **Files modified:** `.planning/REQUIREMENTS.md` (restored to commit `b59698d` content)
+- **Verification:** 11 rows match `^\| \S+ \| 88 \| Pending \|`, 0 match `^\| \S+ \| 88 \| Complete \|`; `git status` shows the file clean.
+- **Committed in:** n/a — the erroneous change was never committed; the revert restored `b59698d`'s content.
+
 ---
 
-**Total deviations:** 2 auto-fixed (1 bug, 1 blocking)
-**Impact on plan:** Both were caught by the plan's own acceptance criteria before commit. No scope change, no new dependency, no cluster mutation.
+**Total deviations:** 3 auto-fixed (2 bugs, 1 blocking)
+**Impact on plan:** All three were caught by the plan's own acceptance criteria (two before commit, one before the state commit). No scope change, no new dependency, no cluster mutation.
 
 ## Issues Encountered
 
