@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v13.0.0
 milestone_name: Observability Dashboards
 status: executing
-stopped_at: Completed 88-02-PLAN.md
-last_updated: "2026-07-28T18:03:29.578Z"
+stopped_at: Completed 88-05-PLAN.md
+last_updated: "2026-07-28T18:45:10.860Z"
 last_activity: 2026-07-28
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 26
-  completed_plans: 19
+  completed_plans: 20
   percent: 67
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Phase: 88 (pipeline-dashboard-maintenance-handoff-proof-fault-injection) — EXECUTING
-Plan: 5 of 11
+Plan: 6 of 11
 Status: Ready to execute
 Last activity: 2026-07-28
 Current focus: Phase 87 — awaiting `/gsd-plan-phase 87`
@@ -721,7 +721,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [███████░░░] 73%
+Progress: [████████░░] 77%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1124,6 +1124,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 88 P02 | 30min | 2 tasks | 1 files |
 | Phase 88 P03 | 95min | 3 tasks | 33 files |
 | Phase 88 P04 | 115 | 3 tasks | 6 files |
+| Phase 88 P05 | 75min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1704,6 +1705,9 @@ Recent decisions affecting current work:
 - [Phase 88]: 88-02: Phase-88 fault library funnels every cluster command through one 'kubectl -n skp' site and resolves tier/seam names ordinally against static tables — a workload name on a command line is never the caller's string — T-88-01/T-88-04 made structural rather than procedural: a cross-namespace or non-allow-listed command is impossible by construction, and the plan's line-equality gate on '-n skp' stays meaningful
 - [Phase 88]: 88-02: replica restore is always the value READ from the live deployment immediately before the fault, re-read afterwards and returned as an explicit ReplicasRestored claim; the stale phase-80 replica map is asserted absent — That map's orchestrator=1 contradicts k8s/31-orchestrator.yaml:41 (replicas: 3, Phase 83 HA-06); copying it would have taken the HA tier 3 -> 1 and never put it back, silently, because a single orchestrator still works
 - [Phase 88]: 88-02: DISC-05 and DISC-06 left Pending — this plan delivers the mechanism, but both requirements assert properties of scenarios that do not exist until 88-05..88-08 — Follows 88-01 deviation 3: mark only what was actually proven; the seam ARM path has never been executed against the cluster
+- [Phase 88]: 88-05: WEB-02 recorded as an accepted-unproven ROW, not attempted — no substitute fault invented; the drop is re-confirmed against the wave-0 probe field before anything is written
+- [Phase 88]: 88-05: panel 12's legend-gain criterion is measured-unsatisfiable (all six status series were present-and-zero before the drive); its discrimination is the stronger numeric form — two exactly-zero bands going non-zero for 6 consecutive samples
+- [Phase 88]: 88-05: http_server_active_requests read exactly 0 at every export tick under 2456 sustained requests — panel 14's movement is carried by kestrel_active_connections alone, so LADDER-01 must treat panel 14 as two rungs, not one
 
 ### Roadmap Milestone Log
 
@@ -1815,8 +1819,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-28T18:03:22.794Z
-Stopped at: Completed 88-02-PLAN.md
+Last session: 2026-07-28T18:45:10.835Z
+Stopped at: Completed 88-05-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
