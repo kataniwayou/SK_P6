@@ -1,0 +1,754 @@
+<#
+.SYNOPSIS
+    Phase 88 panel-discrimination driver — the scenario table, the baseline capture, and the artifact
+    writer for the rendered-panel proof. Plan 88-04 authors the frame and `-Mode Baseline` (BASE-01);
+    plans 88-05..88-08 add the fault-driving modes.
+
+.DESCRIPTION
+    WHAT THIS SCRIPT IS FOR
+        The roadmap's first success criterion is that "it moved" must be falsifiable. It is not
+        falsifiable without a NULL HYPOTHESIS: a recorded healthy band, per panel, captured from a
+        settled stack over absolute pinned windows of identical width at a fixed viewport, read from
+        the RENDERED panel. `-Mode Baseline` captures exactly that and writes it to
+        `analyzer-reports/phase-88-BASE-01.json`.
+
+        The rendered panel is the VERDICT (locked constraint 2). Prometheus is queried through
+        Grafana's own datasource proxy for DIAGNOSIS only, recorded beside each panel value with a
+        `DiagnosticAgreesWithPanel` flag. Where the two disagree, the disagreement is a FINDING to
+        record loudly — it is the direct control against the Phase-87 defect where 30/30 Class-A
+        checks reported green against three panels that were rendering "No data".
+
+    THE THREE STATISTICAL REGIMES (one rule cannot serve fourteen panels)
+        A  jittering rate/level    1, 3, 5, 9, 10, 11, 12, 14
+           band = mean +/- 3 sigma with a +/-10 % floor; moved = >= 2 consecutive samples outside.
+        B  zero-floor event counter 2, 6, 7, 8, 13   (guarded by `or vector(0)`)
+           band = EXACTLY 0..0. No statistics are needed and none are wanted: the null hypothesis is
+           exactly zero and a SINGLE event falsifies it. This is the strongest discrimination the
+           phase has, and widening the band by an epsilon would destroy it.
+        C  monotonic range-cumulative stat  4   (`increase(...[$__range])`)
+           Its value depends on the VISIBLE window width. At this phase's fixed 60 s sub-window the
+           reading is a PER-MINUTE increase and is banded exactly like a Regime-A value. SEPARATELY a
+           single wide (1 hour) capture is recorded as RangeCumulativeLevelBaseline — that is the
+           number an operator actually sees on the shipped dashboard, it grows on a HEALTHY stack too,
+           and it is recorded for the HAND-02 misleading-by-default list. It is NEVER scored as
+           movement; applying a Regime-A band to it would be a guaranteed false positive.
+
+    READER AMENDMENT THIS DRIVER DEPENDS ON (88-PROBE-DECISIONS.md Record 3)
+        The wave-0 probe measured that legend VALUES parsed while legend NAMES bound to NOTHING, and
+        that the `data-testid VizLegend series` recovery path matches ZERO elements on this render.
+        `scripts/phase-88-panel-read.js` was amended before this driver was written, and the fix is
+        re-provable hermetically at any time with:
+            PANEL_READ_SELFTEST=1 node scripts/phase-88-panel-read.js
+        Consequences honoured throughout this file: per-series reads are POSITIONAL (-SeriesIndex),
+        the series NAME is recorded beside each band rather than used as a selector, and panel 2 is
+        asserted NUMERICALLY first with the legend SUFFIX change (`consumed` -> `consumed keeper`) as
+        the corroborating second signal. `innerText` normalises the trailing space away entirely, so
+        the trailing-space formulation the research proposed does not exist and is never looked for.
+
+    THE -ScenarioId PARAMETER SELECTS A ROW AND NOTHING ELSE (T-88-13)
+        No tier, deployment name, env-var name, panel id, path or query is ever DERIVED from the
+        parameter. `$Scenarios` is a static in-script [ordered] table; an unknown id, or an id whose
+        recorded status is Dropped or Blocked, exits 64 with the reason. A dropped scenario stays
+        VISIBLE as a row rather than being deleted, so the phase roll-up can show it as a row rather
+        than as an absence.
+
+    Flow (lettered; -Mode Baseline):
+
+        GUARD    scenario resolution    unknown / Dropped / Blocked id -> 64, before anything else
+        VALID    table self-validation  every `scenario` row must declare a non-empty cross-talk list
+        PRE      precondition gate      docker-desktop context + shared stack forwards + all four
+                                        tiers fully Ready at their LIVE-READ counts + ZERO seam vars
+        STEP A   grafana forward        loopback-only; reuses an already-live tunnel rather than
+                                        starting a second one it would not own
+        STEP B   rest-state record      StackCleanAtStart + the pre-run replica/image maps
+        STEP C   traffic drive          fan-out activation (204) + steady host HTTP load, held for
+                                        the whole capture
+        STEP D   rate interval          derived from the LIVE datasource timeInterval, never assumed
+        STEP E   pinned capture         ONE batch: 14 panels x 10 abutting 60 s absolute windows
+        STEP F   banding                per-regime bands, one entry per legend series
+        STEP G   wide capture           the single 1-hour panel-4 range-cumulative level
+        STEP H   diagnostic proxy       query_range beside each rendered value (DIAGNOSIS only)
+        STEP J   artifact + verdict     write the JSON, THEN resolve the exit code from it
+        STEP Z   teardown               disarm unconditionally, stop only a forward this script owns
+
+    EXIT-CODE TABLE (the 0/1/2 classes are owned by lib/exit-code-resolution.ps1; every infra abort
+    has its OWN distinct code so an abort can never be read as a verdict — the T-87-18 control):
+        0   verdict PASS          (Resolve-AnalyzerExitCode Pass)
+        1   verdict FAIL          (Resolve-AnalyzerExitCode Fail / unknown fail-closed)
+        2   verdict INCONCLUSIVE  (Resolve-AnalyzerExitCode Inconclusive)
+        15  the grafana port-forward never carried traffic
+        20  grafana /api/health never reported database ok
+        50  the traffic drive failed (seed / wf-id lookup / activation != 204)
+        60  the scale fault failed as INFRASTRUCTURE
+        61  the seam arm or disarm failed
+        62  could not read live replicas or images
+        63  the panel reader is unavailable (node / run.js / the reader script missing)
+        64  usage or precondition error (unknown/dropped scenario id, wrong kube context, shared
+            forwards down, stack not at rest, a scenario row with an empty cross-talk list)
+        65  the restore assertion failed (the stack was NOT left clean)
+        66  a panel could not be READ AT ALL in baseline mode
+
+.PARAMETER ScenarioId
+    A key of the static $Scenarios table. It SELECTS a row; nothing is derived from it.
+
+.PARAMETER Mode
+    Optional confirmation of the selected row's own mode. When supplied it must MATCH the row (an
+    id whose row says `baseline` cannot be run as a scenario), otherwise 64. Left empty, the row's
+    own mode is used — the row, not the caller, is authoritative.
+
+.PARAMETER SkipTraffic
+    Capture without driving traffic. The Class-A panels cannot be banded honestly against an idle
+    stack, so this DEGRADES the verdict to Inconclusive and exits 2. It exists for reader debugging,
+    never for producing a baseline.
+
+.NOTES
+    Dev/ops-only tooling. No product source is touched and no manifest is edited.
+
+    PORT-FORWARD OWNERSHIP (T-88-05) — this script starts its OWN grafana forward on loopback port
+    3000 and keeps the PID in an IN-MEMORY VARIABLE ONLY. It never creates, reads or writes the
+    shared forward PID registry that scripts/phase-80-up.ps1 owns: that file holds the eight shared
+    harness tunnels, so reading it for teardown would kill all eight and break a concurrent sweep.
+    Teardown stops exactly one PID, behind a recycled-PID guard, and ONLY when this script was the
+    process that started it. The forward binds --address 127.0.0.1 explicitly so the bridged host
+    port stays loopback-only (T-88-04).
+
+    NO STATIC REPLICA MAP (T-88-02). Every restore target is READ from the live Deployment
+    immediately before the mutation and re-read afterwards, inside phase-88-cluster-ops.ps1. The
+    phase-80 static map is stale — it records the orchestrator at 1, and Phase 83 took it to 3 for
+    HA-06 — so copying it would quietly amputate the HA tier. It is asserted absent from this file.
+
+    NO MANIFEST RE-APPLY (T-88-10). A kustomize re-apply would revert the four app Deployments to
+    their manifest image pins, whose bits emit no `source` resource attribute, making every correct
+    dashboard look broken. Asserted absent.
+
+    admin/admin is the deliberate dev posture set in k8s/23-grafana.yaml and is reachable only over
+    loopback; auth hardening is out of scope for this milestone, so the credential is inline rather
+    than parameterised — parameterising it would imply a security property this deployment does not
+    have.
+
+    Prometheus retention on this stack was MEASURED at 225 h (~9.4 days) by the wave-0 probe
+    (`OldestSampleUtc: 2026-07-19T07:38:06Z`, `RetentionHorizonLimited: false`). The ~12 h figure that
+    87-FINDINGS.md §14 recorded and 88-RESEARCH.md propagated is wrong by roughly nineteen times. The
+    discipline of capturing evidence INTO the artifact during the run stays — it is right for
+    reproducibility regardless — but no window here is compressed and no settle is skipped on the
+    belief that data is about to disappear.
+#>
+
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][string]$ScenarioId,
+    [ValidateSet('', 'Baseline', 'Scenario', 'DurationLadder')][string]$Mode = '',
+    [switch]$SkipTraffic
+)
+
+$ErrorActionPreference = 'Stop'
+Set-StrictMode -Version Latest
+
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+
+# Declared BEFORE the try so the outer finally can read them under StrictMode even when the guard or
+# the precondition gate exits before the step that would have set them ever runs.
+$gfForwardPid    = 0
+$gfForwardOwned  = $false
+$seamArmed       = $false
+$seamTier        = ''
+$seamVar         = ''
+$scaledTier      = ''
+$replicasBefore  = -1
+$probeWorkflowId = ''
+
+Push-Location $repoRoot
+try {
+
+    # -----------------------------------------------------------------------------------------
+    # prefixed console-trace helper (Cyan step banner / Gray sub-detail / Yellow warning /
+    # Red fatal-before-exit / Green success — the repo-wide colour convention).
+    # -----------------------------------------------------------------------------------------
+    function Write-Phase([string]$msg, [string]$color = 'Cyan') {
+        Write-Host "[phase-88-panel-discriminate] $msg" -ForegroundColor $color
+    }
+
+    # -----------------------------------------------------------------------------------------
+    # Dot-source the three shared libraries. exit-code-resolution.ps1 owns the verdict -> exit
+    # mapping: Resolve-AnalyzerExitCode is NEVER reimplemented as an inline verdict switch here,
+    # because its fail-closed default (unknown/absent verdict -> 1) is the T-87-18 control.
+    # phase-88-panel-read.ps1 owns the browser read and the banding; phase-88-cluster-ops.ps1 owns
+    # every cluster mutation and the restore claim set.
+    # -----------------------------------------------------------------------------------------
+    . (Join-Path $PSScriptRoot 'lib/exit-code-resolution.ps1')
+    . (Join-Path $PSScriptRoot 'lib/phase-88-panel-read.ps1')
+    . (Join-Path $PSScriptRoot 'lib/phase-88-cluster-ops.ps1')
+
+    $gf       = 'http://127.0.0.1:3000'
+    $proxy    = "$gf/api/datasources/proxy/uid/skp-prometheus"
+    $adminB64 = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes('admin:admin'))
+    $auth     = @{ Authorization = "Basic $adminB64" }
+    $api      = 'http://localhost:8080'
+
+    # Pinned viewport for every browser read in this phase. maxDataPoints derives from the panel's
+    # PIXEL WIDTH, which sets the query step, which sets $__rate_interval — so an unpinned viewport
+    # would make two captures incomparable even with identical time windows. 1920x1080 is the value
+    # the wave-0 probe recorded, and every Phase-88 artifact states the same pair.
+    $ViewportWidth  = 1920
+    $ViewportHeight = 1080
+
+    # LOCKED BY PQ-02 (`LocatorModeChosen: viewpanel`, 20/20 pairs read, State Ok). No plan in this
+    # phase passes PANEL_TITLES; the header-walk mode stays an implemented fallback this measurement
+    # did not need. The verbatim titles live in $Panels anyway, so a future regression in the
+    # `?viewPanel=panel-<id>` URL costs a config change rather than a rediscovery.
+    $LocatorMode = 'viewpanel'
+
+    # STATIC tier list, in the restore-claim order every Phase-88 artifact uses.
+    $Tiers = @('baseapi-service', 'keeper', 'orchestrator', 'processor-sample')
+
+    $screenshotRoot = Join-Path $repoRoot 'analyzer-reports/phase-88-screenshots'
+    $reportDir      = Join-Path $repoRoot 'analyzer-reports'
+
+    # =========================================================================================
+    # THE FOURTEEN BUSINESS PANELS — static, keyed by panel id.
+    #
+    # Titles are copied BYTE-FOR-BYTE from k8s/dashboards/business.json. That is not fussiness: the
+    # header-walk locator finds a panel by its rendered header text, so a title that drifts from the
+    # dashboard would fail to locate the panel SILENTLY rather than loudly.
+    #
+    # Guarded = the target expression ends in `or vector(0)`, so the panel renders a comfortable 0
+    # instead of "No data" when its counter has never been emitted. That is exactly why a guarded
+    # green is NOT evidence of health, and it is the property the HAND-02 misleading-by-default list
+    # exists to record. Panel 9 is deliberately UNGUARDED so a dead keeper renders "No data".
+    # =========================================================================================
+    $Panels = [ordered]@{
+        '1'  = @{ Title = 'Orchestrator consumed vs sent (conservation)';                     Type = 'timeseries'; Regime = 'A'; Guarded = $false; SeriesName = 'consumed {{source}} / sent {{source}}';                                                   Notes = 'two series per source label' }
+        '2'  = @{ Title = 'Keeper consumed vs sent (conservation)';                           Type = 'timeseries'; Regime = 'B'; Guarded = $true;  SeriesName = 'consumed {{source}} / sent {{source}}';                                                   Notes = 'guard renders the label-less series as the bare word `consumed`; the suffix change to `consumed keeper` is the corroborating signal' }
+        '3'  = @{ Title = 'Processor consumed vs sent by image (conservation)';               Type = 'timeseries'; Regime = 'A'; Guarded = $false; SeriesName = 'consumed {{identityName}} / sent {{identityName}}';                                       Notes = 'two series per processor image' }
+        '4'  = @{ Title = 'Orchestrator sends minus processor pickups (structural - read the trend)'; Type = 'stat'; Regime = 'C'; Guarded = $false; SeriesName = 'gap';                                                                                  Notes = 'increase(...[$__range]) — banded on its per-minute value; the wide-window level is recorded separately and NEVER scored' }
+        '5'  = @{ Title = 'Per-processor dispatch gap';                                       Type = 'timeseries'; Regime = 'A'; Guarded = $false; SeriesName = '{{processorId}}';                                                                        Notes = 'one series per processor id' }
+        '6'  = @{ Title = 'Orchestrator unresolved steps in range';                           Type = 'stat';       Regime = 'B'; Guarded = $true;  SeriesName = 'unresolved';                                                                             Notes = 'ZERO-01 dropped (PQ-05) — accepted-unproven, HAND-04' }
+        '7'  = @{ Title = 'Processor dropped spawns in range';                                Type = 'stat';       Regime = 'B'; Guarded = $true;  SeriesName = 'dropped spawns';                                                                         Notes = 'accepted unproven, user-locked — no scenario drives it' }
+        '8'  = @{ Title = 'Keeper consumed - sent gap in range';                              Type = 'stat';       Regime = 'B'; Guarded = $true;  SeriesName = 'gap';                                                                                    Notes = 'ZERO-03 subject' }
+        '9'  = @{ Title = 'Keeper L2 probe heartbeat';                                        Type = 'timeseries'; Regime = 'A'; Guarded = $false; SeriesName = '{{service_instance_id}}';                                                                Notes = 'UNGUARDED BY DESIGN — a dead keeper renders "No data", which IS the discrimination signal' }
+        '10' = @{ Title = 'WebApi request rate by route';                                     Type = 'timeseries'; Regime = 'A'; Guarded = $false; SeriesName = '{{http_route}}';                                                                         Notes = 'one series per route' }
+        '11' = @{ Title = 'WebApi p95 request duration by route';                             Type = 'timeseries'; Regime = 'A'; Guarded = $false; SeriesName = '{{http_route}}';                                                                         Notes = 'histogram_quantile — partially gauge-like' }
+        '12' = @{ Title = 'WebApi status-code mix';                                           Type = 'timeseries'; Regime = 'A'; Guarded = $false; SeriesName = '{{http_response_status_code}}';                                                          Notes = 'one series per status code' }
+        '13' = @{ Title = 'WebApi 5xx ratio';                                                 Type = 'stat';       Regime = 'B'; Guarded = $true;  SeriesName = '5xx ratio';                                                                              Notes = 'WEB-02 dropped (PQ-03) — accepted-unproven, HAND-04' }
+        '14' = @{ Title = 'WebApi in-flight requests and Kestrel connections';                Type = 'timeseries'; Regime = 'A'; Guarded = $false; SeriesName = 'in-flight {{sid}} / kestrel active {{sid}} / kestrel queued {{sid}}';                    Notes = 'GAUGES — a condition that starts and ends between two exports is never recorded' }
+    }
+
+    # =========================================================================================
+    # PREDICTED-DIRECTION VOCABULARY. Recorded here so the scoring plans (88-05..88-08) map each
+    # token the same way rather than each re-deciding what "up-then-nodata" means.
+    #   up            Test-PanelMoved -Direction up        value above Band.High
+    #   down          Test-PanelMoved -Direction down      value below Band.Low
+    #   nonzero       Test-PanelMoved -Direction nonzero   Regime B's form: a 0..0 band, so ANY event
+    #   nodata        Test-PanelMoved -Direction nodata    >= 2 consecutive AfterStates of 'NoData'
+    #   slope-up      Regime C: the PER-MINUTE band is asserted 'up'; the wide-window level is NEVER
+    #                 scored, only recorded for the HAND-02 list
+    #   up-then-nodata  two assertions in sequence over one after-capture: 'up' across the early
+    #                 sub-windows, then 'nodata' once the series expires. Panel 5 only.
+    #   n/a           no scenario drives this panel; it goes to the HAND-04 register with its reason
+    # =========================================================================================
+    $DirectionVocabulary = @('up', 'down', 'nonzero', 'nodata', 'slope-up', 'up-then-nodata', 'n/a')
+
+    # =========================================================================================
+    # THE STATIC SCENARIO TABLE — every scenario this phase will ever run, authored once, extended
+    # by no one. Levers marked [PQ-nn] are set from the value RECORDED in 88-PROBE-DECISIONS.md, not
+    # assumed; each carries the probe field that decided it.
+    #
+    # A Dropped scenario stays in the table with its reason. Deleting it would make the phase roll-up
+    # show an ABSENCE where it should show a row — and an absence is exactly what the HAND-04
+    # accepted-unproven register exists to prevent.
+    # =========================================================================================
+    $Scenarios = [ordered]@{
+        'BASE-01' = @{
+            mode = 'baseline'; lever = 'none'; targetTier = ''; seamTier = ''; seamVar = ''
+            triggerSeamTier = ''; triggerSeamVar = ''; dwellSeconds = 0
+            panelIds = @('1','2','3','4','5','6','7','8','9','10','11','12','13','14')
+            predictedDirection = @{}
+            crossTalkPanels = @()          # baseline mode has no fault, so cross-talk is not defined
+            requiresRebaseline = $false; status = 'Locked'; statusReason = ''
+            decidedBy = 'PQ-02 LocatorModeChosen=viewpanel + PQ-04 RateIntervalPinned=true'
+            notes = 'the DISC-01 null hypothesis every later scenario is tested against'
+        }
+        'WEB-01' = @{
+            mode = 'scenario'; lever = 'http'; targetTier = ''; seamTier = ''; seamVar = ''
+            triggerSeamTier = ''; triggerSeamVar = ''; dwellSeconds = 180
+            panelIds = @('10','11','12','14')
+            predictedDirection = @{ '10' = 'up'; '11' = 'up'; '12' = 'up'; '14' = 'up' }
+            crossTalkPanels = @('1','3','9')
+            requiresRebaseline = $false; status = 'Locked'; statusReason = ''
+            decidedBy = 'PQ-03 ProbedEndpoints — GET /api/v1/__phase88_probe_unmatched -> 404 and POST /api/v1/orchestration/start [] -> 400 both observed'
+            notes = 'sustained host HTTP load >= 150 s, driving the two CONFIRMED inert status codes rather than inventing new ones'
+        }
+        'WEB-02' = @{
+            mode = 'scenario'; lever = 'http'; targetTier = ''; seamTier = ''; seamVar = ''
+            triggerSeamTier = ''; triggerSeamVar = ''; dwellSeconds = 120
+            panelIds = @('13')
+            predictedDirection = @{ '13' = 'nonzero' }
+            crossTalkPanels = @('1','3','9','10')
+            requiresRebaseline = $false; status = 'Dropped'
+            statusReason = 'no endpoint returns 5xx on safe input; the dependency-outage route costs a WebApi pod restart under the Phase-86 hard readiness latch and is out of budget'
+            decidedBy = 'PQ-03 Safe5xxFound=false over seven probed endpoints (five 404, one 400, one 422)'
+            notes = 'panel 13 goes to the HAND-04 accepted-unproven register; the redis-outage route was deliberately NOT substituted'
+        }
+        'SCALE-01' = @{
+            mode = 'scenario'; lever = 'scale'; targetTier = 'processor-sample'; seamTier = ''; seamVar = ''
+            triggerSeamTier = ''; triggerSeamVar = ''; dwellSeconds = 420
+            panelIds = @('3','4','5')
+            predictedDirection = @{ '3' = 'down'; '4' = 'slope-up'; '5' = 'up-then-nodata' }
+            crossTalkPanels = @('9','10','12','14')
+            requiresRebaseline = $true; status = 'Locked'; statusReason = ''
+            decidedBy = 'PQ-01 scale fault Ok=true, ReplicasRestored=true'
+            notes = 'restore is to the LIVE-READ count, never a tabled one'
+        }
+        'SCALE-02' = @{
+            mode = 'scenario'; lever = 'scale'; targetTier = 'orchestrator'; seamTier = ''; seamVar = ''
+            triggerSeamTier = ''; triggerSeamVar = ''; dwellSeconds = 240
+            panelIds = @('1')
+            predictedDirection = @{ '1' = 'down' }
+            crossTalkPanels = @('9','10','12')
+            requiresRebaseline = $true; status = 'Locked'; statusReason = ''
+            decidedBy = 'PQ-01 sequencer proven live; ReplicasBefore recorded the orchestrator at 3'
+            notes = 'the HA tier is 3 replicas — the stale phase-80 map says 1, which is why no map is used'
+        }
+        'SCALE-03' = @{
+            mode = 'scenario'; lever = 'scale'; targetTier = 'keeper'; seamTier = ''; seamVar = ''
+            triggerSeamTier = ''; triggerSeamVar = ''; dwellSeconds = 240
+            panelIds = @('9')
+            predictedDirection = @{ '9' = 'nodata' }
+            crossTalkPanels = @('1','3','10','12')
+            requiresRebaseline = $true; status = 'Locked'; statusReason = ''
+            decidedBy = 'PQ-02 TimeseriesLegendParsed=true (panel 9 was the PQ-02 subject)'
+            notes = 'panel 9 is unguarded, so the predicted direction is NoData rather than a value change'
+        }
+        'ZERO-01' = @{
+            mode = 'scenario'; lever = 'data'; targetTier = ''; seamTier = ''; seamVar = ''
+            triggerSeamTier = ''; triggerSeamVar = ''; dwellSeconds = 120
+            panelIds = @('6')
+            predictedDirection = @{ '6' = 'nonzero' }
+            crossTalkPanels = @('9','10','12','13')
+            requiresRebaseline = $false; status = 'Dropped'
+            statusReason = 'neither route reaches an orchestrator_step_unresolved increment: the API dangling edge is refused 422 at step-create, and the L2 step key is rewritten from Postgres by any stop/start cycle'
+            decidedBy = 'PQ-05 UnresolvedRouteChosen=none (danglingEdge 422 @ step-create, l2StepKeyViable=false)'
+            notes = 'panel 6 goes to the HAND-04 register; the counter is unreachable from outside src/ and the locked constraint forbids reaching inside it'
+        }
+        'ZERO-02' = @{
+            # [PQ-01] The lever is `seam`, NOT `scale`. The roadmap preferred driving a panel by
+            # system state alone; that preference does not survive contact with this cluster, where a
+            # real 90 s processor-tier crash produced ZERO keeper recovery series over a 30-minute
+            # range query covering the whole fault.
+            mode = 'scenario'; lever = 'seam'; targetTier = ''
+            seamTier = 'processor-sample'; seamVar = 'PROCESSOR_DEFEAT_READ'
+            triggerSeamTier = ''; triggerSeamVar = ''; dwellSeconds = 90
+            panelIds = @('2')
+            predictedDirection = @{ '2' = 'nonzero' }
+            crossTalkPanels = @('9','10','12')
+            requiresRebaseline = $true; status = 'Locked'; statusReason = ''
+            decidedBy = 'PQ-01 KeeperRecoveryTrafficObserved=false, KeeperConsumedSeriesCount=0'
+            notes = 'KEEPER_DEFEAT_REINJECT is left UNSET so the keeper consumes AND reinjects: consumed and sent both move and the panel-8 gap stays 0. Arm -> rollout -> settle >= 150 s -> RE-BASELINE -> trigger (DISC-06), so this row costs two rollouts, not none.'
+        }
+        'ZERO-03' = @{
+            # [PQ-06] The seam MECHANISM is proven to land and clear. What that does NOT license: it
+            # does not prove the deployed keeper image HONOURS the variable — only a real recovery
+            # event can show that, and PQ-01 established this cluster produces no recovery traffic
+            # without a trigger seam. So BOTH seams are armed: PROCESSOR_DEFEAT_READ to CREATE the
+            # recovery event, KEEPER_DEFEAT_REINJECT to SUPPRESS the reinject. A flat panel 8 is then
+            # an open question about the image, NOT a proof that the gap cannot open. Research
+            # assumption A6 remains unretired.
+            mode = 'scenario'; lever = 'seam'; targetTier = ''
+            seamTier = 'keeper'; seamVar = 'KEEPER_DEFEAT_REINJECT'
+            triggerSeamTier = 'processor-sample'; triggerSeamVar = 'PROCESSOR_DEFEAT_READ'
+            dwellSeconds = 90
+            panelIds = @('8')
+            predictedDirection = @{ '8' = 'nonzero' }
+            crossTalkPanels = @('6','7','13','10','12')
+            requiresRebaseline = $true; status = 'Locked'; statusReason = ''
+            decidedBy = 'PQ-06 SeamArmLanded=true + SeamDisarmClean=true; both seams required per Record 7'
+            notes = 'arm both -> rollout -> settle >= 150 s -> RE-BASELINE -> trigger -> capture -> restore -> disarm -> assert'
+        }
+        'LADDER-01' = @{
+            mode = 'ladder'; lever = 'scale+http'; targetTier = 'processor-sample'; seamTier = ''; seamVar = ''
+            triggerSeamTier = ''; triggerSeamVar = ''; dwellSeconds = 0
+            panelIds = @('3','4','14')
+            predictedDirection = @{ '3' = 'down'; '4' = 'slope-up'; '14' = 'up' }
+            crossTalkPanels = @('9','12')
+            requiresRebaseline = $true; status = 'Locked'; statusReason = ''
+            decidedBy = 'PQ-04 RateIntervalPinned=true + PQ-01 sequencer proven'
+            notes = 'the DISC-07 minimum-detectable-duration ladder. It is TWO answers, not one: counters smear (never lost) while gauges are sampled (a condition entirely between two exports is never recorded), so panel 14 rungs are scored separately from 3 and 4.'
+        }
+    }
+
+    # =========================================================================================
+    # GUARD — the id SELECTS a row and nothing else (T-88-13). Runs before ANY cluster access, so a
+    # bad id costs nothing and touches nothing.
+    # =========================================================================================
+    if (-not $Scenarios.Contains($ScenarioId)) {
+        Write-Phase "unknown scenario '$ScenarioId'." 'Red'
+        Write-Phase "Known scenarios: $($Scenarios.Keys -join ', ')" 'Yellow'
+        exit 64
+    }
+    $scenario = $Scenarios[$ScenarioId]
+
+    if ($scenario.status -ne 'Locked') {
+        Write-Phase "scenario '$ScenarioId' is $($scenario.status) and will not be run." 'Red'
+        Write-Phase "REASON: $($scenario.statusReason)" 'Yellow'
+        Write-Phase "DECIDED BY: $($scenario.decidedBy)" 'Yellow'
+        Write-Phase "It remains a ROW in the table on purpose — the roll-up must show it as a dropped row, not as an absence." 'Yellow'
+        exit 64
+    }
+
+    # -Mode is a CONFIRMATION, never a selector. The row is authoritative about what it is; a caller
+    # that believes otherwise is corrected rather than obeyed.
+    $rowMode = "$($scenario.mode)"
+    $modeAlias = @{ 'baseline' = 'Baseline'; 'scenario' = 'Scenario'; 'ladder' = 'DurationLadder' }
+    $expectedMode = $modeAlias[$rowMode]
+    if (-not [string]::IsNullOrWhiteSpace($Mode) -and $Mode -ne $expectedMode) {
+        Write-Phase "scenario '$ScenarioId' is a '$rowMode' row (-Mode $expectedMode); -Mode $Mode was requested." 'Red'
+        Write-Phase "The row decides its own mode; the parameter may only confirm it." 'Yellow'
+        exit 64
+    }
+
+    # =========================================================================================
+    # VALID — TABLE SELF-VALIDATION (DISC-03). A scenario with an EMPTY cross-talk list is a defect,
+    # not an omission: without a pre-declared list of panels that must NOT move, "the panel moved" is
+    # consistent with "everything moved", and the fault's blast radius is unmeasured. The list must be
+    # declared BEFORE the run, which is why it is validated at startup rather than at scoring time.
+    #
+    # Every predicted direction is also checked against the fixed vocabulary, so a typo in a later
+    # edit ('nodta') fails here rather than silently scoring as "did not move".
+    # =========================================================================================
+    $tableErrors = @()
+    foreach ($sid in $Scenarios.Keys) {
+        $row = $Scenarios[$sid]
+        if ("$($row.mode)" -eq 'scenario' -and @($row.crossTalkPanels).Count -eq 0) {
+            $tableErrors += "scenario row '$sid' declares an EMPTY crossTalkPanels list (DISC-03 requires a non-empty, pre-declared list)"
+        }
+        foreach ($pid_ in @($row.panelIds)) {
+            if (-not $Panels.Contains("$pid_")) {
+                $tableErrors += "scenario row '$sid' names panel '$pid_', which is not one of the fourteen business panels"
+            }
+        }
+        foreach ($pid_ in @($row.crossTalkPanels)) {
+            if (-not $Panels.Contains("$pid_")) {
+                $tableErrors += "scenario row '$sid' names cross-talk panel '$pid_', which is not one of the fourteen business panels"
+            }
+            if (@($row.panelIds) -contains "$pid_") {
+                $tableErrors += "scenario row '$sid' lists panel '$pid_' as BOTH a subject and a cross-talk control"
+            }
+        }
+        foreach ($k in @($row.predictedDirection.Keys)) {
+            $dir = "$($row.predictedDirection[$k])"
+            if ($DirectionVocabulary -notcontains $dir) {
+                $tableErrors += "scenario row '$sid' predicts direction '$dir' for panel '$k', which is not in the fixed vocabulary ($($DirectionVocabulary -join ', '))"
+            }
+        }
+    }
+    if (@($tableErrors).Count -gt 0) {
+        Write-Phase "the static scenario table is INVALID — refusing to run:" 'Red'
+        foreach ($e in $tableErrors) { Write-Phase "  $e" 'Red' }
+        exit 64
+    }
+
+    Write-Phase "scenario '$ScenarioId' ($rowMode, lever=$($scenario.lever)) — $($scenario.notes)"
+    Write-Phase "  decided by: $($scenario.decidedBy)" 'Gray'
+    Write-Phase "  panels [$(@($scenario.panelIds) -join ',')] cross-talk [$(@($scenario.crossTalkPanels) -join ',')]" 'Gray'
+
+    # =========================================================================================
+    # HELPERS
+    # =========================================================================================
+
+    # Start this script's OWN grafana forward and hand back the PID. Bound to loopback explicitly.
+    function Start-GrafanaForward {
+        $p = Start-Process kubectl -PassThru -WindowStyle Hidden `
+               -ArgumentList @('port-forward', 'svc/grafana', '3000:3000', '-n', 'skp', '--address', '127.0.0.1')
+        return [int]$p.Id
+    }
+
+    # Recycled-PID guard: only kill if the PID is STILL a live kubectl process. A forward may have
+    # exited and had its PID recycled by the OS — force-killing it blindly could terminate an
+    # unrelated process. Best-effort; never throws.
+    function Stop-GrafanaForward([int]$ForwardPid) {
+        if ($ForwardPid -le 0) { return }
+        try {
+            $proc = Get-Process -Id $ForwardPid -ErrorAction SilentlyContinue |
+                    Where-Object { $_.ProcessName -eq 'kubectl' }
+            if ($proc) { Stop-Process -Id $ForwardPid -Force -ErrorAction SilentlyContinue }
+        } catch { }
+    }
+
+    # A port-forward reports success on start even before the tunnel carries traffic, so gate on a
+    # REAL parsed `database == ok`. 0 healthy / 15 the tunnel never carried traffic at all / 20 it
+    # carried traffic but Grafana never reported its database ok.
+    function Wait-GrafanaHealthy([int]$TimeoutSeconds = 90) {
+        $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+        $sawHttp  = $false
+        while ((Get-Date) -lt $deadline) {
+            try {
+                $h = Invoke-RestMethod -Uri "$gf/api/health" -TimeoutSec 5 -ErrorAction Stop
+                $sawHttp = $true
+                if ("$($h.database)" -eq 'ok') { return 0 }
+            } catch { }
+            Start-Sleep -Seconds 3
+        }
+        if (-not $sawHttp) { return 15 }
+        return 20
+    }
+
+    # Is the tunnel ALREADY carrying traffic? A forward this script did not start may already hold
+    # loopback 3000. Starting a second one would bind-fail and exit immediately, the health poll would
+    # pass anyway THROUGH THE STRAY, and teardown would then either be a silent no-op or act on a
+    # recycled PID. A forward found already running belongs to someone else and is left alone.
+    function Test-GrafanaAlreadyUp {
+        try {
+            $h = Invoke-RestMethod -Uri "$gf/api/health" -TimeoutSec 4 -ErrorAction Stop
+            return ("$($h.database)" -eq 'ok')
+        } catch { return $false }
+    }
+
+    # RANGE query through GRAFANA'S OWN datasource proxy — the DIAGNOSIS channel the locked constraint
+    # permits. It is NEVER the verdict for a panel. Where it disagrees with the rendered value, the
+    # disagreement is recorded as a finding rather than reconciled away.
+    function Invoke-ProxyRangeQuery([string]$Query, [long]$StartUnix, [long]$EndUnix, [int]$StepSeconds) {
+        return Invoke-RestMethod -Method Post -Uri "$proxy/api/v1/query_range" `
+                 -Headers $auth -ContentType 'application/x-www-form-urlencoded' `
+                 -Body @{ query = $Query; start = $StartUnix; end = $EndUnix; step = $StepSeconds } `
+                 -TimeoutSec 90 -ErrorAction Stop
+    }
+
+    # Reproduce Grafana's own arithmetic rather than assuming a number.
+    #   $__interval      floors at the datasource's timeInterval (its "minimum interval")
+    #   $__rate_interval = max(4 x timeInterval, $__interval + timeInterval)
+    # Nothing here is hardcoded: the timeInterval is READ from the live datasource, so this tracks the
+    # manifest instead of drifting from it. PQ-04 measured the same 240 s for a 10-minute and a 2-hour
+    # window at this viewport, but the value is still DERIVED and whatever is derived is recorded.
+    function Get-RateIntervalSeconds([int]$TimeIntervalSeconds, [int]$StepSeconds) {
+        return [Math]::Max(4 * $TimeIntervalSeconds, $StepSeconds + $TimeIntervalSeconds)
+    }
+
+    # Parse a Grafana duration string ('15s', '60s', '1m') to seconds. Returns 0 when absent so the
+    # caller can fail loudly rather than silently assume a default.
+    function ConvertFrom-GrafanaDuration([string]$Text) {
+        if ([string]::IsNullOrWhiteSpace($Text)) { return 0 }
+        if ($Text -match '^\s*(\d+)\s*([smh]?)\s*$') {
+            $n = [int]$Matches[1]
+            switch ($Matches[2]) { 'm' { return $n * 60 } 'h' { return $n * 3600 } default { return $n } }
+        }
+        return 0
+    }
+
+    # Grafana's own step choice: max(datasource timeInterval, range / maxDataPoints), where
+    # maxDataPoints defaults to the panel's pixel width. In single-panel (kiosk) view the panel spans
+    # the viewport, so the pinned viewport width IS the maxDataPoints estimate.
+    function Get-QueryStepSeconds([int]$RangeSeconds, [int]$TimeIntervalSeconds, [int]$MaxDataPoints) {
+        if ($MaxDataPoints -le 0) { return $TimeIntervalSeconds }
+        $raw = [int][Math]::Ceiling($RangeSeconds / [double]$MaxDataPoints)
+        return [Math]::Max($TimeIntervalSeconds, $raw)
+    }
+
+    # ---- one place that issues an HTTP call and returns the status as DATA. -SkipHttpErrorCheck
+    # ---- keeps a 4xx/5xx a RESULT rather than an exception.
+    function Invoke-DriverApi {
+        param(
+            [Parameter(Mandatory)][ValidateSet('GET', 'POST', 'PUT', 'DELETE')][string]$Method,
+            [Parameter(Mandatory)][string]$Path,
+            [string]$Body = $null
+        )
+        $out = @{ Method = $Method; Path = $Path; Status = 0; Body = ''; Json = $null; Error = '' }
+        try {
+            $req = @{
+                Method             = $Method
+                Uri                = "$api$Path"
+                TimeoutSec         = 30
+                SkipHttpErrorCheck = $true
+                UseBasicParsing    = $true
+                ErrorAction        = 'Stop'
+            }
+            if ($null -ne $Body) { $req['Body'] = $Body; $req['ContentType'] = 'application/json' }
+            $resp = Invoke-WebRequest @req
+            $out.Status = [int]$resp.StatusCode
+            $out.Body = "$($resp.Content)"
+            if (-not [string]::IsNullOrWhiteSpace($out.Body)) {
+                try { $out.Json = ($out.Body | ConvertFrom-Json) } catch { $out.Json = $null }
+            }
+        } catch {
+            $out.Status = -1
+            $out.Error = "$($_.Exception.Message)"
+        }
+        return $out
+    }
+
+    function Get-ScreenshotPaths($Readings) {
+        $paths = @()
+        foreach ($r in @($Readings)) {
+            $n = @(Get-PropertyNames $r)
+            if ($n -notcontains 'screenshotPath') { continue }
+            if ($null -eq $r.screenshotPath) { continue }
+            $p = "$($r.screenshotPath)"
+            if ([string]::IsNullOrWhiteSpace($p)) { continue }
+            if ($paths -notcontains $p) { $paths += $p }
+        }
+        return [string[]]$paths
+    }
+
+    # =========================================================================================
+    # PRE — PRECONDITION GATE (code 64). Usage/state errors fail with a remediation line, never a
+    # verdict. The stack-at-rest half is specific to this phase: a concurrent sweep or a seam left
+    # armed by an earlier run would confound EVERY measurement below, and the confusion would surface
+    # later as an inexplicable result rather than as an abort here. A baseline taken while a seam is
+    # armed or a tier is degraded is worse than no baseline at all — it is a WRONG null hypothesis
+    # that every later scenario would then be scored against.
+    # =========================================================================================
+    Write-Phase "PRE: precondition gate (kube context + shared forwards + stack at rest)"
+
+    $ctxRaw  = ''
+    $ctxExit = 1
+    try {
+        $ctxRaw  = kubectl config current-context 2>$null
+        # Pin the exit code BEFORE the trim: on a failed call stdout is empty, so a .Trim() on the raw
+        # capture (string-cast, never $null) must not be allowed to bypass the failure branch.
+        $ctxExit = $LASTEXITCODE
+    } catch { $ctxExit = 1 }
+    $ctx = ("$ctxRaw").Trim()
+    if ($ctxExit -ne 0 -or $ctx -ne 'docker-desktop') {
+        Write-Phase "kube context is '$ctx', not 'docker-desktop'. This driver targets the local Docker-Desktop cluster ONLY." 'Red'
+        Write-Phase "REMEDIATION: kubectl config use-context docker-desktop" 'Yellow'
+        exit 64
+    }
+    Write-Phase "  kube context = docker-desktop (OK)." 'Gray'
+
+    $sharedUp = $false
+    try {
+        $probeResp = Invoke-WebRequest -Uri "$api/health/ready" -UseBasicParsing -TimeoutSec 5 -ErrorAction Stop
+        if ($probeResp.StatusCode -eq 200) { $sharedUp = $true }
+    } catch { }
+    if (-not $sharedUp) {
+        Write-Phase "the shared stack port-forwards are not carrying traffic (no 200 from $api/health/ready)." 'Red'
+        Write-Phase "REMEDIATION: pwsh -File scripts/phase-80-up.ps1   (it owns the eight shared forwards and reaps its own stale PIDs)" 'Yellow'
+        exit 64
+    }
+    Write-Phase "  shared stack forwards live (baseapi /health/ready == 200)." 'Gray'
+
+    # All four app tiers must be fully Ready at their LIVE-READ counts AND carry zero seam residue
+    # before anything is measured. Both reads go through the cluster-ops invocation site, whose single
+    # command line bakes in the namespace and whose local preference shadow keeps a non-zero kubectl
+    # exit from exploding inside this Stop-preference harness.
+    $preReplicas = @{}
+    $preImages   = @{}
+    $preSeamVars = @()
+    $atRest      = $true
+    foreach ($tier in $Tiers) {
+        $want = Get-LiveReplicas -Tier $tier
+        $img  = Get-LiveImage -Tier $tier
+        if ($want -lt 1 -or [string]::IsNullOrWhiteSpace($img)) {
+            Write-Phase "  could not read a usable replica count / image for '$tier' (replicas=$want image='$img')." 'Red'
+            $atRest = $false
+            continue
+        }
+        $preReplicas[$tier] = $want
+        $preImages[$tier]   = $img
+
+        $readyRaw = Invoke-Phase88Ctl -Arguments @('get', 'deploy', $tier, '-o', 'jsonpath={.status.readyReplicas}')
+        $readyTxt = ("$($readyRaw.Output)").Trim()
+        $ready    = 0
+        if (-not $readyRaw.Ok -or -not [int]::TryParse($readyTxt, [ref]$ready)) { $ready = -1 }
+        if ($ready -ne $want) {
+            Write-Phase "  '$tier' is $ready/$want Ready — the stack is not at rest." 'Red'
+            $atRest = $false
+        }
+
+        $envRead = Invoke-Phase88Ctl -Arguments @('get', 'deploy', $tier, '-o', 'jsonpath={.spec.template.spec.containers[0].env}')
+        if (-not $envRead.Ok) {
+            Write-Phase "  could not read the live env of '$tier'." 'Red'
+            $atRest = $false
+        } elseif (("$($envRead.Output)") -match 'DEFEAT|REINJECT_DELAY') {
+            Write-Phase "  '$tier' carries a fault-seam env var AT REST — an earlier run left it armed." 'Red'
+            $preSeamVars += $tier
+            $atRest = $false
+        }
+        Write-Phase "    $tier ${ready}/${want} Ready, image $img" 'Gray'
+    }
+    if (-not $atRest) {
+        Write-Phase "the stack is not at rest (a tier is not fully Ready, unreadable, or carries a seam var)." 'Red'
+        Write-Phase "REMEDIATION: wait for any concurrent sweep to finish, then clear residue with" 'Yellow'
+        Write-Phase "             kubectl -n skp set env deployment/keeper KEEPER_DEFEAT_REINJECT-" 'Yellow'
+        Write-Phase "             kubectl -n skp set env deployment/processor-sample PROCESSOR_DEFEAT_READ-" 'Yellow'
+        exit 64
+    }
+    $StackCleanAtStart = $true
+    Write-Phase "  all four tiers fully Ready at their live-read counts, zero seam vars at rest." 'Gray'
+
+    # =========================================================================================
+    # STEP A — THIS SCRIPT'S OWN LOOPBACK FORWARD (codes 15 then 20).
+    # The PID lives in ONE in-memory variable. The shared forward PID registry is neither read nor
+    # written: it owns the eight long-lived stack tunnels, and touching it would break a concurrent
+    # sweep (T-88-05).
+    # =========================================================================================
+    Write-Phase "STEP A: grafana loopback forward (svc/grafana 3000:3000 --address 127.0.0.1)"
+    if (Test-GrafanaAlreadyUp) {
+        Write-Phase "  loopback 3000 is ALREADY carrying grafana traffic — reusing it and starting none." 'Yellow'
+        Write-Phase "  this script therefore owns no forward and will tear none down." 'Gray'
+        $gfForwardOwned = $false
+    } else {
+        $gfForwardPid   = Start-GrafanaForward
+        $gfForwardOwned = $true
+        Write-Phase "  forward PID $gfForwardPid — polling $gf/api/health for database == ok (bounded 90s)..." 'Gray'
+        $healthCode = Wait-GrafanaHealthy 90
+        if ($healthCode -eq 15) {
+            Write-Phase "the grafana port-forward never carried traffic within 90s. Aborting." 'Red'; exit 15
+        }
+        if ($healthCode -ne 0) {
+            Write-Phase "grafana /api/health never reported database ok within 90s. Aborting." 'Red'; exit 20
+        }
+    }
+    Write-Phase "  grafana health database == ok." 'Gray'
+
+    # =========================================================================================
+    # MODE DISPATCH.
+    # Plan 88-04 owns `-Mode Baseline` only. The fault-driving modes are authored by the plans that
+    # own their scenarios, so that each arrives with the arm/settle/re-baseline/trigger/restore
+    # sequence its own lever needs rather than a generic one written before any fault was driven.
+    # =========================================================================================
+    if ($rowMode -ne 'baseline') {
+        Write-Phase "mode '$rowMode' is not implemented in this driver yet." 'Red'
+        Write-Phase "Plan 88-04 authors the frame, the scenario table and -Mode Baseline (BASE-01)." 'Yellow'
+        Write-Phase "  -Mode Scenario       -> plans 88-05 (WEB-01), 88-06 (SCALE-01..03), 88-07 (ZERO-02/03)" 'Yellow'
+        Write-Phase "  -Mode DurationLadder -> plan 88-08 (LADDER-01)" 'Yellow'
+        exit 64
+    }
+
+    Write-Phase "BASELINE MODE IS AUTHORED IN TASK 2 OF PLAN 88-04." 'Yellow'
+    exit 64
+}
+finally {
+    # ---- STEP Z — TEARDOWN ----------------------------------------------------------------------
+    # Everything here runs on EVERY path, including an interrupted run. The hazard it closes is the
+    # phase's standing one: a seam left armed silently poisons every later scenario AND every later
+    # resilience sweep, and the failure presents as an inexplicable conservation violation with no
+    # pointer back to its cause.
+    #
+    # DISARM UNCONDITIONALLY where a seam was armed. Clear-Phase88Seam is idempotent by design —
+    # removing an absent variable is a no-op rollout — so it is safe to issue even when the arm never
+    # landed. The $seamArmed guard exists only to avoid a needless rollout wait on the clean path.
+    if ($seamArmed -and -not [string]::IsNullOrWhiteSpace($seamTier) -and -not [string]::IsNullOrWhiteSpace($seamVar)) {
+        if (Get-Command Clear-Phase88Seam -ErrorAction SilentlyContinue) {
+            Write-Host "[phase-88-panel-discriminate] TEARDOWN: '$seamVar' is still armed on '$seamTier' — disarming." -ForegroundColor Yellow
+            $null = Clear-Phase88Seam -Tier $seamTier -Name $seamVar
+        }
+    }
+
+    # A tier this script scaled and did not restore is the same class of poisoning as a live seam.
+    # The restore target is the count READ before the scale, never a tabled one.
+    if (-not [string]::IsNullOrWhiteSpace($scaledTier) -and $replicasBefore -ge 0) {
+        if (Get-Command Invoke-Phase88Ctl -ErrorAction SilentlyContinue) {
+            Write-Host "[phase-88-panel-discriminate] TEARDOWN: restoring '$scaledTier' to its pre-read $replicasBefore replicas." -ForegroundColor Yellow
+            $null = Invoke-Phase88Ctl -Arguments @('scale', "deployment/$scaledTier", "--replicas=$replicasBefore")
+        }
+    }
+
+    # Stop ONLY a forward this script actually started, behind the recycled-PID guard. A forward this
+    # script found already running belongs to someone else and is left exactly as it was found.
+    if ($gfForwardOwned -and $gfForwardPid -gt 0) {
+        if (Get-Command Stop-GrafanaForward -ErrorAction SilentlyContinue) {
+            Stop-GrafanaForward $gfForwardPid
+        }
+    }
+    Pop-Location
+}
