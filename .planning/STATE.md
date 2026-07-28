@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v13.0.0
 milestone_name: Observability Dashboards
 status: executing
-stopped_at: Completed 88-06-PLAN.md
-last_updated: "2026-07-28T21:06:43.389Z"
+stopped_at: Completed 88-07-PLAN.md
+last_updated: "2026-07-28T23:47:47.896Z"
 last_activity: 2026-07-28
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 26
-  completed_plans: 21
+  completed_plans: 22
   percent: 67
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Phase: 88 (pipeline-dashboard-maintenance-handoff-proof-fault-injection) — EXECUTING
-Plan: 7 of 11
+Plan: 8 of 11
 Status: Ready to execute
 Last activity: 2026-07-28
 Current focus: Phase 87 — awaiting `/gsd-plan-phase 87`
@@ -721,7 +721,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [████████░░] 81%
+Progress: [█████████░] 85%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1126,6 +1126,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 88 P04 | 115 | 3 tasks | 6 files |
 | Phase 88 P05 | 75min | 3 tasks | 3 files |
 | Phase 88 P06 | 125min | 3 tasks | 6 files |
+| Phase 88 P07 | 235min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -1714,6 +1715,10 @@ Recent decisions affecting current work:
 - [Phase ?]: 88-06: panel 5 EMPTIES WITHOUT EVER SPIKING (0.63 -> 0.183 then NoData) — this pipeline is request/response, so the orchestrator's own send rate falls with the processors and the gap never blows up
 - [Phase ?]: 88-06: a panel STATE is a first-class discrimination signal — an emptied panel renders no series, so a series-only scorer reports 'nothing moved' for a panel that went completely blank
 - [Phase ?]: 88-06: no requirement marked Complete — DISC-02 is 9/14 panels, DISC-03 has run on 4 of 8 scenarios, DISC-05/DISC-06 are statements about EVERY scenario and three remain
+- [Phase ?]: 88-07: SeamActiveDuringRebaseline RESOLVED — a seam-active re-baseline IS a valid basis because both Phase-88 seams are capabilities a separate act must trigger; proven per run via RebaselineInertnessProven
+- [Phase ?]: 88-07: kubectl set env PROCESSOR_DEFEAT_READ=1 drives NOTHING — the variable holds a step LABEL and the fault also needs the out-of-band Redis slot skp:test:defeat-read-arm to be claimed; without it a seam scenario looks fully armed and measures nothing
+- [Phase ?]: 88-07: panel 8 is MEASURED-UNREACHABLE and joins the HAND-04 register — KEEPER_DEFEAT_REINJECT calls CountSent on BOTH branches by design, no allow-listed lever reaches the keeper drop branch, and at 60 s both increase() terms return zero points so the rendered 0 is the or-vector(0) guard
+- [Phase ?]: 88-07: rate() is BLIND to a keeper recovery burst confined to one 60 s export interval (the counter series is born at its final value) while increase() sees it — panel 2's green 0 cannot distinguish 'no recovery ever' from 'a recovery completed within a minute'
 
 ### Roadmap Milestone Log
 
@@ -1814,6 +1819,7 @@ None yet.
 - 57-04 CFG-10 freeze defect: SchemaDefinitionFreezeFacts.NameDescription_Edit_On_Referenced_Schema_Returns_200 returns 409 instead of 200 (Definition-change detection bug in SchemaService.UpdateAsync). Out of scope for 57-03; logged in deferred-items.md; must fix before CFG-10 sign-off.
 - D-04 live gate (78-04) FAILED-FINDING: reworked live analyzer flips all scenarios PASS->FAIL incl the no-fault baseline (Duplicates==StartedRuns, 100% effect-once violations, Missing=0). Root cause: Phase-77 uniform execution-scope logging emits multiple StepId-scoped framework records per hop; the reworked structural step query counts each as a distinct step execution. Value axis was dark. NOT re-baselined. Needs a follow-up fix plan (collapse multi-record hops per {executionId,stepId} in BuildStepSearchBody/cohort). D-04 remains OPEN.
 - Phase 81 capstone gate NOT met (5 PASS / 2 FAIL / TEST-07 not-run). TEST-04 (keeper) + TEST-06 (rabbitmq) = VERDICT_FAIL (exit 1) SOLELY on MG-1 conservation (orch_consumed@end << proc_sent@end); structural recovery PERFECT for both (Missing=0, all runs complete, zero dup). ROOT CAUSE: D-03 shared-stack sweep rollout-restarts ONLY the orchestrator per scenario (STEP B1, resets orchestrator_consumed) but NEVER the processor (processor_sent accumulates across all scenarios), so MG-1 absolute-AtEnd conservation is baseline-confounded for mg1Binding=true crash scenarios past position 1 (TEST-01 binding passes at pos 1 with no drift; TEST-04 pos4 gap=322; TEST-06 pos6 gap=928). NOT a recovery-architecture defect. RECOMMENDED FIX (in Phase-81 harness scope, analyzer untouched per SPEC-5): rollout-restart the processor-sample tier per scenario too (STEP B/B1) so both conservation-counter-owning tiers share a per-scenario baseline like the compose whole-stack recreate. Requires human/gap-closure decision (methodology change).
+- DISC-04 cannot be fully satisfied as written: panel 8 non-zero with the reinject suppressed requires either a src/ change or KEEPER_REINJECT_DELAY_MS (forbidden by T-88-15), because the suppression seam increments keeper_messages_sent_total on the suppressed branch BY DESIGN. 88-09 must record DISC-04 as HALF met with the measured reason (ZERO-03) and carry panel 8 in the HAND-04 register.
 
 ## Deferred Items
 
@@ -1825,8 +1831,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-28T21:06:31.138Z
-Stopped at: Completed 88-06-PLAN.md
+Last session: 2026-07-28T23:47:47.874Z
+Stopped at: Completed 88-07-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
