@@ -100,7 +100,7 @@
 
 **Plans**: 11 plans in 10 waves (all live scenarios are strictly sequential — they mutate the same `skp` cluster)
 
-  - [ ] 88-01-PLAN.md — Wave 1: requirement family registration + the Grafana batch panel DOM reader (`scripts/phase-88-panel-read.js`) and its PowerShell invocation/banding/movement contract (`scripts/lib/phase-88-panel-read.ps1`) (DISC-01, DISC-02, DISC-03, DISC-07, HAND-01..04)
+  - [x] 88-01-PLAN.md — Wave 1: requirement family registration + the Grafana batch panel DOM reader (`scripts/phase-88-panel-read.js`) and its PowerShell invocation/banding/movement contract (`scripts/lib/phase-88-panel-read.ps1`) (DISC-01, DISC-02, DISC-03, DISC-07, HAND-01..04)
   - [ ] 88-02-PLAN.md — Wave 1: the runtime-only fault mechanism (`scripts/lib/phase-88-cluster-ops.ps1`) — live-read replica capture, scale sequencer, `kubectl set env` seam arm/disarm, `Assert-StackRestored`; rejects the stale `$TierReplicas` map (DISC-05, DISC-06)
   - [ ] 88-03-PLAN.md — Wave 2 **BLOCKING**: `scripts/phase-88-wave0-probe.ps1` answering seven questions live (keeper recovery traffic, `viewPanel` locator, safe 5xx, `$__rate_interval` pinning, unresolved-step route, seam smoke, retention) + `88-PROBE-DECISIONS.md` locking every downstream lever (DISC-02, DISC-04, DISC-05, DISC-06, HAND-04)
   - [ ] 88-04-PLAN.md — Wave 3: driver frame + static scenario table + `-Mode Baseline`; captures the DISC-01 healthy band for all fourteen panels over ten equal 60 s pinned sub-windows at a fixed viewport (DISC-01, DISC-03)

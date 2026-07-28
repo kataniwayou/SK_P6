@@ -4,14 +4,14 @@ milestone: v13.0.0
 milestone_name: Observability Dashboards
 status: executing
 stopped_at: Completed 87-03-PLAN.md
-last_updated: "2026-07-28T13:21:20.539Z"
-last_activity: 2026-07-28 -- Phase 88 planning complete
+last_updated: "2026-07-28T15:56:48.953Z"
+last_activity: 2026-07-28
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 26
-  completed_plans: 15
-  percent: 58
+  completed_plans: 16
+  percent: 62
 ---
 
 # Project State
@@ -20,17 +20,17 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase 88 — pipeline dashboard maintenance handoff proof fault injection
+**Current focus:** Phase 88 — pipeline-dashboard-maintenance-handoff-proof-fault-injection
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
 
 ## Current Position
 
-Phase: 88
-Plan: Not started
+Phase: 88 (pipeline-dashboard-maintenance-handoff-proof-fault-injection) — EXECUTING
+Plan: 2 of 11
 Status: Ready to execute
-Last activity: 2026-07-28 -- Phase 88 planning complete
+Last activity: 2026-07-28
 Current focus: Phase 87 — awaiting `/gsd-plan-phase 87`
 
 ### Quick Tasks Completed
@@ -721,7 +721,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [█████████░] 87%
+Progress: [██████░░░░] 62%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1120,6 +1120,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 87 P04 | ~25 min | 3 tasks | 1 files |
 | Phase 87 P02 | ~50 min | 3 tasks | 2 files |
 | Phase 87 P05 | ~55 min | 2 tasks | 2 files |
+| Phase 88 P01 | 35min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -1694,6 +1695,9 @@ Recent decisions affecting current work:
 - [Phase ?]: 87-02: kubectl apply -k reverts live image tags to :local — orchestrator/processor-sample had to be restored to :tags-const-1544 via kubectl set image
 - [Phase ?]: 87-05: VER-01 Class A/B partition is asserted mechanically on the 'or vector(0)' substring with NO exception list — symmetric with lint rules C3/C7/C8, so a silently-added guard surfaces as a new ClassBExprs entry rather than as silence
 - [Phase ?]: 87-05: VER-02 spec byte-equality drops the Grafana DB surrogates id and version before canonicalising — neither appears in the repo JSON, and grafana's emptyDir store necessarily mints fresh ones on every pod recreate
+- [Phase 88]: 88-01: rendered-panel reads go through scripts/phase-88-panel-read.js — sentinel-delimited ##PANEL-JSON## lines plus a ##PANEL-BATCH-END## completeness marker, never a whole-stdout JSON parse of run.js output
+- [Phase 88]: 88-01: a read FAILURE (ReaderMissing/Unreadable/Truncated/panelState Error) is Inconclusive material; only a value that was read and did not move is a Fail. NoData is a first-class panel state that can count as moved
+- [Phase 88]: 88-01: baseline band = mean +/- 3 sigma with a 10 percent floor, except an all-zero baseline which stays exactly 0..0 (Regime B); movement requires >= 2 consecutive samples outside the band
 
 ### Roadmap Milestone Log
 
@@ -1805,7 +1809,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-27T19:30:04.551Z
+Last session: 2026-07-28T15:56:39.489Z
 Stopped at: Completed 87-03-PLAN.md
 Resume file: None
 
