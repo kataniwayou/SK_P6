@@ -425,6 +425,18 @@ try {
             # panel 2 is a statement about the gap arithmetic. Without this reading those two are
             # indistinguishable in the artifact.
             observePanels = @('2')
+            # Panel 8's own query terms, so a flat guarded 0 is DECOMPOSED rather than shrugged at.
+            # `$__w` is substituted with each width below. The widths matter: 88-04 measured that
+            # increase() needs >= 2 samples inside its range and the stored resolution here is 60 s, so
+            # a 60 s reading of an increase() panel is structurally incapable of carrying a value —
+            # which on a GUARDED panel is invisible, because `or vector(0)` renders the same 0.
+            decompositionQueries = @(
+                @{ Label = 'consumed increase'; Query = 'sum(increase(keeper_messages_consumed_total[$__w]))' }
+                @{ Label = 'sent increase';     Query = 'sum(increase(keeper_messages_sent_total[$__w]))' }
+                @{ Label = 'gap (unguarded)';   Query = 'sum(increase(keeper_messages_consumed_total[$__w])) - sum(increase(keeper_messages_sent_total[$__w]))' }
+                @{ Label = 'gap (as rendered, guarded)'; Query = 'sum(increase(keeper_messages_consumed_total[$__w])) - sum(increase(keeper_messages_sent_total[$__w])) or vector(0)' }
+            )
+            decompositionWindows = @(60, 120, 600)
             requiresRebaseline = $true; status = 'Locked'; statusReason = ''
             decidedBy = 'PQ-06 SeamArmLanded=true + SeamDisarmClean=true; both seams required per Record 7'
             notes = 'arm both -> rollout -> settle >= 150 s -> RE-BASELINE -> trigger -> capture -> restore -> disarm -> assert'
@@ -692,6 +704,45 @@ try {
         $sum = 0.0
         foreach ($k in $byTs.Keys) { $sum += $byTs[$k] }
         return ($sum / $byTs.Count)
+    }
+
+    # The same aggregation as Get-ProxyAggregateMean but returning the PER-TIMESTAMP values rather
+    # than their mean. A mean collapses "the expression was empty at every step" and "the expression
+    # evaluated to zero at every step" into the same number — and on a guarded panel those two are the
+    # whole question, because `A - empty` is empty and the `or vector(0)` guard then renders a 0 that
+    # nothing measured. An EMPTY result is returned as an empty array so the caller can tell them apart.
+    # Long parameter names deliberately: a single-letter typed parameter here is the 88-04 deviation-3
+    # trap (PowerShell variable names are case-insensitive, so [long]$S and foreach($s) are one variable).
+    function Get-ProxySeriesValues([string]$PromQuery, [long]$StartUnix, [long]$EndUnix, [int]$StepSeconds) {
+        $res = Invoke-ProxyRangeQuery -Query $PromQuery -StartUnix $StartUnix -EndUnix $EndUnix -StepSeconds $StepSeconds
+        $byTs = @{}
+        foreach ($series in @($res.data.result)) {
+            $sn = @(Get-PropertyNames $series)
+            if ($sn -notcontains 'values') { continue }
+            foreach ($v in @($series.values)) {
+                $ts = "$($v[0])"
+                $raw = "$($v[1])"
+                $val = 0.0
+                if (-not [double]::TryParse($raw, [ref]$val)) { continue }
+                if (-not [double]::IsFinite($val)) { continue }
+                if ($byTs.ContainsKey($ts)) { $byTs[$ts] += $val } else { $byTs[$ts] = $val }
+            }
+        }
+        $out = @()
+        foreach ($k in @($byTs.Keys | Sort-Object { [double]$_ })) { $out += [double]$byTs[$k] }
+        return [double[]]@($out)
+    }
+
+    # Activate the fan-out workflow through the API. The workflow id is resolved ONCE into
+    # $TrafficWorkflowId before the first call; a caller that has not resolved it gets $false rather
+    # than an exception, because this is invoked from timing loops where a throw would skip a disarm.
+    # Returns $true only on the documented 204.
+    function Invoke-SeamActivation {
+        if ([string]::IsNullOrWhiteSpace($TrafficWorkflowId)) { return $false }
+        try {
+            $r = Invoke-DriverApi -Method 'POST' -Path '/api/v1/orchestration/start' -Body (ConvertTo-Json @($TrafficWorkflowId))
+            return ([int]$r.Status -eq 204)
+        } catch { return $false }
     }
 
     function Get-ScreenshotPaths($Readings) {
@@ -971,6 +1022,16 @@ try {
         # SeamActiveDuringRebaseline's resolution, PROVEN per run rather than argued once.
         $RebaselineInertnessProven  = $null
         $RebaselineInertnessChecks  = @()
+        # Row-declared decomposition of the subject panel's own query terms (diagnosis only).
+        $DecompositionResults       = @()
+        # The seam drive's own HTTP footprint, issued on the SAME cadence in the re-baseline window and
+        # the after window so the WebApi cross-talk controls compare like with like (ZERO-02 run 1
+        # measured the driver's single activation POST as cross-talk drift on panels 10 and 12).
+        $seamActivationEverySeconds = 120
+        $seamDriveCycleSeconds      = 120
+        $ActivationPostsRebaseline  = 0
+        $ActivationPostsAfter       = 0
+        $DriveRolledPods            = @()
 
         $shotDir  = Join-Path $screenshotRoot $canonicalId
         $lever    = "$($scenario.lever)"
@@ -1634,6 +1695,23 @@ try {
         # it is already stored. It costs no wall time and it is exactly the state immediately before
         # the fault; its bounds are recorded so a reader can see which window it was.
         # =====================================================================================
+        # The fan-out workflow id is resolved HERE rather than at trigger time, because the seam branch
+        # now issues its activation POST during the re-baseline hold as well (so the driver's own HTTP
+        # footprint is inside the band the WebApi controls are scored against, not only inside the
+        # after window). A `seam` row that cannot resolve it has nothing to exercise the seam with.
+        if ($lever -eq 'seam') {
+            $wfRaw = ''
+            try { $wfRaw = kubectl -n skp exec statefulset/postgres -- psql -U postgres -d stepsdb -tA -c "SELECT id FROM workflows WHERE name = 'v8-fanout-proof'" } catch { }
+            foreach ($line in @(("$wfRaw") -split "`r?`n")) {
+                $tw = ("$line").Trim()
+                if ($tw -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { $TrafficWorkflowId = $tw; break }
+            }
+            if ([string]::IsNullOrWhiteSpace($TrafficWorkflowId)) {
+                Write-Phase "could not resolve the fan-out workflow id — the seam has nothing to be exercised by. Aborting." 'Red'; exit 50
+            }
+            Write-Phase "  fan-out workflow $TrafficWorkflowId resolved (the seam's workload)" 'Gray'
+        }
+
         Write-Phase "STEP S4: pre-arm baseline (recorded, not authoritative)"
         # Observed-only panels ride along in the SAME batch as the claim and its controls, so their
         # reading is taken in the same windows rather than adjacent to them. They are recorded and
@@ -1743,7 +1821,26 @@ try {
             $rebaseStart = [datetime]::UtcNow
             $rebaseHold  = ($SubWindowSeconds * $RebaselineSubWindowCount) + $ExportTrailSeconds
             Write-Phase "STEP S5: holding ${rebaseHold}s so the authoritative re-baseline window is fully exported..."
-            Start-Sleep -Seconds $rebaseHold
+            # THE TRIGGER'S OWN HTTP FOOTPRINT MUST BE IN THE BAND, OR THE WEBAPI CONTROLS ARE NOT
+            # CONTROLS. Measured in ZERO-02 run 1: the seam trigger activates the workflow with
+            # POST /api/v1/orchestration/start, and that single request took panel 10's
+            # `.../Orchestration/start` series and panel 12's `204` series off their exactly-0..0
+            # re-baseline bands — max excursion 0.0056 on four sub-windows. Both were recorded as
+            # cross-talk DRIFT, which is a false statement about the fault's blast radius: the
+            # perturbation is the DRIVER's own HTTP call, present in the after window and absent from
+            # the band. The activation is issued here on the SAME cadence the drive loop uses, so both
+            # windows carry the same footprint by construction and the control measures the FAULT.
+            if ($seamActivationEverySeconds -gt 0) {
+                $rbDeadline = $rebaseStart.AddSeconds($rebaseHold)
+                while ([datetime]::UtcNow -lt $rbDeadline) {
+                    $null = Invoke-SeamActivation
+                    $ActivationPostsRebaseline++
+                    $sleepFor = [Math]::Min($seamActivationEverySeconds, [int][Math]::Max(1, ($rbDeadline - [datetime]::UtcNow).TotalSeconds))
+                    Start-Sleep -Seconds $sleepFor
+                }
+                Write-Phase "  $ActivationPostsRebaseline activation POST(s) issued across the re-baseline window, matching the drive cadence" 'Gray'
+            }
+            else { Start-Sleep -Seconds $rebaseHold }
             $rebaseEnd = $rebaseStart.AddSeconds($SubWindowSeconds * $RebaselineSubWindowCount)
 
             $rebaseCap = Invoke-Phase88Capture -PanelIdList $capturePanels -EndUtc $rebaseEnd `
@@ -1889,62 +1986,91 @@ try {
         }
         else {
             # `seam` — the seam is already armed, so the trigger is the WORKLOAD that exercises it.
-            $TriggerKind = "workload drive with the seam armed for ${dwell}s"
+            $TriggerKind = "workload drive with the seam armed, in bounded arm/claim/roll cycles"
             Write-Phase "STEP S6: TRIGGER — $TriggerKind"
-            $wfRaw = ''
-            try { $wfRaw = kubectl -n skp exec statefulset/postgres -- psql -U postgres -d stepsdb -tA -c "SELECT id FROM workflows WHERE name = 'v8-fanout-proof'" } catch { }
-            foreach ($line in @(("$wfRaw") -split "`r?`n")) {
-                $tw = ("$line").Trim()
-                if ($tw -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { $TrafficWorkflowId = $tw; break }
+            if (-not (Invoke-SeamActivation)) {
+                Write-Phase "activation gate failed at the trigger. Aborting." 'Red'; exit 50
             }
-            if ([string]::IsNullOrWhiteSpace($TrafficWorkflowId)) {
-                Write-Phase "could not resolve the fan-out workflow id — the seam has nothing to be exercised by. Aborting." 'Red'; exit 50
-            }
-            $startResp = Invoke-DriverApi -Method 'POST' -Path '/api/v1/orchestration/start' -Body (ConvertTo-Json @($TrafficWorkflowId))
-            if ($startResp.Status -ne 204) {
-                Write-Phase "activation gate failed — expected 204, got $($startResp.Status). Aborting." 'Red'; exit 50
-            }
+            $ActivationPostsAfter++
             $faultStart = [datetime]::UtcNow
             $FaultStartUtc = $faultStart.ToString('o')
             $afterStart = $faultStart
             $afterEnd   = $afterStart.AddSeconds($afterSpan)
 
-            # ---- THE ACTUAL FAULT: ARM THE OUT-OF-BAND REDIS SLOT --------------------------------
+            # ---- THE ACTUAL FAULT: ARM THE OUT-OF-BAND REDIS SLOT, REPEATEDLY, ACROSS EXPORT TICKS
             # `kubectl set env PROCESSOR_DEFEAT_READ=Step_C` only gives the pipeline a LABEL to match.
             # The fault fires when a matching hop can CLAIM skp:test:defeat-read-arm — a KeyDelete that
-            # returns true for exactly ONE caller across replicas. This is where the seam stops being a
-            # capability and becomes an event, and it is the reason the re-baseline above is a valid null
+            # returns true for exactly ONE caller across replicas. That is where the seam stops being a
+            # capability and becomes an event, and it is why the re-baseline above is a valid null
             # hypothesis rather than a second fault window.
             #
-            # Re-armed on a bounded schedule for the first third of the after window so BOTH processor
-            # replicas get the chance to claim a victim. This cannot run away: each pod assigns its
-            # _reinjectTriggerTarget static exactly once per process and never reassigns it, so the tier
-            # can produce at most one victim entryId per replica however many times the slot is set.
+            # WHY THE DRIVE IS A CYCLE AND NOT A SINGLE BURST — MEASURED IN ZERO-02 RUN 1.
+            # Run 1 armed the slot four times over 90 s, both processor replicas claimed a victim, three
+            # KeeperReinjects flowed and the keeper consumed and sent all three. Panel 2 nevertheless
+            # rendered an unbroken 0, and so did the diagnostic proxy. The raw samples say why: the
+            # counter series were born carrying their FINAL value on their first exported sample
+            # (`distinct values ['2']` and `['1']` across every scrape) because the whole burst completed
+            # inside one 60 s export interval. `rate()` differences consecutive samples, so a counter that
+            # appears at 2 and stays at 2 has a rate of exactly zero forever — the event is invisible to
+            # the panel that exists to show it. (`increase()` DOES see it, because a new series' first
+            # sample counts as a rise from zero; that asymmetry is why panel 2 and panel 8 behave
+            # differently under the same event, and it is HAND-02 material.)
+            #
+            # A rate can therefore only be rendered by events in at least TWO different export intervals.
+            # Each processor pod assigns its `_reinjectTriggerTarget` static exactly once per process, so
+            # re-arming alone mints no new victims once every replica has claimed — the tier must be
+            # rolled. The drive is therefore: activate, arm, observe the claim, roll ONE replica (never
+            # the whole tier, so the pipeline is never out), and repeat. Strictly bounded by cycle count
+            # and by one victim per replica per generation: this can never become a hot loop.
             $armPasses = 0
+            $anyClaim  = $false
             if ($scenario.Contains('requiresReinjectArm') -and $scenario.requiresReinjectArm) {
-                $armEvery   = 30
-                $armPassMax = [Math]::Max(2, [int][Math]::Floor(($afterSpan / 3.0) / $armEvery))
-                Write-Phase "  arming the reinject slot up to $armPassMax time(s), every ${armEvery}s, so both processor replicas can claim a victim" 'Gray'
-                for ($ap = 0; $ap -lt $armPassMax; $ap++) {
-                    $ar = Set-Phase88ReinjectArm
-                    if ($ar.Ok) {
-                        $armPasses++
-                        $reinjectArmArmed = $true
-                    } else {
-                        $Findings += "the reinject slot could not be armed on pass $($ap + 1): $($ar.Detail)"
-                        Write-Phase "  reinject arm FAILED: $($ar.Detail)" 'Yellow'
+                $cycleCount   = [Math]::Max(2, [int][Math]::Floor($afterSpan / [double]$seamDriveCycleSeconds))
+                $rollTier     = 'processor-sample'
+                Write-Phase "  drive: $cycleCount cycle(s) of ${seamDriveCycleSeconds}s — activate, arm, claim, roll one '$rollTier' replica" 'Gray'
+                for ($cy = 0; $cy -lt $cycleCount; $cy++) {
+                    $cycleDeadline = [datetime]::UtcNow.AddSeconds($seamDriveCycleSeconds)
+                    if ($cy -gt 0) { if (Invoke-SeamActivation) { $ActivationPostsAfter++ } }
+
+                    # Two arm passes 25 s apart: the first lets one replica claim, the second lets the
+                    # other. The slot is consumed by the claim, so it must be re-set to offer a second.
+                    for ($ap = 0; $ap -lt 2; $ap++) {
+                        $ar = Set-Phase88ReinjectArm
+                        if ($ar.Ok) { $armPasses++; $reinjectArmArmed = $true }
+                        else {
+                            $Findings += "the reinject slot could not be armed (cycle $($cy + 1), pass $($ap + 1)): $($ar.Detail)"
+                            Write-Phase "  reinject arm FAILED: $($ar.Detail)" 'Yellow'
+                        }
+                        Start-Sleep -Seconds 25
+                        # CHECKED AFTER EVERY PASS, not once at the end. Run 1 checked only after the last
+                        # pass and reported claimed=false for a run in which BOTH replicas had demonstrably
+                        # claimed — the later passes simply had no unclaimed replica left to take them.
+                        $stillArmed = Test-Phase88ReinjectArmed
+                        if ($null -ne $stillArmed -and -not $stillArmed) { $anyClaim = $true }
                     }
-                    Start-Sleep -Seconds $armEvery
+                    Write-Phase ("  cycle {0}/{1}: {2} arm pass(es) so far, anyClaim={3}" -f ($cy + 1), $cycleCount, $armPasses, $anyClaim) 'Gray'
+
+                    # Roll ONE replica so the next cycle has an unclaimed pod. Never on the last cycle —
+                    # a rollout after the final events would only add a discontinuity with nothing to gain.
+                    if ($cy -lt ($cycleCount - 1)) {
+                        $podNames = @(Get-TierPodNames -Tier $rollTier)
+                        if (@($podNames).Count -gt 0) {
+                            $victimPod = "$($podNames[0])"
+                            Write-Phase "  rolling one '$rollTier' replica ($victimPod) to mint a fresh claim slot" 'Gray'
+                            $del = Invoke-Phase88Ctl -Arguments @('delete', 'pod', $victimPod, '--wait=false')
+                            if (-not $del.Ok) { $Findings += "could not roll '$victimPod': $($del.Error)" }
+                            $null = Wait-TierSettled -Tier $rollTier -TimeoutSeconds 180
+                            $DriveRolledPods += $victimPod
+                        }
+                    }
+                    $left = [int]($cycleDeadline - [datetime]::UtcNow).TotalSeconds
+                    if ($left -gt 0) { Start-Sleep -Seconds $left }
                 }
                 $ReinjectArmPasses = $armPasses
-                # A slot that is GONE was claimed by a hop; a slot that survives every pass was never
-                # matched, which is itself the finding (wrong label, no traffic, or an image that does not
-                # carry the seam). Recorded either way rather than inferred from the panel.
-                $stillArmed = Test-Phase88ReinjectArmed
-                $ReinjectArmClaimObserved = if ($null -eq $stillArmed) { $null } else { -not $stillArmed }
-                Write-Phase "  reinject slot: $armPasses arm pass(es); claimed=$ReinjectArmClaimObserved" $(if ($ReinjectArmClaimObserved) { 'Gray' } else { 'Yellow' })
-                $remaining = $afterSpan - ($armPassMax * $armEvery)
-                if ($remaining -gt 0) { Start-Sleep -Seconds $remaining }
+                $ReinjectArmClaimObserved = $anyClaim
+                Write-Phase "  reinject slot: $armPasses arm pass(es) over $cycleCount cycle(s); a claim was observed at least once = $anyClaim" $(if ($anyClaim) { 'Green' } else { 'Yellow' })
+                $left = [int]($afterEnd - [datetime]::UtcNow).TotalSeconds
+                if ($left -gt 0) { Start-Sleep -Seconds $left }
                 Start-Sleep -Seconds $ExportTrailSeconds
             }
             else {
@@ -2631,6 +2757,46 @@ try {
         }
 
         # =====================================================================================
+        # STEP S10b — ROW-DECLARED DECOMPOSITION QUERIES (diagnosis only, never a verdict).
+        #
+        # A guarded panel that renders 0 does not say WHY. `sum(increase(A)) - sum(increase(B))
+        # or vector(0)` renders exactly the same comfortable 0 when (i) A and B moved together,
+        # (ii) neither moved, (iii) A moved but B has no series at all so the subtraction is EMPTY
+        # and the guard fires, or (iv) the window is too narrow for increase() to have two samples.
+        # Those are four different statements about the stack and a reader cannot tell them apart
+        # from the rendered value.
+        #
+        # A row may therefore declare the query terms of its own panel, evaluated over the SAME
+        # after window at SEVERAL range widths, with the per-timestamp values kept. This is
+        # DIAGNOSIS: the rendered panel remains the verdict (T-88-12), and nothing here can make a
+        # panel Moved. It exists so a flat guarded zero is a decomposed finding rather than a shrug.
+        # =====================================================================================
+        if ($scenario.Contains('decompositionQueries') -and @($scenario.decompositionQueries).Count -gt 0) {
+            Write-Phase "STEP S10b: decomposition of the subject panel's own query terms (diagnosis only)"
+            foreach ($dq in @($scenario.decompositionQueries)) {
+                foreach ($w in @($scenario.decompositionWindows)) {
+                    $qText = ("$($dq.Query)") -replace '\$__w', "${w}s"
+                    $vals  = [double[]]@()
+                    $err   = ''
+                    try { $vals = Get-ProxySeriesValues $qText $afterStartUnix $afterEndUnix $SubWindowSeconds }
+                    catch { $err = "$($_.Exception.Message)" }
+                    $DecompositionResults += [pscustomobject]@{
+                        Label            = "$($dq.Label)"
+                        RangeSeconds     = [int]$w
+                        Query            = $qText
+                        StepSeconds      = $SubWindowSeconds
+                        PointCount       = @($vals).Count
+                        Values           = $vals
+                        AllZero          = ((@($vals).Count -gt 0) -and (@($vals | Where-Object { $_ -ne 0 }).Count -eq 0))
+                        Empty            = (@($vals).Count -eq 0)
+                        Error            = $err
+                    }
+                    Write-Phase ("  {0} [{1}s]: {2} point(s) [{3}]{4}" -f "$($dq.Label)", $w, @($vals).Count, ((@($vals) | ForEach-Object { "{0:N4}" -f $_ }) -join ','), $(if ($err) { " ERROR: $err" } else { '' })) 'Gray'
+                }
+            }
+        }
+
+        # =====================================================================================
         # STEP S11 — VERDICT AND ARTIFACT. The artifact is written FIRST and the exit code is
         # resolved from the SAME in-memory object, so an artifact can never disagree with the code
         # the process returned.
@@ -2704,6 +2870,11 @@ try {
             ReinjectArmClaimObserved  = $ReinjectArmClaimObserved
             ReinjectArmCleared        = $ReinjectArmCleared
             ReinjectArmStillSet       = $ReinjectArmStillSet
+            ActivationPostsRebaseline = $ActivationPostsRebaseline
+            ActivationPostsAfter      = $ActivationPostsAfter
+            ActivationCadenceNote     = "the seam drive's own POST /api/v1/orchestration/start is issued on the SAME ${seamActivationEverySeconds}s cadence during the re-baseline hold and during the after window, so panels 10 and 12 are scored against a band that already contains the driver's HTTP footprint. ZERO-02 run 1 did not do this and correctly recorded the driver's single activation as cross-talk DRIFT (max excursion 0.0056 on panel 10's `.../Orchestration/start` series and panel 12's `204` series) — a false statement about the fault's blast radius, because the perturbation was the driver's own request."
+            DriveRolledPods           = [string[]]@($DriveRolledPods)
+            DriveRollNote             = 'Each processor replica assigns its _reinjectTriggerTarget static exactly once per PROCESS, so once every replica has claimed a victim, re-arming the Redis slot mints no further faults however many times it is set. ONE replica is therefore rolled between drive cycles — never the whole tier, so the pipeline is never out — which is what spreads the keeper events across more than one 60 s export interval. That spread is not a nicety: a burst confined to a single export interval is INVISIBLE to rate() (see ReinjectArmNote and the run-1 discard).'
             ReinjectArmNote           = 'MEASURED IN 88-07 and load-bearing for every seam row: `kubectl set env PROCESSOR_DEFEAT_READ=<label>` is NOT the fault. src/BaseProcessor.Core/Processing/ProcessorPipeline.cs:105-128 requires BOTH the hop payload to contain the label AND the Redis slot named above to exist, so the hop''s KeyDelete can atomically CLAIM it (true for exactly ONE caller across replicas). ReinjectArmClaimObserved true means the slot was consumed by a hop — the fault fired. A run that armed the env var and never armed the slot would have driven NOTHING while looking fully armed, and would then have scored the resulting flat panel as evidence about the deployed image.'
             StackRestored             = [bool]$restore.Ok
             BandSource                = $ScoringBandSource
@@ -2766,6 +2937,9 @@ try {
             DiagnosticAgreesWithPanel = $DiagnosticAgreesWithPanel
             DiagnosticDisagreements   = @($DiagnosticDisagreements)
             DiagnosticNote            = 'The RENDERED panel is the verdict. These proxy query_range values are DIAGNOSIS only; a disagreement is a finding to record, never an error to reconcile away.'
+
+            DecompositionResults      = @($DecompositionResults)
+            DecompositionNote         = 'DIAGNOSIS ONLY — nothing here can make a panel Moved. A guarded panel that renders 0 does not say WHY, and `sum(increase(A)) - sum(increase(B)) or vector(0)` renders the identical comfortable 0 in four different situations: A and B moved together; neither moved; A moved but B has no series at all so the subtraction is EMPTY and the guard supplies the 0; or the sub-window is too narrow for increase() to have two samples inside it. These rows evaluate the panel''s OWN terms over the SAME after window at several range widths, keeping the per-timestamp values, so a reader can tell those four apart. Empty=true means the expression produced no result at all at any step — which is precisely the case the guard hides.'
 
             RangeCumulativeLevelAfter    = $RangeCumulativeLevelAfter
             RangeCumulativeWindowSeconds = $RangeCumulativeWindowSeconds
