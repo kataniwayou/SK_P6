@@ -1,0 +1,154 @@
+{
+  "ScenarioId": "phase-88-wave0-probe",
+  "Verdict": "Pass",
+  "KeeperRecoveryTrafficObserved": false,
+  "KeeperConsumedSeriesCount": 0,
+  "Panel2LegendNamesAfter": [
+    ""
+  ],
+  "ViewPanelUrlWorks": true,
+  "StatPanelParsed": true,
+  "TimeseriesLegendParsed": true,
+  "TimeseriesLegendNamesBound": false,
+  "Panel9LegendNames": [
+    ""
+  ],
+  "LocatorModeChosen": "viewpanel",
+  "Panel8RawText": "0",
+  "Panel9RawText": "Name\tMean\tMax\n\nkeeper-99b8c574b-29mzq\n\t0.200 ops/s\t0.200 ops/s\n\nkeeper-99b8c574b-x4wqr\n\t0.200 ops/s\t0.200 ops/s",
+  "Safe5xxFound": false,
+  "Safe5xxRoute": null,
+  "ProbedEndpoints": [
+    {
+      "Label": "workflow-absent-guid",
+      "Method": "GET",
+      "Path": "/api/v1/workflows/00000000-0000-0000-0000-000000000001",
+      "Status": 404,
+      "Note": "well-formed but nonexistent workflow GUID"
+    },
+    {
+      "Label": "workflow-malformed-id",
+      "Method": "GET",
+      "Path": "/api/v1/workflows/not-a-guid",
+      "Status": 404,
+      "Note": "malformed non-GUID on the same route"
+    },
+    {
+      "Label": "schema-absent-guid",
+      "Method": "GET",
+      "Path": "/api/v1/schemas/00000000-0000-0000-0000-000000000002",
+      "Status": 404,
+      "Note": "nonexistent schema GUID"
+    },
+    {
+      "Label": "processor-absent-hash",
+      "Method": "GET",
+      "Path": "/api/v1/processors/by-source-hash/0000000000000000000000000000000000000000000000000000000000000000",
+      "Status": 404,
+      "Note": "nonexistent processor source-hash lookup"
+    },
+    {
+      "Label": "unmatched-path",
+      "Method": "GET",
+      "Path": "/api/v1/__phase88_probe_unmatched",
+      "Status": 404,
+      "Note": "unmatched route — expected 404; this is also the 404 driver panel 12 will need"
+    },
+    {
+      "Label": "orchestration-start-[]",
+      "Method": "POST",
+      "Path": "/api/v1/orchestration/start",
+      "Status": 400,
+      "Note": "inert activation: an empty JSON array starts nothing"
+    },
+    {
+      "Label": "step-create-dangling-edge",
+      "Method": "POST",
+      "Path": "/api/v1/steps",
+      "Status": 422,
+      "Note": "PQ-05 route A: a well-formed step whose nextStepIds names an id that does not exist"
+    }
+  ],
+  "DatasourceTimeIntervalSeconds": 60,
+  "RateIntervalNarrowSeconds": 240,
+  "RateIntervalWideSeconds": 240,
+  "RateIntervalPinned": true,
+  "UnresolvedRouteApiDanglingEdgeStatus": 422,
+  "UnresolvedRouteApiDanglingEdgeStage": "step-create",
+  "UnresolvedRouteL2StepKeyViable": false,
+  "UnresolvedRouteChosen": "none",
+  "ProbeWorkflowId": "c3b4bad3-bea9-4cc5-8991-0c5cc15c5e79",
+  "ProbeWorkflowCleanedUp": true,
+  "SeamArmLanded": true,
+  "SeamDisarmClean": true,
+  "SeamRolloutOldPods": [
+    "keeper-99b8c574b-29mzq",
+    "keeper-99b8c574b-x4wqr"
+  ],
+  "SeamRolloutNewPods": [
+    "keeper-75dcb7cb47-sf8pl",
+    "keeper-75dcb7cb47-zzdmx"
+  ],
+  "OldestSampleUtc": "2026-07-19T07:38:06.0000000Z",
+  "RetentionHoursObserved": 225.0,
+  "RetentionHorizonHours": 336,
+  "RetentionHorizonLimited": false,
+  "SeamVarsClean": true,
+  "ReplicasRestored": true,
+  "ImagesUnchanged": true,
+  "SeamVarsFound": [],
+  "ReplicaMismatches": [],
+  "ImageMismatches": [],
+  "UnknownTiers": [],
+  "UnevaluableQuestions": [],
+  "ViewportWidth": 1920,
+  "ViewportHeight": 1080,
+  "RateIntervalSeconds": 240,
+  "ScreenshotPaths": [
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-8-1785255966777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-9-1785255966777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-8-1785256026777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-9-1785256026777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-8-1785256086777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-9-1785256086777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-8-1785256146777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-9-1785256146777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-8-1785256206777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-9-1785256206777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-8-1785256266777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-9-1785256266777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-8-1785256326777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-9-1785256326777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-8-1785256386777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-9-1785256386777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-8-1785256446777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-9-1785256446777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-8-1785256506777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-9-1785256506777.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-2-1785256474292.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-2-1785256534292.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-2-1785256594292.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-2-1785256654292.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-2-1785256714292.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-2-1785256774292.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-2-1785256834292.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-2-1785256894292.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-2-1785256954292.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\panel-2-1785257014292.png"
+  ],
+  "ReplicasBefore": {
+    "processor-sample": 2,
+    "orchestrator": 3,
+    "keeper": 2,
+    "baseapi-service": 1
+  },
+  "ImagesBefore": {
+    "processor-sample": "processor-sample:tags-const-1544",
+    "orchestrator": "orchestrator:tags-const-1544",
+    "keeper": "keeper:tags-const-1544",
+    "baseapi-service": "baseapi-service:tags-const-1544"
+  },
+  "ScaleFaultDetail": "",
+  "CompletedUtc": "2026-07-28T16:49:14.5778471+00:00",
+  "HumanSummary": "phase-88-wave0-probe verdict=Pass: PQ-01 keeperRecoveryTraffic=False (series=0) | PQ-02 viewPanel=True stat=True legend=True namesBound=False mode=viewpanel | PQ-03 safe5xx=False () | PQ-04 rateIntervalPinned=True (240/240 s) | PQ-05 route=none (danglingEdge=422@step-create, l2Viable=False, cleanedUp=True) | PQ-06 seamArmLanded=True seamDisarmClean=True | PQ-07 oldestSample=2026-07-19T07:38:06.0000000Z (225 h, horizonLimited=False) | stack clean: seamVars=True replicas=True images=True | unevaluable=0"
+}
