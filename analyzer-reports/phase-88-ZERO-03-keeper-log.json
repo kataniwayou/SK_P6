@@ -1,0 +1,68 @@
+[
+ {
+  "Utc": "2026-07-28T22:52:00.168288Z",
+  "Pod": "keeper-99b8c574b-b87h8",
+  "Severity": "Information",
+  "Body": "REINJECT sent 01000000-a30d-de7f-2dd0-08deecfad576 reinject"
+ },
+ {
+  "Utc": "2026-07-28T22:52:30.152421Z",
+  "Pod": "keeper-99b8c574b-9c6p6",
+  "Severity": "Information",
+  "Body": "REINJECT sent 01000000-cba5-fdb2-c9bb-08deecfae754 reinject"
+ },
+ {
+  "Utc": "2026-07-28T22:52:30.161800Z",
+  "Pod": "keeper-99b8c574b-b87h8",
+  "Severity": "Information",
+  "Body": "REINJECT sent 01000000-cba5-fdb2-c9bb-08deecfae754 reinject"
+ },
+ {
+  "Utc": "2026-07-28T22:54:30.056202Z",
+  "Pod": "keeper-99b8c574b-9c6p6",
+  "Severity": "Information",
+  "Body": "REINJECT sent 01000000-ab16-3f75-29f4-08deecfb2eda reinject"
+ },
+ {
+  "Utc": "2026-07-28T22:56:30.064773Z",
+  "Pod": "keeper-99b8c574b-b87h8",
+  "Severity": "Information",
+  "Body": "REINJECT sent 01000000-a30d-de7f-a99e-08deecfb7662 reinject"
+ },
+ {
+  "Utc": "2026-07-28T23:27:00.141693Z",
+  "Pod": "keeper-75dcb7cb47-bkcsm",
+  "Severity": "Warning",
+  "Body": "REINJECT DEFEATED (TEST-ONLY seam) 01000000-a30d-de7f-24d9-08deecffb925 â€” redispatch suppressed for the FALSIFY-01 negative control; keeper still logs \"reinject\"."
+ },
+ {
+  "Utc": "2026-07-28T23:27:00.142302Z",
+  "Pod": "keeper-75dcb7cb47-bkcsm",
+  "Severity": "Information",
+  "Body": "REINJECT sent 01000000-a30d-de7f-24d9-08deecffb925 reinject"
+ },
+ {
+  "Utc": "2026-07-28T23:27:30.162444Z",
+  "Pod": "keeper-75dcb7cb47-rxnl7",
+  "Severity": "Warning",
+  "Body": "REINJECT DEFEATED (TEST-ONLY seam) 01000000-a30d-de7f-8e21-08deecffcb0c â€” redispatch suppressed for the FALSIFY-01 negative control; keeper still logs \"reinject\"."
+ },
+ {
+  "Utc": "2026-07-28T23:27:30.162828Z",
+  "Pod": "keeper-75dcb7cb47-rxnl7",
+  "Severity": "Information",
+  "Body": "REINJECT sent 01000000-a30d-de7f-8e21-08deecffcb0c reinject"
+ },
+ {
+  "Utc": "2026-07-28T23:29:30.090590Z",
+  "Pod": "keeper-75dcb7cb47-bkcsm",
+  "Severity": "Information",
+  "Body": "REINJECT sent 01000000-ab16-3f75-4334-08deed00128e reinject"
+ },
+ {
+  "Utc": "2026-07-28T23:31:30.095673Z",
+  "Pod": "keeper-75dcb7cb47-rxnl7",
+  "Severity": "Information",
+  "Body": "REINJECT sent 01000000-ab16-3f75-eb66-08deed005a14 reinject"
+ }
+]
