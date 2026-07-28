@@ -169,6 +169,10 @@ $seamVar         = ''
 $seamArmed2      = $false
 $seamTier2       = ''
 $seamVar2        = ''
+# The out-of-band Redis arm slot (skp:test:defeat-read-arm) is the SECOND half of the processor seam:
+# the env var supplies a step label, the slot is what a matching hop CLAIMS. Tracked out here for the
+# same reason the seam slots are — an interrupted run must still clear it.
+$reinjectArmArmed = $false
 $scaledTier      = ''
 $replicasBefore  = -1
 $probeWorkflowId = ''
@@ -364,6 +368,10 @@ try {
             requiresRebaseline = $false; status = 'Dropped'
             statusReason = 'neither route reaches an orchestrator_step_unresolved increment: the API dangling edge is refused 422 at step-create, and the L2 step key is rewritten from Postgres by any stop/start cycle'
             droppedProbeField = 'UnresolvedRouteChosen'; droppedProbeExpect = 'none'
+            # The row supplies its OWN accepted-unproven text. Without this the recorder would emit
+            # WEB-02's 5xx/redis narrative under ZERO-01's name — a reason that names the wrong routes
+            # is worse than no reason, because it reads as evidence.
+            acceptedUnprovenReason = 'ROUTE A — API dangling edge: MEASURED 422 at stage `step-create`. POST /api/v1/steps refuses a nextStepIds entry naming a non-existent step outright, EARLIER than the planning analysis predicted (CycleDetector''s D-08 missing-step gate was expected to reject it at activation instead). The graph can therefore never be brought into the state this route needs. ROUTE B — L2 step-key deletion: NOT VIABLE. On a validly created and activated two-step probe workflow the non-entry step''s key skp:{workflowId}:{stepId} was present after activation, absent after a DEL, and PRESENT AGAIN after one stop/start cycle, because OrchestrationService.StartAsync ends in IRedisProjectionWriter.UpsertAsync, which rewrites the whole snapshot from Postgres — so the hole closes before the orchestrator''s hydration BFS could ever miss the step. Reaching the counter would require a src/ change, which this phase''s locked constraint forbids, and no substitute fault was invented. LOG-CORROBORATION ROUTE FOR MAINTENANCE: a non-zero panel 6 corresponds one-for-one with the orchestrator emitting `Dangling next-step id {NextStepId} — skipping (business)` (src/Orchestrator/Dispatch/OrchestratorPrePipeline.cs:184) in the same window — one log line per increment, since stage-3 increments orchestrator_step_unresolved once per entry in selection.UnresolvedIds. Search the orchestrator logs for that string over the panel''s range before trusting a non-zero reading, and treat a green 0 as "either no dangling edge occurred OR the counter has never been emitted at all" — this phase could not tell those apart. The increment site is graceful (never throws, always acks), so a non-zero reading is credible when it does appear.'
             decidedBy = 'PQ-05 UnresolvedRouteChosen=none (danglingEdge 422 @ step-create, l2StepKeyViable=false)'
             notes = 'panel 6 goes to the HAND-04 register; the counter is unreachable from outside src/ and the locked constraint forbids reaching inside it'
         }
@@ -374,10 +382,22 @@ try {
             # range query covering the whole fault.
             mode = 'scenario'; lever = 'seam'; targetTier = ''
             seamTier = 'processor-sample'; seamVar = 'PROCESSOR_DEFEAT_READ'
-            triggerSeamTier = ''; triggerSeamVar = ''; dwellSeconds = 90
+            # MEASURED IN 88-07: the variable holds a step LABEL, not a boolean (ProcessorPipeline.cs:110-115
+            # tests `d.Payload.Contains(defeatLabel)`). Step_C is the LINEAR critical-path hop between Step_B
+            # and the D1/D2 fan-out in v8-fanout-proof, and `{"label": "Step_C", "number": 1}` is its verbatim
+            # assignment payload — the same target the Phase-79 FALSIFY-01 control uses, for the same reason
+            # (losing a post-fan-out hop can be masked by the convergent terminal Step_G).
+            seamValue = 'Step_C'
+            # ...and the label alone still fires NOTHING. The fault also needs the out-of-band Redis slot
+            # `skp:test:defeat-read-arm` to exist so the hop can CLAIM it. That is armed at TRIGGER time only.
+            requiresReinjectArm = $true
+            triggerSeamTier = ''; triggerSeamVar = ''; triggerSeamValue = ''; dwellSeconds = 90
             panelIds = @('2')
             predictedDirection = @{ '2' = 'nonzero' }
-            crossTalkPanels = @('9','10','12')
+            # Panel 8 is a CROSS-TALK CONTROL here, and it is the DISC-04 half of this scenario: the keeper
+            # consumed AND sent, so there is nothing to gap. The plan's own verification requires panel 8 in
+            # this list; the 88-05 table omitted it.
+            crossTalkPanels = @('8','9','10','12')
             requiresRebaseline = $true; status = 'Locked'; statusReason = ''
             decidedBy = 'PQ-01 KeeperRecoveryTrafficObserved=false, KeeperConsumedSeriesCount=0'
             notes = 'KEEPER_DEFEAT_REINJECT is left UNSET so the keeper consumes AND reinjects: consumed and sent both move and the panel-8 gap stays 0. Arm -> rollout -> settle >= 150 s -> RE-BASELINE -> trigger (DISC-06), so this row costs two rollouts, not none.'
@@ -391,12 +411,20 @@ try {
             # an open question about the image, NOT a proof that the gap cannot open. Research
             # assumption A6 remains unretired.
             mode = 'scenario'; lever = 'seam'; targetTier = ''
-            seamTier = 'keeper'; seamVar = 'KEEPER_DEFEAT_REINJECT'
+            seamTier = 'keeper'; seamVar = 'KEEPER_DEFEAT_REINJECT'; seamValue = '1'
             triggerSeamTier = 'processor-sample'; triggerSeamVar = 'PROCESSOR_DEFEAT_READ'
+            triggerSeamValue = 'Step_C'
+            requiresReinjectArm = $true
             dwellSeconds = 90
             panelIds = @('8')
             predictedDirection = @{ '8' = 'nonzero' }
             crossTalkPanels = @('6','7','13','10','12')
+            # OBSERVED, never scored and never a control. The whole ZERO-03 claim is "the keeper CONSUMED and
+            # did NOT SEND", and panel 2 is the only rendered evidence that the first half happened at all. A
+            # flat panel 8 beside a flat panel 2 means the fault never fired; a flat panel 8 beside a MOVED
+            # panel 2 is a statement about the gap arithmetic. Without this reading those two are
+            # indistinguishable in the artifact.
+            observePanels = @('2')
             requiresRebaseline = $true; status = 'Locked'; statusReason = ''
             decidedBy = 'PQ-06 SeamArmLanded=true + SeamDisarmClean=true; both seams required per Record 7'
             notes = 'arm both -> rollout -> settle >= 150 s -> RE-BASELINE -> trigger -> capture -> restore -> disarm -> assert'
@@ -931,6 +959,18 @@ try {
         # reading measures an IDLE stack rather than a RECOVERED one and nobody can tell.
         $TrafficResumedAfterRestore = $null
         $TrafficResumeDetail        = ''
+        # The VALUES the seams were armed with, verbatim. PROCESSOR_DEFEAT_READ is a step LABEL, so
+        # "the seam was armed" is not a statement anyone can check without knowing what it was armed TO.
+        $SeamValuesArmed            = @()
+        # The out-of-band Redis slot that turns the processor seam from a capability into an event.
+        $ReinjectArmPasses          = 0
+        $ReinjectArmClaimObserved   = $null
+        $ReinjectArmCleared         = $null
+        $ReinjectArmStillSet        = $null
+        $ReinjectArmKey             = 'skp:test:defeat-read-arm'
+        # SeamActiveDuringRebaseline's resolution, PROVEN per run rather than argued once.
+        $RebaselineInertnessProven  = $null
+        $RebaselineInertnessChecks  = @()
 
         $shotDir  = Join-Path $screenshotRoot $canonicalId
         $lever    = "$($scenario.lever)"
@@ -1350,10 +1390,32 @@ try {
             }
             Write-Phase "  drop re-confirmed: probe $dropField = '$dropActual'." 'Gray'
 
+            # The declared cross-talk panels are READ, in the SAME batch and the SAME windows as the
+            # subject, and scored against a LOCAL reference band captured over the ten windows that
+            # immediately precede the observation.
+            #
+            # Why a local reference rather than the DISC-01 band: BASE-01 was captured while a read-only
+            # host load was driving the WebApi, and nothing is driving it here. Scoring panels 10 and 12
+            # against a band taken under load, from an observation taken without it, would report drift
+            # that is a difference in CONDITIONS rather than anything about the stack. Both windows here
+            # have already ELAPSED, so the reference costs no wall time and is taken under conditions
+            # identical to the observation by construction — the same trick STEP S4 uses for the pre-arm
+            # baseline.
+            #
+            # These entries stay Applicable=false. Nothing was perturbed, so this is NOT a blast-radius
+            # bound; it is a measured statement that the other guarded zeros and the WebApi panels were
+            # simultaneously at rest while the subject sat at its guarded zero. Recording StayedPut as a
+            # MEASUREMENT is not the fabricated claim 88-05 refused — that would be asserting a control
+            # held when nothing was driven, which is what Applicable=false says.
+            $dropCapturePanels = [string[]]@(@($subjects) + @($controls) | Select-Object -Unique)
             $obsEnd = ([datetime]::UtcNow).AddSeconds(-$ExportTrailSeconds)
-            $obsCap = Invoke-Phase88Capture -PanelIdList ([string[]]$subjects) -EndUtc $obsEnd `
+            $refEnd = $obsEnd.AddSeconds(-($SubWindowSeconds * $AfterSubWindowCount))
+            $refCap = Invoke-Phase88Capture -PanelIdList $dropCapturePanels -EndUtc $refEnd `
+                        -Count $RebaselineSubWindowCount -Panel4Count $Panel4RebaselineCount -ShotDir $shotDir -Label 'observe-reference'
+            $dropRefBands = @(New-Phase88BandSet -Capture $refCap -PanelIdList $dropCapturePanels)
+            $obsCap = Invoke-Phase88Capture -PanelIdList $dropCapturePanels -EndUtc $obsEnd `
                         -Count $AfterSubWindowCount -Panel4Count $Panel4AfterCount -ShotDir $shotDir -Label 'observe'
-            $ScenarioScreenshotPaths = @($obsCap.ScreenshotPaths)
+            $ScenarioScreenshotPaths = @(@($refCap.ScreenshotPaths) + @($obsCap.ScreenshotPaths) | Select-Object -Unique)
 
             $dropPanelResults = @()
             foreach ($p in $subjects) {
@@ -1391,21 +1453,70 @@ try {
             }
             $PanelResults = @($dropPanelResults)
 
-            # The declared cross-talk list is carried, with Applicable=false: no fault was driven, so
-            # there is no blast radius to bound. Claiming a control HELD when nothing was perturbed
-            # would be a fabricated claim, and an empty list would hide the declaration.
+            # The declared cross-talk list is carried with Applicable=false — no fault was driven, so
+            # there is no blast radius to bound — but each panel is READ and scored against the local
+            # reference band, so the row states what those panels were doing while the subject sat at
+            # its guarded zero instead of leaving the declaration unmeasured.
             foreach ($c in $controls) {
-                $CrossTalkResults += [pscustomobject]@{
-                    PanelId     = [int]$c
-                    PanelTitle  = "$($Panels[$c].Title)"
-                    Applicable  = $false
-                    BandLow     = $null
-                    BandHigh    = $null
-                    AfterValues = [double[]]@()
-                    StayedPut   = $null
-                    MaxExcursion = $null
-                    Note        = 'no fault was driven, so there is no blast radius for this control to bound; not measured rather than claimed'
+                $rdC   = Get-Phase88PanelReading -Capture $obsCap -PanelId $c
+                $stateC = if (@($rdC.States).Count -gt 0) { (@($rdC.States | Select-Object -Unique) -join '|') } else { 'NoReading' }
+                $ctSeriesD = @()
+                $panelStayedD = $true
+                $maxExcD = 0.0
+                $worstD = $null
+                foreach ($e in @($rdC.Entries)) {
+                    $bandC = Find-Phase88Band -Bands $dropRefBands -PanelId ([int]$c) -SeriesName "$($e.Name)" -SeriesIndex ([int]$e.Index)
+                    if ($null -eq $bandC) {
+                        $panelStayedD = $false
+                        $Findings += "observed panel ${c} ($($Panels[$c].Title)) series '$($e.Name)': no reference band, so its inertness could not be stated"
+                        $ctSeriesD += [pscustomobject]@{
+                            SeriesIndex = [int]$e.Index; SeriesName = "$($e.Name)"
+                            BandLow = $null; BandHigh = $null; AfterValues = [double[]]@($e.Values)
+                            StayedPut = $false; MaxExcursion = $null; SamplesOutside = 0
+                            Note = 'no reference band for this series'
+                        }
+                        continue
+                    }
+                    $loC = [double]$bandC.BandLow; $hiC = [double]$bandC.BandHigh
+                    $excC = 0.0; $outC = 0
+                    foreach ($v in @($e.Values)) {
+                        $x = Get-Phase88Excursion -Value ([double]$v) -Low $loC -High $hiC
+                        if ($x -gt 0) { $outC++ }
+                        if ($x -gt $excC) { $excC = $x }
+                    }
+                    if ($outC -ne 0) { $panelStayedD = $false }
+                    if ($excC -gt $maxExcD) { $maxExcD = $excC }
+                    $entryD = [pscustomobject]@{
+                        SeriesIndex    = [int]$e.Index
+                        SeriesName     = "$($e.Name)"
+                        BandLow        = $loC
+                        BandHigh       = $hiC
+                        BandSampleCount = [int]$bandC.SampleCount
+                        AfterValues    = [double[]]@($e.Values)
+                        StayedPut      = ($outC -eq 0)
+                        MaxExcursion   = $excC
+                        SamplesOutside = $outC
+                        Note           = ''
+                    }
+                    $ctSeriesD += $entryD
+                    if ($null -eq $worstD -or $excC -ge [double]$worstD.MaxExcursion) { $worstD = $entryD }
                 }
+                $CrossTalkResults += [pscustomobject]@{
+                    PanelId          = [int]$c
+                    PanelTitle       = "$($Panels[$c].Title)"
+                    Applicable       = $false
+                    BandLow          = if ($null -ne $worstD) { $worstD.BandLow } else { $null }
+                    BandHigh         = if ($null -ne $worstD) { $worstD.BandHigh } else { $null }
+                    BandSource       = "local reference, 10 x ${SubWindowSeconds}s immediately preceding the observation ($($refCap.WindowStartUtc) -> $($refCap.WindowEndUtc))"
+                    SubWindowSeconds = [int]$rdC.SubWindowSeconds
+                    AfterValues      = if ($null -ne $worstD) { [double[]]@($worstD.AfterValues) } else { [double[]]@() }
+                    StayedPut        = $panelStayedD
+                    MaxExcursion     = $maxExcD
+                    PanelStateAfter  = $stateC
+                    SeriesResults    = @($ctSeriesD)
+                    Note             = 'MEASURED INERTNESS, NOT A BLAST-RADIUS BOUND. No fault was driven, so Applicable is false: this cannot say the fault did not reach this panel, because there was no fault. What it does say — as a reading, not an assertion — is that this panel stayed inside a band taken from the ten windows immediately before, while the subject panel sat at its guarded zero. For the other guarded zeros in this list that is the useful half: it records that they were simultaneously at exactly 0.'
+                }
+                Write-Phase ("  observed control panel {0}: stayedPut={1} maxExcursion={2:N4} state={3}" -f $c, $panelStayedD, $maxExcD, $stateC) 'Gray'
             }
 
             $restore = Assert-StackRestored -Tiers $Tiers -ExpectedReplicas $preReplicas -ExpectedImages $preImages
@@ -1417,19 +1528,30 @@ try {
                     $endpointLines += ("{0} {1} -> {2}" -f "$($pe.Method)", "$($pe.Path)", "$($pe.Status)")
                 }
             }
+            # A row may carry its OWN enumerated reason. Without this branch every dropped row would be
+            # narrated as WEB-02 — the 5xx endpoint sweep and the redis/readiness-latch cost — under a
+            # different scenario id, and a reason that names the wrong routes reads as evidence.
+            if ($scenario.Contains('acceptedUnprovenReason') -and -not [string]::IsNullOrWhiteSpace("$($scenario.acceptedUnprovenReason)")) {
+                $AcceptedUnprovenReason = "$($scenario.statusReason). " + "$($scenario.acceptedUnprovenReason)"
+            }
+            else {
             $AcceptedUnprovenReason =
                 "$($scenario.statusReason). " +
                 "Enumerated endpoint probe (PQ-03, $($endpointLines.Count) endpoints, zero 5xx on safe input): " +
                 ($endpointLines -join ' | ') + ". " +
                 'The dependency-outage route to a 5xx is NOT substituted: redis has no PVC, so scaling it wipes L2, and under the Phase-86 hard readiness latch the WebApi does not self-heal from a dependency outage — recovery costs a WebApi pod restart, which would perturb every later baseline in this phase. ' +
                 'MAINTENANCE GUIDANCE: panel 13''s guarded green 0 is indistinguishable from "the 5xx counter has never been emitted at all". The first non-zero reading on panel 13 should be corroborated against the WebApi logs for the same window before it is trusted, and once ONE 5xx has ever occurred the numerator series exists permanently — so a zero on panel 13 after that date means something different from today''s zero.'
+            }
 
             $humanDrop = "phase-88 $canonicalId verdict=Inconclusive: DROPPED row RECORDED, not run. " +
                          "No fault was driven and no cluster mutation was issued. " +
                          "Drop re-confirmed from the wave-0 probe ($dropField='$dropActual'). " +
                          "Panel $(@($subjects) -join ',') observed over $AfterSubWindowCount x ${SubWindowSeconds}s pinned windows " +
                          "($($obsCap.WindowStartUtc) -> $($obsCap.WindowEndUtc)) at ${ViewportWidth}x${ViewportHeight}; " +
-                         "state=$(@($PanelResults | ForEach-Object { $_.PanelStateAfter }) -join ','). " +
+                         "state=$(@($PanelResults | ForEach-Object { $_.PanelStateAfter }) -join ','), " +
+                         "values=[$(@($PanelResults | ForEach-Object { "$($_.PanelId):$((@($_.AfterValues) -join ','))" }) -join ' ')]. " +
+                         "Declared cross-talk panels [$(@($controls) -join ',')] were READ in the same windows and scored against a local reference band " +
+                         "($(@($CrossTalkResults | ForEach-Object { "$($_.PanelId):$(if($_.StayedPut){'inert'}else{'MOVED'})" }) -join ' ')) — measured inertness, NOT a blast-radius bound, because no fault was driven. " +
                          "stack clean: seamVars=$($restore.SeamVarsClean) replicas=$($restore.ReplicasRestored) images=$($restore.ImagesUnchanged)."
 
             $dropReport = [ordered]@{
@@ -1470,6 +1592,9 @@ try {
                 BaselineWindowEnd         = "$($disc01.BaselineWindowEnd)"
                 AfterWindowStart          = "$($obsCap.WindowStartUtc)"
                 AfterWindowEnd            = "$($obsCap.WindowEndUtc)"
+                ObserveReferenceWindowStart = "$($refCap.WindowStartUtc)"
+                ObserveReferenceWindowEnd   = "$($refCap.WindowEndUtc)"
+                ObserveReferenceNote      = "the cross-talk panels are scored against a LOCAL reference band taken over the $RebaselineSubWindowCount x ${SubWindowSeconds}s that immediately precede the observation, not against the DISC-01 band — BASE-01 was captured under a read-only host load and nothing is driving one here, so a DISC-01 comparison would report a difference in CONDITIONS as drift. Both windows had already elapsed when they were read, so the reference cost no wall time and is taken under conditions identical to the observation."
                 SubWindowSeconds          = $SubWindowSeconds
                 SubWindowCount            = $AfterSubWindowCount
                 ViewportWidth             = $ViewportWidth
@@ -1570,9 +1695,14 @@ try {
             if ($lever -eq 'seam') {
                 $seamTier = "$($scenario.seamTier)"
                 $seamVar  = "$($scenario.seamVar)"
+                # The VALUE comes from the row, as a static table string. PROCESSOR_DEFEAT_READ is a step
+                # LABEL, not a boolean, so the library's '1' default would arm a variable the pipeline can
+                # never match and the scenario would drive nothing while looking armed.
+                $seamValue = if ($scenario.Contains('seamValue') -and -not [string]::IsNullOrWhiteSpace("$($scenario.seamValue)")) { "$($scenario.seamValue)" } else { '1' }
+                $SeamValuesArmed += "${seamTier}/${seamVar}=${seamValue}"
                 $RolloutOldInstanceIds = [string[]]@(Get-TierPodNames -Tier $seamTier)
-                Write-Phase "STEP S5: arming '$seamVar' on '$seamTier'"
-                $arm = Set-Phase88Seam -Tier $seamTier -Name $seamVar
+                Write-Phase "STEP S5: arming '$seamVar=$seamValue' on '$seamTier'"
+                $arm = Set-Phase88Seam -Tier $seamTier -Name $seamVar -Value $seamValue
                 $seamArmed = [bool]$arm.Armed
                 if (-not $arm.Ok) {
                     Write-Phase "the seam arm failed: $($arm.Detail)" 'Red'; exit 61
@@ -1585,8 +1715,10 @@ try {
                 if (-not [string]::IsNullOrWhiteSpace("$($scenario.triggerSeamTier)")) {
                     $seamTier2 = "$($scenario.triggerSeamTier)"
                     $seamVar2  = "$($scenario.triggerSeamVar)"
-                    Write-Phase "STEP S5: arming the TRIGGER seam '$seamVar2' on '$seamTier2'"
-                    $arm2 = Set-Phase88Seam -Tier $seamTier2 -Name $seamVar2
+                    $seamValue2 = if ($scenario.Contains('triggerSeamValue') -and -not [string]::IsNullOrWhiteSpace("$($scenario.triggerSeamValue)")) { "$($scenario.triggerSeamValue)" } else { '1' }
+                    $SeamValuesArmed += "${seamTier2}/${seamVar2}=${seamValue2}"
+                    Write-Phase "STEP S5: arming the TRIGGER seam '$seamVar2=$seamValue2' on '$seamTier2'"
+                    $arm2 = Set-Phase88Seam -Tier $seamTier2 -Name $seamVar2 -Value $seamValue2
                     $seamArmed2 = [bool]$arm2.Armed
                     if (-not $arm2.Ok) { Write-Phase "the trigger seam arm failed: $($arm2.Detail)" 'Red'; exit 61 }
                     $RolloutOldInstanceIds = [string[]]@(@($RolloutOldInstanceIds) + @($arm2.PodNamesBefore))
@@ -1627,6 +1759,57 @@ try {
                 $ScoringBandSource = "re-captured after the arm rollout ($($rebaseCap.WindowStartUtc) -> $($rebaseCap.WindowEndUtc))"
                 $BaselineRecaptured = $true
                 Write-Phase "  re-baseline: $(@($rebaseBands).Count) band(s) — THIS is what the scenario is scored against." 'Gray'
+
+                # ---- SeamActiveDuringRebaseline: RESOLVED BY MEASUREMENT, NOT BY ARGUMENT -----------
+                # 88-05 left the question open: a seam armed BEFORE the re-baseline is still armed DURING
+                # it, so is the authoritative band captured with the fault already running?
+                #
+                # It is not, and the reason is structural rather than lucky. BOTH Phase-88 seams are
+                # CAPABILITIES that a separate act must trigger:
+                #   * PROCESSOR_DEFEAT_READ short-circuits unless the hop's payload carries the label AND
+                #     the Redis slot skp:test:defeat-read-arm exists to be claimed. The slot is armed at
+                #     TRIGGER time only (STEP S6), so during the settle and the re-baseline the block makes
+                #     no Redis call, claims nothing and faults nothing.
+                #   * KEEPER_DEFEAT_REINJECT can only fire inside ReinjectConsumer.HandleAsync, which runs
+                #     only when a KeeperReinject arrives — which cannot happen until the processor seam
+                #     above has fired.
+                # The re-baseline is therefore exactly what DISC-06 needs it to be: a band taken AFTER the
+                # rollout the arm caused (which is the real discontinuity) and BEFORE the fault.
+                #
+                # That reasoning is still an argument, so the run PROVES it: every Regime-B subject panel's
+                # re-baseline band must still be exactly 0..0. A contaminated re-baseline would show a
+                # non-zero guarded band here, and the scenario would then be comparing fault against fault.
+                # Proven, not assumed — a false claim about the null hypothesis voids the whole assertion.
+                $inertChecks = @()
+                $inertOk = $true
+                foreach ($sp in @($subjects)) {
+                    if ("$($Panels[$sp].Regime)" -ne 'B') { continue }
+                    $spBands = @($rebaseBands | Where-Object { [int]$_.PanelId -eq [int]$sp })
+                    if (@($spBands).Count -eq 0) {
+                        $inertOk = $false
+                        $inertChecks += "panel ${sp}: NO re-baseline band was produced, so the seam-active re-baseline could not be shown inert"
+                        continue
+                    }
+                    foreach ($sb in @($spBands)) {
+                        $lo = [double]$sb.BandLow; $hi = [double]$sb.BandHigh
+                        if ($lo -ne 0.0 -or $hi -ne 0.0) {
+                            $inertOk = $false
+                            $inertChecks += ("panel {0} series '{1}': re-baseline band {2:N6}..{3:N6} is NOT the guarded zero — the armed seam was ALREADY firing during the re-baseline, so this band is not a null hypothesis" -f $sp, "$($sb.SeriesName)", $lo, $hi)
+                        } else {
+                            $inertChecks += ("panel {0} series '{1}': re-baseline band 0..0 with the seam ARMED — the capability was inert until the trigger" -f $sp, "$($sb.SeriesName)")
+                        }
+                    }
+                }
+                if (@($inertChecks).Count -gt 0) {
+                    $RebaselineInertnessProven = $inertOk
+                    $RebaselineInertnessChecks = [string[]]@($inertChecks)
+                    if (-not $inertOk) {
+                        $Findings += "the seam-active re-baseline is CONTAMINATED: $($inertChecks -join ' | ')"
+                        Write-Phase "  re-baseline inertness NOT proven — see findings" 'Red'
+                    } else {
+                        Write-Phase "  re-baseline inertness PROVEN: every Regime-B subject band is still exactly 0..0 with the seam armed" 'Gray'
+                    }
+                }
             }
         }
 
@@ -1725,7 +1908,54 @@ try {
             $FaultStartUtc = $faultStart.ToString('o')
             $afterStart = $faultStart
             $afterEnd   = $afterStart.AddSeconds($afterSpan)
-            Start-Sleep -Seconds ($afterSpan + $ExportTrailSeconds)
+
+            # ---- THE ACTUAL FAULT: ARM THE OUT-OF-BAND REDIS SLOT --------------------------------
+            # `kubectl set env PROCESSOR_DEFEAT_READ=Step_C` only gives the pipeline a LABEL to match.
+            # The fault fires when a matching hop can CLAIM skp:test:defeat-read-arm — a KeyDelete that
+            # returns true for exactly ONE caller across replicas. This is where the seam stops being a
+            # capability and becomes an event, and it is the reason the re-baseline above is a valid null
+            # hypothesis rather than a second fault window.
+            #
+            # Re-armed on a bounded schedule for the first third of the after window so BOTH processor
+            # replicas get the chance to claim a victim. This cannot run away: each pod assigns its
+            # _reinjectTriggerTarget static exactly once per process and never reassigns it, so the tier
+            # can produce at most one victim entryId per replica however many times the slot is set.
+            $armPasses = 0
+            if ($scenario.Contains('requiresReinjectArm') -and $scenario.requiresReinjectArm) {
+                $armEvery   = 30
+                $armPassMax = [Math]::Max(2, [int][Math]::Floor(($afterSpan / 3.0) / $armEvery))
+                Write-Phase "  arming the reinject slot up to $armPassMax time(s), every ${armEvery}s, so both processor replicas can claim a victim" 'Gray'
+                for ($ap = 0; $ap -lt $armPassMax; $ap++) {
+                    $ar = Set-Phase88ReinjectArm
+                    if ($ar.Ok) {
+                        $armPasses++
+                        $reinjectArmArmed = $true
+                    } else {
+                        $Findings += "the reinject slot could not be armed on pass $($ap + 1): $($ar.Detail)"
+                        Write-Phase "  reinject arm FAILED: $($ar.Detail)" 'Yellow'
+                    }
+                    Start-Sleep -Seconds $armEvery
+                }
+                $ReinjectArmPasses = $armPasses
+                # A slot that is GONE was claimed by a hop; a slot that survives every pass was never
+                # matched, which is itself the finding (wrong label, no traffic, or an image that does not
+                # carry the seam). Recorded either way rather than inferred from the panel.
+                $stillArmed = Test-Phase88ReinjectArmed
+                $ReinjectArmClaimObserved = if ($null -eq $stillArmed) { $null } else { -not $stillArmed }
+                Write-Phase "  reinject slot: $armPasses arm pass(es); claimed=$ReinjectArmClaimObserved" $(if ($ReinjectArmClaimObserved) { 'Gray' } else { 'Yellow' })
+                $remaining = $afterSpan - ($armPassMax * $armEvery)
+                if ($remaining -gt 0) { Start-Sleep -Seconds $remaining }
+                Start-Sleep -Seconds $ExportTrailSeconds
+            }
+            else {
+                Start-Sleep -Seconds ($afterSpan + $ExportTrailSeconds)
+            }
+
+            # Clear the slot as soon as the fault window closes, not only in the outer finally. An
+            # unclaimed slot left behind would silently pre-arm the NEXT scenario that sets the label.
+            $rc = Clear-Phase88ReinjectArm
+            $reinjectArmArmed = $false
+            $ReinjectArmCleared = [bool]$rc.Ok
             $FaultEndUtc = ([datetime]::UtcNow).ToString('o')
         }
 
@@ -1812,6 +2042,17 @@ try {
             $null = Clear-Phase88Seam -Tier $seamTier -Name $seamVar
             $seamArmed = $false
         }
+        # The Redis arm slot is cleared and RE-READ here, beside the env-var restore claim, because
+        # Assert-StackRestored only knows about Deployment env and would report a clean stack while the
+        # slot still sat armed in Redis.
+        $rc2 = Clear-Phase88ReinjectArm
+        $reinjectArmArmed = $false
+        if ($null -eq $ReinjectArmCleared) { $ReinjectArmCleared = [bool]$rc2.Ok }
+        $ReinjectArmStillSet = Test-Phase88ReinjectArmed
+        if ($ReinjectArmStillSet) {
+            $Findings += "the reinject arm slot '$ReinjectArmKey' is STILL SET after the run — it would pre-arm the next scenario that sets PROCESSOR_DEFEAT_READ"
+        }
+
         $restore = Assert-StackRestored -Tiers $Tiers -ExpectedReplicas $preReplicas -ExpectedImages $preImages
         foreach ($t in $Tiers) { $ReplicasAfterMap[$t] = Get-LiveReplicas -Tier $t }
         # The scaled tier's count is re-read HERE, independently of the sequencer's own claim, so the
@@ -2454,6 +2695,16 @@ try {
             BaselineRecaptured        = $BaselineRecaptured
             BaselineRecaptureNote     = $BaselineRecaptureNote
             SeamActiveDuringRebaseline = $SeamActiveDuringRebaseline
+            SeamActiveDuringRebaselineResolution = 'RESOLVED IN 88-07 — a seam-active re-baseline IS a valid comparison basis on this stack, and the run proves it rather than arguing it. Both Phase-88 seams are CAPABILITIES that a separate act must trigger: PROCESSOR_DEFEAT_READ short-circuits (no Redis call, no claim, no fault) until the out-of-band slot skp:test:defeat-read-arm exists to be claimed, and that slot is armed at TRIGGER time only; KEEPER_DEFEAT_REINJECT can only fire inside ReinjectConsumer.HandleAsync, which cannot run until the processor seam has already fired. The re-baseline is therefore taken AFTER the rollout the arm caused — which is the real DISC-06 discontinuity — and BEFORE the fault. RebaselineInertnessProven records the per-run PROOF: every Regime-B subject panel''s re-baseline band must still be exactly 0..0 with the seam armed. A contaminated re-baseline would show a non-zero guarded band and the scenario would be comparing fault against fault. The pre-arm capture is NOT used as the scoring band, because it predates the rollout and its series would be compared across a pod-identity change.'
+            RebaselineInertnessProven = $RebaselineInertnessProven
+            RebaselineInertnessChecks = [string[]]@($RebaselineInertnessChecks)
+            SeamValuesArmed           = [string[]]@($SeamValuesArmed)
+            ReinjectArmKey            = $ReinjectArmKey
+            ReinjectArmPasses         = $ReinjectArmPasses
+            ReinjectArmClaimObserved  = $ReinjectArmClaimObserved
+            ReinjectArmCleared        = $ReinjectArmCleared
+            ReinjectArmStillSet       = $ReinjectArmStillSet
+            ReinjectArmNote           = 'MEASURED IN 88-07 and load-bearing for every seam row: `kubectl set env PROCESSOR_DEFEAT_READ=<label>` is NOT the fault. src/BaseProcessor.Core/Processing/ProcessorPipeline.cs:105-128 requires BOTH the hop payload to contain the label AND the Redis slot named above to exist, so the hop''s KeyDelete can atomically CLAIM it (true for exactly ONE caller across replicas). ReinjectArmClaimObserved true means the slot was consumed by a hop — the fault fired. A run that armed the env var and never armed the slot would have driven NOTHING while looking fully armed, and would then have scored the resulting flat panel as evidence about the deployed image.'
             StackRestored             = [bool]$restore.Ok
             BandSource                = $ScoringBandSource
 
@@ -3274,6 +3525,18 @@ finally {
         if (Get-Command Clear-Phase88Seam -ErrorAction SilentlyContinue) {
             Write-Host "[phase-88-panel-discriminate] TEARDOWN: '$seamVar2' is still armed on '$seamTier2' — disarming." -ForegroundColor Yellow
             $null = Clear-Phase88Seam -Tier $seamTier2 -Name $seamVar2
+        }
+    }
+
+    # The out-of-band Redis ARM SLOT is the other half of the processor seam and needs the same
+    # unconditional teardown. On its own an armed slot faults nothing — the env var must also be
+    # present — but a slot left SET would silently pre-arm the NEXT scenario that sets the label, and
+    # that scenario's very first matching hop would then be faulted before its own trigger. Clearing is
+    # a DEL, idempotent on an absent key, so it is issued whenever this run armed it at all.
+    if ($reinjectArmArmed) {
+        if (Get-Command Clear-Phase88ReinjectArm -ErrorAction SilentlyContinue) {
+            Write-Host "[phase-88-panel-discriminate] TEARDOWN: the reinject arm slot may still be set — clearing." -ForegroundColor Yellow
+            $null = Clear-Phase88ReinjectArm
         }
     }
 

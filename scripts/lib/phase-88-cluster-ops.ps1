@@ -580,6 +580,84 @@ function Clear-Phase88Seam {
     return $result
 }
 
+# =================================================================================================
+# THE SECOND HALF OF THE PROCESSOR SEAM — the out-of-band Redis ARM SLOT.
+#
+# MEASURED IN 88-07, AND IT CHANGES WHAT `Set-Phase88Seam` MEANS.
+# `PROCESSOR_DEFEAT_READ` is NOT a boolean and setting it is NOT the fault. Reading
+# src/BaseProcessor.Core/Processing/ProcessorPipeline.cs:105-128 the variable holds a step LABEL and
+# the fault fires only when BOTH hold:
+#
+#   1. the hop's payload CONTAINS that label, and
+#   2. `skp:test:defeat-read-arm` EXISTS in Redis, so the hop's `KeyDeleteAsync` returns true and it
+#      atomically CLAIMS the single armed slot (true for exactly ONE caller across replicas).
+#
+# Until (2) the env var is a CAPABILITY, not a fault: the block short-circuits, no Redis key is
+# touched, no claim is made, and the processor's behaviour is byte-for-byte unchanged. That is what
+# makes a seam-armed re-baseline a valid null hypothesis (see the driver's RebaselineInertnessProven)
+# and it is also why a Phase-88 scenario that only ran `kubectl set env` would have driven NOTHING and
+# then scored the resulting flat panel as evidence about the image.
+#
+# The key is a STATIC literal here, exactly like the seam names: nothing is derived from a caller
+# string (T-88-01). The claim consumes the key, so a caller that wants both processor replicas to
+# claim a victim must SET it more than once — which is bounded, because each pod's
+# `_reinjectTriggerTarget` static is assigned once per process and never reassigned.
+# =================================================================================================
+$script:Phase88ReinjectArmKey = 'skp:test:defeat-read-arm'
+$script:Phase88RedisWorkload  = 'statefulset/redis'
+
+function Invoke-Phase88Redis {
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string[]]$RedisArguments)
+    # Invoke-Phase88Ctl already supplies `kubectl -n skp`; adding it again would produce a duplicate flag.
+    return Invoke-Phase88Ctl -Arguments (@('exec', $script:Phase88RedisWorkload, '--', 'redis-cli') + $RedisArguments)
+}
+
+# ARM the one-shot processor read-fault slot. Returns a result hashtable; never throws.
+function Set-Phase88ReinjectArm {
+    [CmdletBinding()]
+    param()
+    $result = @{ Ok = $false; FailureCode = 0; Key = $script:Phase88ReinjectArmKey; ArmedUtc = $null; Detail = '' }
+    $r = Invoke-Phase88Redis -RedisArguments @('SET', $script:Phase88ReinjectArmKey, '1')
+    if (-not $r.Ok) {
+        $result.FailureCode = 61
+        $result.Detail = "arming the reinject slot failed (exit $($r.ExitCode)): $($r.Error)"
+        return $result
+    }
+    $result.ArmedUtc = ([DateTimeOffset]::UtcNow).ToString('o')
+    $result.Ok = $true
+    return $result
+}
+
+# DISARM (delete) the slot. Idempotent — deleting an absent key is a no-op — so it is safe to call
+# unconditionally from an outer finally, on exactly the Clear-Phase88Seam contract.
+function Clear-Phase88ReinjectArm {
+    [CmdletBinding()]
+    param()
+    $result = @{ Ok = $false; FailureCode = 0; Key = $script:Phase88ReinjectArmKey; ClearedUtc = $null; Detail = '' }
+    $r = Invoke-Phase88Redis -RedisArguments @('DEL', $script:Phase88ReinjectArmKey)
+    if (-not $r.Ok) {
+        $result.FailureCode = 61
+        $result.Detail = "clearing the reinject slot failed (exit $($r.ExitCode)): $($r.Error)"
+        return $result
+    }
+    $result.ClearedUtc = ([DateTimeOffset]::UtcNow).ToString('o')
+    $result.Ok = $true
+    return $result
+}
+
+# Live EXISTS read on the slot. Returns $true / $false, or $null when the read itself failed — an
+# unreadable slot is an UNKNOWN, never a clean claim (the Assert-StackRestored fail-closed rule).
+# A slot left SET is harmless on its own (it arms nothing without the env var) but it would silently
+# pre-arm the next scenario that does set one, so it is asserted rather than assumed.
+function Test-Phase88ReinjectArmed {
+    [CmdletBinding()]
+    param()
+    $r = Invoke-Phase88Redis -RedisArguments @('EXISTS', $script:Phase88ReinjectArmKey)
+    if (-not $r.Ok) { return $null }
+    return (("$($r.Output)").Trim() -eq '1')
+}
+
 # -------------------------------------------------------------------------------------------------
 # The restore CLAIM SET. Three explicit booleans intended to become claim fields in every scenario
 # artifact — the alternative is a scenario that assumes it left the stack clean, which is how a
