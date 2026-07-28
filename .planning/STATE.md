@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v13.0.0
 milestone_name: Observability Dashboards
 status: executing
-stopped_at: Completed 88-05-PLAN.md
-last_updated: "2026-07-28T18:45:10.860Z"
+stopped_at: Completed 88-06-PLAN.md
+last_updated: "2026-07-28T21:06:43.389Z"
 last_activity: 2026-07-28
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 26
-  completed_plans: 20
+  completed_plans: 21
   percent: 67
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Phase: 88 (pipeline-dashboard-maintenance-handoff-proof-fault-injection) — EXECUTING
-Plan: 6 of 11
+Plan: 7 of 11
 Status: Ready to execute
 Last activity: 2026-07-28
 Current focus: Phase 87 — awaiting `/gsd-plan-phase 87`
@@ -721,7 +721,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [████████░░] 77%
+Progress: [████████░░] 81%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1125,6 +1125,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 88 P03 | 95min | 3 tasks | 33 files |
 | Phase 88 P04 | 115 | 3 tasks | 6 files |
 | Phase 88 P05 | 75min | 3 tasks | 3 files |
+| Phase 88 P06 | 125min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -1708,6 +1709,11 @@ Recent decisions affecting current work:
 - [Phase 88]: 88-05: WEB-02 recorded as an accepted-unproven ROW, not attempted — no substitute fault invented; the drop is re-confirmed against the wave-0 probe field before anything is written
 - [Phase 88]: 88-05: panel 12's legend-gain criterion is measured-unsatisfiable (all six status series were present-and-zero before the drive); its discrimination is the stronger numeric form — two exactly-zero bands going non-zero for 6 consecutive samples
 - [Phase 88]: 88-05: http_server_active_requests read exactly 0 at every export tick under 2456 sustained requests — panel 14's movement is carried by kestrel_active_connections alone, so LADDER-01 must treat panel 14 as two rungs, not one
+- [Phase ?]: 88-06: SCALE-03 dwell corrected 240s -> 480s on a MEASUREMENT — rate(counter[240s]) for a dead pod survives ~180s past its last real sample, so 240s could not produce two consecutive NoData sub-windows
+- [Phase ?]: 88-06: panel 4 goes BLANK under a processor outage rather than sloping up — sum(increase(...)) over a window with no samples is an empty vector; recorded as a prediction corrected by measurement, SCALE-01 verdict Inconclusive
+- [Phase ?]: 88-06: panel 5 EMPTIES WITHOUT EVER SPIKING (0.63 -> 0.183 then NoData) — this pipeline is request/response, so the orchestrator's own send rate falls with the processors and the gap never blows up
+- [Phase ?]: 88-06: a panel STATE is a first-class discrimination signal — an emptied panel renders no series, so a series-only scorer reports 'nothing moved' for a panel that went completely blank
+- [Phase ?]: 88-06: no requirement marked Complete — DISC-02 is 9/14 panels, DISC-03 has run on 4 of 8 scenarios, DISC-05/DISC-06 are statements about EVERY scenario and three remain
 
 ### Roadmap Milestone Log
 
@@ -1819,8 +1825,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-28T18:45:10.835Z
-Stopped at: Completed 88-05-PLAN.md
+Last session: 2026-07-28T21:06:31.138Z
+Stopped at: Completed 88-06-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.
