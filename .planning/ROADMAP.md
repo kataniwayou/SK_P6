@@ -84,7 +84,7 @@
 
 **Design consequence — arming a seam restarts the pod, which is itself a signal.** `kubectl set env` triggers a rollout: new pods, new `service_instance_id` values, and a visible discontinuity in every panel — exactly when a clean before/after measurement is being taken. Left unhandled, the restart artifact and the fault signal are indistinguishable, which would invalidate the assertion the scenario exists to make. Every seam-dependent scenario must therefore **arm first → let the stack settle → re-capture the baseline → only then trigger the fault**, and the restart discontinuity must be recorded as an expected artifact in the captured evidence rather than read as a result. The same applies to any scenario using `kubectl scale`.
 
-**Requirements**: TBD — to be derived during planning. Expected to introduce a DISC-* (panel discrimination) and HAND-* (handoff readiness) family; VER-01's two-class rule is a prerequisite, not a deliverable, here.
+**Requirements**: DISC-01, DISC-02, DISC-03, DISC-04, DISC-05, DISC-06, DISC-07 (panel discrimination) + HAND-01, HAND-02, HAND-03, HAND-04 (handoff readiness) — derived at planning 2026-07-28, registered in REQUIREMENTS.md by plan 88-01. SC mapping: SC1→DISC-01, SC2→DISC-02+HAND-04, SC3→DISC-03, SC4→DISC-04, SC5→DISC-05, SC6→DISC-06, SC7→DISC-07, SC8→HAND-01, SC9→HAND-02+HAND-03+HAND-04. VER-01's two-class rule is a prerequisite, not a deliverable, here.
 
 **Success Criteria** (what must be TRUE):
 
@@ -98,9 +98,19 @@
   8. A symptom → panel → action runbook exists, every row traceable to the scenario that proved it.
   9. A handoff readiness verdict is recorded, listing any blocking gaps and any panel that misleads by default (the structural offsets on 4 and 5, the axis-zoom on 9, the guarded zeros).
 
-**Plans**: 0 plans (run `/gsd:plan-phase 88` to break down)
+**Plans**: 11 plans in 10 waves (all live scenarios are strictly sequential — they mutate the same `skp` cluster)
 
-  - [ ] TBD
+  - [ ] 88-01-PLAN.md — Wave 1: requirement family registration + the Grafana batch panel DOM reader (`scripts/phase-88-panel-read.js`) and its PowerShell invocation/banding/movement contract (`scripts/lib/phase-88-panel-read.ps1`) (DISC-01, DISC-02, DISC-03, DISC-07, HAND-01..04)
+  - [ ] 88-02-PLAN.md — Wave 1: the runtime-only fault mechanism (`scripts/lib/phase-88-cluster-ops.ps1`) — live-read replica capture, scale sequencer, `kubectl set env` seam arm/disarm, `Assert-StackRestored`; rejects the stale `$TierReplicas` map (DISC-05, DISC-06)
+  - [ ] 88-03-PLAN.md — Wave 2 **BLOCKING**: `scripts/phase-88-wave0-probe.ps1` answering seven questions live (keeper recovery traffic, `viewPanel` locator, safe 5xx, `$__rate_interval` pinning, unresolved-step route, seam smoke, retention) + `88-PROBE-DECISIONS.md` locking every downstream lever (DISC-02, DISC-04, DISC-05, DISC-06, HAND-04)
+  - [ ] 88-04-PLAN.md — Wave 3: driver frame + static scenario table + `-Mode Baseline`; captures the DISC-01 healthy band for all fourteen panels over ten equal 60 s pinned sub-windows at a fixed viewport (DISC-01, DISC-03)
+  - [ ] 88-05-PLAN.md — Wave 4: `-Mode Scenario` engine (arm → settle ≥150 s → re-baseline → trigger → after → restore, cross-talk, rollout discontinuity) + WEB-01 (panels 10, 11, 12, 14) and WEB-02 (panel 13) (DISC-02, DISC-03, DISC-06)
+  - [ ] 88-06-PLAN.md — Wave 5: scale-lever scenarios SCALE-01/02/03 — panels 3, 4, 5 under a processor outage, panel 1 under an orchestrator outage, panel 9's "No data" under a keeper outage; orchestrator HA replica count preserved (DISC-02, DISC-03, DISC-05, DISC-06)
+  - [ ] 88-07-PLAN.md — Wave 6: guarded-zero scenarios ZERO-01/02/03 — panel 6 off its zero, panel 2 non-zero with the reinject intact, panel 8's gap opened with `KEEPER_DEFEAT_REINJECT`; the phase's only seam scenario, disarmed and asserted byte-identical (DISC-02, DISC-03, DISC-04, DISC-05, DISC-06)
+  - [ ] 88-08-PLAN.md — Wave 7: `-Mode DurationLadder` (five counter rungs + three gauge rungs) measuring the minimum detectable fault duration per regime, plus `scripts/phase-88-rollup.ps1` producing the fourteen-row panel-keyed discrimination matrix (DISC-02, DISC-07)
+  - [ ] 88-09-PLAN.md — Wave 8: `88-FINDINGS.md` — the accepted-unproven register (panel 7 user-locked, with its `SpawnSendExhaustedException` log route) and the six-question practicality rubric; REQUIREMENTS.md traceability set from the artifacts (HAND-03, HAND-04, DISC-01..07)
+  - [ ] 88-10-PLAN.md — Wave 9: the operator runbook at `docs/runbooks/business-dashboard-runbook.md` + `88-HANDOFF-VERDICT.md` (blocking gaps, misleading-by-default panels, nine-criterion table) + the Phase-87 non-regression gate (HAND-01, HAND-02)
+  - [ ] 88-11-PLAN.md — Wave 10: blocking human checkpoint — attributed sign-off on the runbook and the readiness verdict, or findings recorded verbatim for gap closure (HAND-01, HAND-02)
 
 ## ✅ v12.0.0 Resilience & Health-Probe Hardening (SHIPPED — 2026-07-27, tag `v12.0.0`)
 
