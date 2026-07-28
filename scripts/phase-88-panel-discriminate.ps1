@@ -101,6 +101,15 @@
     stack, so this DEGRADES the verdict to Inconclusive and exits 2. It exists for reader debugging,
     never for producing a baseline.
 
+.PARAMETER RecordDroppedRow
+    Record a DROPPED scenario's accepted-unproven ROW instead of running it. Without this switch a
+    Dropped id still exits 64, exactly as plan 88-04 established — the switch does not weaken the
+    guard, it names a DIFFERENT act. It drives NO fault, issues NO mutation, and refuses unless the
+    wave-0 probe artifact still CONFIRMS the drop (the row names the probe field and the value that
+    dropped it). Its output is a degraded row in the ordinary scenario schema: Verdict Inconclusive,
+    Moved false, an observed PanelStateAfter, and an enumerated AcceptedUnprovenReason. A missing
+    proof must be a ROW, never an absence — the plan 88-08 roll-up reads the file either way.
+
 .NOTES
     Dev/ops-only tooling. No product source is touched and no manifest is edited.
 
@@ -138,7 +147,8 @@
 param(
     [Parameter(Mandatory)][string]$ScenarioId,
     [ValidateSet('', 'Baseline', 'Scenario', 'DurationLadder')][string]$Mode = '',
-    [switch]$SkipTraffic
+    [switch]$SkipTraffic,
+    [switch]$RecordDroppedRow
 )
 
 $ErrorActionPreference = 'Stop'
@@ -153,10 +163,17 @@ $gfForwardOwned  = $false
 $seamArmed       = $false
 $seamTier        = ''
 $seamVar         = ''
+# ZERO-03 arms TWO seams (PROCESSOR_DEFEAT_READ to CREATE the recovery event, KEEPER_DEFEAT_REINJECT
+# to SUPPRESS the reinject), so the teardown needs a second slot. A single-slot teardown would leave
+# the trigger seam armed on an interrupted run — the exact poisoning Pitfall 5 describes.
+$seamArmed2      = $false
+$seamTier2       = ''
+$seamVar2        = ''
 $scaledTier      = ''
 $replicasBefore  = -1
 $probeWorkflowId = ''
 $trafficJob      = $null
+$loadJobs        = @()
 
 Push-Location $repoRoot
 try {
@@ -287,6 +304,10 @@ try {
             crossTalkPanels = @('1','3','9','10')
             requiresRebaseline = $false; status = 'Dropped'
             statusReason = 'no endpoint returns 5xx on safe input; the dependency-outage route costs a WebApi pod restart under the Phase-86 hard readiness latch and is out of budget'
+            # -RecordDroppedRow re-checks the drop against the probe artifact before recording it, so
+            # the accepted-unproven row can never outlive the measurement that justified it. Both
+            # names are STATIC table strings — nothing is derived from the -ScenarioId parameter.
+            droppedProbeField = 'Safe5xxFound'; droppedProbeExpect = 'False'
             decidedBy = 'PQ-03 Safe5xxFound=false over seven probed endpoints (five 404, one 400, one 422)'
             notes = 'panel 13 goes to the HAND-04 accepted-unproven register; the redis-outage route was deliberately NOT substituted'
         }
@@ -328,6 +349,7 @@ try {
             crossTalkPanels = @('9','10','12','13')
             requiresRebaseline = $false; status = 'Dropped'
             statusReason = 'neither route reaches an orchestrator_step_unresolved increment: the API dangling edge is refused 422 at step-create, and the L2 step key is rewritten from Postgres by any stop/start cycle'
+            droppedProbeField = 'UnresolvedRouteChosen'; droppedProbeExpect = 'none'
             decidedBy = 'PQ-05 UnresolvedRouteChosen=none (danglingEdge 422 @ step-create, l2StepKeyViable=false)'
             notes = 'panel 6 goes to the HAND-04 register; the counter is unreachable from outside src/ and the locked constraint forbids reaching inside it'
         }
@@ -388,12 +410,32 @@ try {
     }
     $scenario = $Scenarios[$ScenarioId]
 
+    # The TABLE'S OWN key is what reaches a file path or an artifact field — never the caller's
+    # string. An [ordered] hashtable matches keys case-INSENSITIVELY, so `-ScenarioId web-01` would
+    # otherwise select the WEB-01 row and then write `phase-88-web-01.json`, an artifact the roll-up
+    # would never find. (T-88-13: the id selects a row and nothing else.)
+    $canonicalId = @($Scenarios.Keys | Where-Object {
+            [string]::Equals("$_", $ScenarioId, [System.StringComparison]::OrdinalIgnoreCase)
+        })[0]
+
+    $recordingDroppedRow = $false
     if ($scenario.status -ne 'Locked') {
-        Write-Phase "scenario '$ScenarioId' is $($scenario.status) and will not be run." 'Red'
-        Write-Phase "REASON: $($scenario.statusReason)" 'Yellow'
-        Write-Phase "DECIDED BY: $($scenario.decidedBy)" 'Yellow'
-        Write-Phase "It remains a ROW in the table on purpose — the roll-up must show it as a dropped row, not as an absence." 'Yellow'
-        exit 64
+        if ($RecordDroppedRow -and "$($scenario.status)" -eq 'Dropped' -and "$($scenario.mode)" -eq 'scenario') {
+            # NOT a weakening of the guard — a DIFFERENT act. Nothing is driven, nothing is mutated,
+            # and the drop is re-checked against the probe artifact before anything is written.
+            $recordingDroppedRow = $true
+            Write-Phase "scenario '$canonicalId' is Dropped — recording its ACCEPTED-UNPROVEN row (no fault will be driven)." 'Yellow'
+            Write-Phase "REASON: $($scenario.statusReason)" 'Yellow'
+            Write-Phase "DECIDED BY: $($scenario.decidedBy)" 'Yellow'
+        }
+        else {
+            Write-Phase "scenario '$canonicalId' is $($scenario.status) and will not be run." 'Red'
+            Write-Phase "REASON: $($scenario.statusReason)" 'Yellow'
+            Write-Phase "DECIDED BY: $($scenario.decidedBy)" 'Yellow'
+            Write-Phase "It remains a ROW in the table on purpose — the roll-up must show it as a dropped row, not as an absence." 'Yellow'
+            Write-Phase "To RECORD that row as accepted-unproven (no fault driven), re-run with -RecordDroppedRow." 'Yellow'
+            exit 64
+        }
     }
 
     # -Mode is a CONFIRMATION, never a selector. The row is authoritative about what it is; a caller
@@ -576,6 +618,40 @@ try {
         return $out
     }
 
+    # The proxy AGGREGATE over a window: every series summed per timestamp, then averaged over the
+    # timestamps. DIAGNOSIS ONLY — it is recorded beside the rendered value with an agreement flag and
+    # is never the verdict. Defined here (rather than beside its first use) because BOTH the baseline
+    # mode and the scenario engine cross-check with it and PowerShell only sees a function AFTER its
+    # definition statement has run.
+    #
+    # NOTE ON THE PARAMETER NAMES — they are deliberately long, and a single-letter name here is a
+    # BUG, not a style choice. PowerShell variable names are case-INSENSITIVE, so a `[long]$S`
+    # parameter and a `foreach ($s in ...)` loop variable are the SAME variable; the parameter's type
+    # constraint is then re-enforced on the loop assignment and every call throws
+    # "Cannot convert @{metric=; values=System.Object-array} ... to System.Int64". That is exactly how
+    # the first BASE-01 run lost its entire diagnostic cross-check. (Same trap as 88-03 deviation 5,
+    # in a form where the type constraint makes it fail loudly instead of silently.)
+    function Get-ProxyAggregateMean([string]$PromQuery, [long]$StartUnix, [long]$EndUnix, [int]$StepSeconds) {
+        $res = Invoke-ProxyRangeQuery -Query $PromQuery -StartUnix $StartUnix -EndUnix $EndUnix -StepSeconds $StepSeconds
+        $byTs = @{}
+        foreach ($series in @($res.data.result)) {
+            $sn = @(Get-PropertyNames $series)
+            if ($sn -notcontains 'values') { continue }
+            foreach ($v in @($series.values)) {
+                $ts = "$($v[0])"
+                $raw = "$($v[1])"
+                $val = 0.0
+                if (-not [double]::TryParse($raw, [ref]$val)) { continue }
+                if (-not [double]::IsFinite($val)) { continue }   # histogram_quantile yields NaN on empty buckets
+                if ($byTs.ContainsKey($ts)) { $byTs[$ts] += $val } else { $byTs[$ts] = $val }
+            }
+        }
+        if ($byTs.Count -eq 0) { return $null }
+        $sum = 0.0
+        foreach ($k in $byTs.Keys) { $sum += $byTs[$k] }
+        return ($sum / $byTs.Count)
+    }
+
     function Get-ScreenshotPaths($Readings) {
         $paths = @()
         foreach ($r in @($Readings)) {
@@ -707,12 +783,1371 @@ try {
     # own their scenarios, so that each arrives with the arm/settle/re-baseline/trigger/restore
     # sequence its own lever needs rather than a generic one written before any fault was driven.
     # =========================================================================================
-    if ($rowMode -ne 'baseline') {
-        Write-Phase "mode '$rowMode' is not implemented in this driver yet." 'Red'
-        Write-Phase "Plan 88-04 authors the frame, the scenario table and -Mode Baseline (BASE-01)." 'Yellow'
-        Write-Phase "  -Mode Scenario       -> plans 88-05 (WEB-01), 88-06 (SCALE-01..03), 88-07 (ZERO-02/03)" 'Yellow'
-        Write-Phase "  -Mode DurationLadder -> plan 88-08 (LADDER-01)" 'Yellow'
+    if ($rowMode -eq 'ladder') {
+        Write-Phase "mode 'ladder' is not implemented in this driver yet." 'Red'
+        Write-Phase "Plan 88-08 authors -Mode DurationLadder (LADDER-01)." 'Yellow'
         exit 64
+    }
+
+    if ($rowMode -eq 'scenario') {
+
+        # =====================================================================================
+        # -Mode Scenario — THE SCENARIO ENGINE (plan 88-05).
+        #
+        # THE MANDATORY SEQUENCE, IN THIS ORDER, AND WHY SKIPPING ANY OF IT VOIDS THE ASSERTION
+        # (roadmap "Design consequence", 88-RESEARCH.md Pitfall 2, DISC-06):
+        #
+        #     capture the PRE-ARM baseline    recorded, never authoritative
+        #       -> ARM                        set env / (scale rows arm nothing) / start the load
+        #       -> rollout status             Wait-TierSettled on the affected tier
+        #       -> SETTLE >= 150 s            two export cadences, with traffic flowing
+        #       -> RE-CAPTURE the baseline    <- the DISC-01 band a rollout scenario is SCORED against
+        #       -> TRIGGER the fault
+        #       -> capture AFTER
+        #       -> restore, disarm, ASSERT clean
+        #
+        # `kubectl set env` and `kubectl scale` both mint NEW pods with NEW service_instance_id
+        # values, and a k8s restart never RESETS a series — it starts a new one. So every
+        # `by (service_instance_id)` panel gains series at that moment and every aggregate briefly
+        # dips while the new pods warm up. Scored against a band captured BEFORE the rollout, that
+        # dip is indistinguishable from the fault. The discontinuity is therefore recorded as an
+        # EXPECTED artifact (RolloutOldInstanceIds / RolloutNewInstanceIds / RolloutUtc) and the
+        # scoring band comes from the post-rollout re-capture.
+        #
+        # A row whose lever causes NO rollout (WEB-01's `http`) legitimately has
+        # BaselineRecaptured = $false and is scored against the DISC-01 bands directly. The field is
+        # STATED rather than omitted: "no rollout happened" and "nobody checked" must not look alike.
+        #
+        # SCORING RULES (fixed here; no row may redefine them):
+        #   Moved      the after value lies outside the band, in the predicted direction, for >= 2
+        #              CONSECUTIVE 60 s samples. At a 60 s sampling interval a single excursion is
+        #              indistinguishable from a sampling artifact.
+        #   NoData     a first-class panel STATE. Where it is the predicted direction it counts as
+        #              MOVED, not as an unread panel.
+        #   StayedPut  the cross-talk value stayed inside its own band for the ENTIRE fault window.
+        #              A drifting control is a FINDING, recorded with its MaxExcursion, never
+        #              re-classified.
+        #   Verdict    Fail BEATS Inconclusive. A panel that was READ and did not move is Fail. A
+        #              panel that could not be READ is Inconclusive. A false restore claim is Fail
+        #              and exits 65, so a dirty stack can never be read as a scenario verdict.
+        #
+        # A MULTI-SERIES PANEL moved when AT LEAST ONE of its series moved in the predicted
+        # direction. Panel 10 renders one series per route and only the routes actually driven can
+        # move; requiring all of them would make the assertion unsatisfiable by construction. Every
+        # series' own outcome is recorded in SeriesResults[], and the panel entry NAMES the series
+        # that carried the movement, so the selection is auditable rather than asserted.
+        # =====================================================================================
+
+        # ---- the fixed shape of every capture in this mode -----------------------------------
+        $SubWindowSeconds          = 60
+        $AfterSubWindowCount       = 6     # 360 s: >= 2 gauge export ticks AND an exact multiple of 120
+        $RebaselineSubWindowCount  = 10    # the DISC-01 shape, re-taken after an arm rollout
+        # MEASURED in 88-04: panel 4 renders "No data" at a 60 s sub-window, because it is
+        # increase(counter[$__range]), increase() needs >= 2 samples inside its range, and the stored
+        # resolution here is 60 s (the SDK export cadence, not the 15 s scrape). Panel 4 is therefore
+        # read in its OWN batch at 120 s and every entry STATES its own width, so a 120 s reading can
+        # never be silently compared against a 60 s one.
+        $Panel4SubWindowSeconds    = 120
+        $Panel4AfterCount          = 3     # 3 x 120 = the same 360 s span
+        $Panel4RebaselineCount     = 5     # 5 x 120 = the same 600 s span
+        $ExportTrailSeconds        = 120   # two export cadences, so the LAST sub-window is fully exported
+        $LoadRampSeconds           = 30
+        $SettleSecondsAfterRollout = 150   # two export cadences (DISC-06)
+        # A band computed from fewer than this many samples cannot falsify a non-move: with n=2 the
+        # sample stddev is nearly meaningless. 88-04 measured one such series on panel 11
+        # (`Workflows`, 2/10 samples), and the caution it carried forward is enforced here in code
+        # rather than left to a reader's judgement.
+        $MinBandSamples            = 3
+
+        # ---- scenario answer fields, initialised up front so the artifact writer can read any of
+        # ---- them on any path under StrictMode.
+        #
+        # NAMING TRAP, DELIBERATELY AVOIDED: PowerShell variable names are case-INSENSITIVE, so a
+        # `$ReplicasBefore` here would be THE SAME VARIABLE as the `$replicasBefore` the outer
+        # teardown reads to restore a scaled tier — and it would be a hashtable when the teardown
+        # expects an int. The maps are therefore named *Map. (88-04 deviation 3 and 88-03
+        # deviation 5 are this same trap in two other forms.)
+        $ReplicasBeforeMap        = @{}
+        $ReplicasAfterMap         = @{}
+        $PanelResults             = @()
+        $CrossTalkResults         = @()
+        $UnevaluablePanels        = @()
+        $ScenarioScreenshotPaths  = @()
+        $PreArmBaselineValues     = @()
+        $RolloutOldInstanceIds    = @()
+        $RolloutNewInstanceIds    = @()
+        $RolloutUtc               = $null
+        $BaselineRecaptured       = $false
+        $BaselineRecaptureNote    = ''
+        $ScenarioRateInterval     = $null
+        $ScenarioTimeInterval     = $null
+        $OldestSampleUtc          = $null
+        $DiagnosticEntries        = @()
+        $DiagnosticQueryValue     = $null
+        $DiagnosticAgreesWithPanel = $null
+        $DiagnosticDisagreements  = @()
+        $HostLoadRequests         = 0
+        $LoadShape                = 'none'
+        $LoadActualSeconds        = 0
+        $FaultStartUtc            = $null
+        $FaultEndUtc              = $null
+        $ScaleFaultResult         = $null
+        $ReaderUnavailable        = $false
+        $NewSeriesAfter           = @()
+        $Findings                 = @()
+        $rebaseCap                = $null
+        $TrafficWorkflowId        = ''
+
+        $shotDir  = Join-Path $screenshotRoot $canonicalId
+        $lever    = "$($scenario.lever)"
+        $dwell    = [int]$scenario.dwellSeconds
+        $subjects = @($scenario.panelIds       | ForEach-Object { "$_" })
+        $controls = @($scenario.crossTalkPanels | ForEach-Object { "$_" })
+
+        # =====================================================================================
+        # SCENARIO HELPERS
+        # =====================================================================================
+
+        # ---- HTTP LOAD DRIVER (T-88-19) ------------------------------------------------------
+        # Every route is a STATIC literal in this function; nothing is derived from a parameter.
+        # NO /health/ ROUTE IS EVER DRIVEN: the collector drops those, so they would add load to the
+        # cluster and contribute nothing at all to panels 10-14.
+        # Concurrency is fixed at about ten requesters against a dev cluster and bounded by the
+        # caller's duration; the jobs are reaped by Stop-Phase88HttpLoad and again by the outer
+        # finally, so a load job can never outlive the run and pollute a LATER capture.
+        function Start-Phase88HttpLoad {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory)][ValidateSet('background', 'sustained')][string]$Shape,
+                [Parameter(Mandatory)][int]$DurationSeconds,
+                [Parameter(Mandatory)][string]$BaseUri
+            )
+
+            # READ-ONLY. Nothing here creates, mutates or deletes a row, so the load cannot perturb
+            # the pipeline signal the conservation panels are banding.
+            $readOnlyCsv = '/api/v1/workflows,/api/v1/processors,/api/v1/schemas,/api/v1/steps,/api/v1/assignments'
+            # The two status drivers PQ-03 ENUMERATED and observed, rather than invented ones:
+            #   GET /api/v1/__phase88_probe_unmatched            -> 404 (unmatched path, inert)
+            #   POST /api/v1/orchestration/start with body `[]`  -> 400 (empty activation, inert)
+            $unmatchedCsv = '/api/v1/__phase88_probe_unmatched'
+            $badBodyCsv   = '/api/v1/orchestration/start'
+
+            # Routes cross the job boundary as ONE comma-joined string: -ArgumentList maps each
+            # element to a positional parameter, and an array element there is a standing ambiguity.
+            $worker = {
+                param($BaseUri, $DurationSeconds, $RoutesCsv, $PauseMs, $Method, $Body)
+                $routes = @(("$RoutesCsv") -split ',' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+                $deadline = (Get-Date).AddSeconds($DurationSeconds)
+                $n = 0
+                while ((Get-Date) -lt $deadline) {
+                    foreach ($r in $routes) {
+                        try {
+                            $req = @{
+                                Uri                = "$BaseUri$r"
+                                Method             = $Method
+                                UseBasicParsing    = $true
+                                TimeoutSec         = 15
+                                SkipHttpErrorCheck = $true
+                                ErrorAction        = 'Stop'
+                            }
+                            if (-not [string]::IsNullOrEmpty($Body)) {
+                                $req['Body'] = $Body
+                                $req['ContentType'] = 'application/json'
+                            }
+                            $null = Invoke-WebRequest @req
+                            $n++
+                        } catch { }
+                        if ($PauseMs -gt 0) { Start-Sleep -Milliseconds $PauseMs }
+                        if ((Get-Date) -ge $deadline) { break }
+                    }
+                }
+                return $n
+            }
+
+            $jobs = @()
+            if ($Shape -eq 'background') {
+                # The BASE-01 shape (~2.5 req/s, read-only): enough that the WebApi panels have a
+                # live level for a NON-http scenario to control against, small enough that it cannot
+                # itself be mistaken for a fault.
+                $jobs += Start-Job -ScriptBlock $worker -ArgumentList $BaseUri, $DurationSeconds, $readOnlyCsv, 400, 'GET', ''
+            }
+            else {
+                # SUSTAINED, not a burst. http_server_active_requests / kestrel_active_connections /
+                # kestrel_queued_connections are GAUGES sampled at the 60 s export cadence: a request
+                # that begins and ends between two exports is never recorded at all, so a burst would
+                # leave panel 14 reading 0 at every tick (88-RESEARCH.md Pitfall 8). Eight tight-loop
+                # readers keep ~10 connections open and requests genuinely in flight across ticks.
+                for ($w = 0; $w -lt 8; $w++) {
+                    $jobs += Start-Job -ScriptBlock $worker -ArgumentList $BaseUri, $DurationSeconds, $readOnlyCsv, 0, 'GET', ''
+                }
+                # ~4 req/s each is ample to lift a 0..0 status-code band well clear of zero; hammering
+                # them harder would only add log noise for no extra signal.
+                $jobs += Start-Job -ScriptBlock $worker -ArgumentList $BaseUri, $DurationSeconds, $unmatchedCsv, 250, 'GET', ''
+                $jobs += Start-Job -ScriptBlock $worker -ArgumentList $BaseUri, $DurationSeconds, $badBodyCsv,   250, 'POST', '[]'
+            }
+            return [object[]]$jobs
+        }
+
+        # Reap the load and return the total request count. Called on the happy path; the outer
+        # finally repeats the reap so an interrupted run cannot leave a job hitting the WebApi.
+        function Stop-Phase88HttpLoad {
+            [CmdletBinding()]
+            param([AllowEmptyCollection()][object[]]$Jobs)
+            $total = 0
+            foreach ($j in @($Jobs)) {
+                try { $null = Wait-Job -Job $j -Timeout 30 } catch { }
+                try {
+                    $out = @(Receive-Job -Job $j -ErrorAction SilentlyContinue)
+                    if ($out.Count -gt 0) {
+                        $parsed = 0
+                        if ([int]::TryParse("$($out[-1])", [ref]$parsed)) { $total += $parsed }
+                    }
+                } catch { }
+                try { Stop-Job -Job $j -ErrorAction SilentlyContinue } catch { }
+                try { Remove-Job -Job $j -Force -ErrorAction SilentlyContinue } catch { }
+            }
+            return $total
+        }
+
+        # ---- ONE CAPTURE: every requested panel over Count abutting absolute windows ending at
+        # ---- EndUtc, in ONE browser session, so a claim and its control are measured in the SAME
+        # ---- windows. Panel 4, when requested, gets a SECOND batch at its own 120 s width.
+        function Invoke-Phase88Capture {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory)][string[]]$PanelIdList,
+                [Parameter(Mandatory)][datetime]$EndUtc,
+                [Parameter(Mandatory)][int]$Count,
+                [Parameter(Mandatory)][int]$Panel4Count,
+                [Parameter(Mandatory)][string]$ShotDir,
+                [Parameter(Mandatory)][string]$Label
+            )
+
+            $sixty = @($PanelIdList | Where-Object { "$_" -ne '4' })
+            $wantsPanel4 = (@($PanelIdList | Where-Object { "$_" -eq '4' }).Count -gt 0)
+
+            $out = [ordered]@{
+                Label            = $Label
+                Batch            = $null
+                Windows          = @()
+                Panel4Batch      = $null
+                Panel4Windows    = @()
+                WindowStartUtc   = $null
+                WindowEndUtc     = $null
+                State            = 'NotRun'
+                Panel4State      = 'NotRun'
+                ScreenshotPaths  = @()
+            }
+
+            if (@($sixty).Count -gt 0) {
+                $wins = @(Get-PinnedWindowSeries -EndUtc $EndUtc -SubWindowSeconds 60 -Count $Count)
+                $mintedWidth = [int](($wins[0].ToMs - $wins[0].FromMs) / 1000)
+                if ($mintedWidth -ne 60) { throw "the minted sub-window is ${mintedWidth}s, not the 60s this capture records." }
+                $out.Windows = $wins
+                $out.WindowStartUtc = $wins[0].FromUtc
+                $out.WindowEndUtc   = $wins[-1].ToUtc
+                Write-Phase "  [$Label] reading $(@($sixty).Count) panel(s) x $Count x 60s : $($wins[0].FromUtc) -> $($wins[-1].ToUtc)" 'Gray'
+                $b = Invoke-PanelReadBatch -PanelIds ([string[]]$sixty) -Windows $wins -ScreenshotDir $ShotDir `
+                       -LocatorMode $LocatorMode -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight `
+                       -BasicAuthBase64 $adminB64
+                $out.Batch = $b
+                $out.State = "$($b.State)"
+                $out.ScreenshotPaths = @(Get-ScreenshotPaths $b.Readings)
+                Write-Phase "  [$Label] batch State=$($b.State) requested=$($b.Requested) emitted=$($b.Emitted)" 'Gray'
+            }
+
+            if ($wantsPanel4) {
+                $p4Wins = @(Get-PinnedWindowSeries -EndUtc $EndUtc -SubWindowSeconds 120 -Count $Panel4Count)
+                $out.Panel4Windows = $p4Wins
+                if ($null -eq $out.WindowStartUtc) {
+                    $out.WindowStartUtc = $p4Wins[0].FromUtc
+                    $out.WindowEndUtc   = $p4Wins[-1].ToUtc
+                }
+                Write-Phase "  [$Label] panel 4 at its OWN width: $Panel4Count x 120s (88-04 measured that 60s renders No data)" 'Gray'
+                $b4 = Invoke-PanelReadBatch -PanelIds @('4') -Windows $p4Wins -ScreenshotDir $ShotDir `
+                        -LocatorMode $LocatorMode -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight `
+                        -BasicAuthBase64 $adminB64
+                $out.Panel4Batch = $b4
+                $out.Panel4State = "$($b4.State)"
+                $out.ScreenshotPaths = @(@($out.ScreenshotPaths) + @(Get-ScreenshotPaths $b4.Readings) | Select-Object -Unique)
+            }
+
+            return [pscustomobject]$out
+        }
+
+        # The per-series readings for ONE panel out of a capture, plus the width they were taken at
+        # and the per-window panel states. A stat panel yields a single entry at index -1.
+        function Get-Phase88PanelReading {
+            [CmdletBinding()]
+            param([Parameter(Mandatory)]$Capture, [Parameter(Mandatory)][string]$PanelId)
+
+            $panel = $Panels[$PanelId]
+            $isP4  = ($PanelId -eq '4')
+            $batch = if ($isP4) { $Capture.Panel4Batch } else { $Capture.Batch }
+            $width = if ($isP4) { $Panel4SubWindowSeconds } else { $SubWindowSeconds }
+
+            $result = [ordered]@{
+                PanelId          = $PanelId
+                SubWindowSeconds = $width
+                Entries          = @()
+                States           = @()
+                Readable         = $false
+            }
+            if ($null -eq $batch) { return [pscustomobject]$result }
+
+            $readings = @($batch.Readings)
+            $states = @(Get-PanelStates -Readings $readings -PanelId $PanelId)
+            $result.States = [string[]]$states
+            if (@($states).Count -eq 0) { return [pscustomobject]$result }
+            $result.Readable = $true
+
+            $entries = @()
+            if ("$($panel.Type)" -eq 'stat') {
+                $entries += [pscustomobject]@{
+                    Index  = -1
+                    Name   = "$($panel.SeriesName)"
+                    Values = [double[]]@(Get-PanelSamples -Readings $readings -PanelId $PanelId)
+                }
+            }
+            else {
+                $n = Get-PanelSeriesCount -Readings $readings -PanelId $PanelId
+                for ($i = 0; $i -lt $n; $i++) {
+                    $nm = Get-PanelSeriesNameAt -Readings $readings -PanelId $PanelId -SeriesIndex $i
+                    $entries += [pscustomobject]@{
+                        Index  = $i
+                        Name   = "$($nm.Name)"
+                        Values = [double[]]@(Get-PanelSamples -Readings $readings -PanelId $PanelId -SeriesIndex $i)
+                    }
+                }
+            }
+            $result.Entries = [object[]]$entries
+            return [pscustomobject]$result
+        }
+
+        # Legend names, verbatim and in row order. A legend series NAME change is an INDEPENDENT
+        # discrimination signal — when an `or vector(0)` guard stops firing, the label-less series is
+        # replaced by a labelled one — so it is recorded for every timeseries panel even when the
+        # numeric assertion already passed.
+        function Get-Phase88LegendNames {
+            [CmdletBinding()]
+            param([Parameter(Mandatory)]$Reading)
+            $names = @()
+            foreach ($e in @($Reading.Entries)) { $names += "$($e.Name)" }
+            return [string[]]$names
+        }
+
+        # Band lookup: BY NAME FIRST, falling back to the row index. 88-04 measured that a new series
+        # shifts every later row index (panel 12 gains 400/404 the moment WEB-01 drives them), so an
+        # index-only match would silently score one series against another series' band.
+        function Find-Phase88Band {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Bands,
+                [Parameter(Mandatory)][int]$PanelId,
+                [Parameter(Mandatory)][AllowEmptyString()][string]$SeriesName,
+                [Parameter(Mandatory)][int]$SeriesIndex
+            )
+            $cand = @($Bands | Where-Object { [int]$_.PanelId -eq $PanelId })
+            if ($cand.Count -eq 0) { return $null }
+            if (-not [string]::IsNullOrWhiteSpace($SeriesName)) {
+                $byName = @($cand | Where-Object {
+                        [string]::Equals("$($_.SeriesName)", $SeriesName, [System.StringComparison]::Ordinal)
+                    })
+                if ($byName.Count -ge 1) { return $byName[0] }
+            }
+            $byIdx = @($cand | Where-Object { [int]$_.SeriesIndex -eq $SeriesIndex })
+            if ($byIdx.Count -ge 1) { return $byIdx[0] }
+            return $null
+        }
+
+        # How far outside its band a value sits, 0 when inside. Used for MaxExcursion (a cross-talk
+        # drift is recorded WITH its size, so a hair's-breadth wobble and a real blast radius are
+        # distinguishable in the artifact rather than collapsed into one boolean).
+        function Get-Phase88Excursion {
+            [CmdletBinding()]
+            param([double]$Value, [double]$Low, [double]$High)
+            if ($Value -gt $High) { return ($Value - $High) }
+            if ($Value -lt $Low)  { return ($Low - $Value) }
+            return 0.0
+        }
+
+        # Turn a capture into band rows in the SAME shape as BASE-01's BaselineBands, so the scorer
+        # cannot tell a re-captured band from a DISC-01 one and therefore cannot treat them differently.
+        function New-Phase88BandSet {
+            [CmdletBinding()]
+            param([Parameter(Mandatory)]$Capture, [Parameter(Mandatory)][string[]]$PanelIdList)
+            $bands = @()
+            foreach ($p in @($PanelIdList)) {
+                $rd = Get-Phase88PanelReading -Capture $Capture -PanelId $p
+                foreach ($e in @($rd.Entries)) {
+                    $vals = @($e.Values)
+                    if ($vals.Count -eq 0) { continue }
+                    $b = Get-PanelBand -Values ([double[]]$vals)
+                    $bands += [pscustomobject]@{
+                        PanelId          = [int]$p
+                        PanelTitle       = "$($Panels[$p].Title)"
+                        Regime           = "$($Panels[$p].Regime)"
+                        SeriesIndex      = [int]$e.Index
+                        SeriesName       = "$($e.Name)"
+                        SubWindowSeconds = [int]$rd.SubWindowSeconds
+                        Values           = [double[]]$vals
+                        States           = [string[]]@($rd.States)
+                        BandLow          = [double]$b.Low
+                        BandHigh         = [double]$b.High
+                        BandMean         = [double]$b.Mean
+                        BandSigma        = [double]$b.Sigma
+                        FloorApplied     = [bool]$b.FloorApplied
+                        SampleCount      = [int]$b.SampleCount
+                    }
+                }
+            }
+            return [object[]]$bands
+        }
+
+
+        # Write the artifact and assert its own serialisation depth. -Depth 10, NOT a shallower
+        # depth: PanelResults[] and CrossTalkPanels[] are OBJECTS INSIDE ARRAYS carrying nested
+        # Values[]/States[], which a shallower serialisation writes as the literal type name —
+        # destroying the evidence that makes every verdict here recomputable (T-88-18). The guard is
+        # STRUCTURAL (a JSON VALUE equal to that string), not a substring search, because a captured
+        # diagnostic message may legitimately MENTION the type and a guard that cries wolf on its own
+        # error text eventually gets disabled.
+        function Save-Phase88ScenarioArtifact {
+            [CmdletBinding()]
+            param([Parameter(Mandatory)]$Report, [Parameter(Mandatory)][string]$Path)
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
+            ([pscustomobject]$Report) | ConvertTo-Json -Depth 10 | Set-Content -Path $Path -Encoding utf8
+            $written = Get-Content $Path -Raw
+            return (-not ($written -match '(?m)(:\s*"System\.Object\[\]"|^\s*"System\.Object\[\]"\s*,?\s*$)'))
+        }
+
+        # =====================================================================================
+        # STEP S1 — THE DISC-01 BANDS. Loaded as the starting reference for every scenario, and
+        # AUTHORITATIVE only where the row's lever caused no rollout (see STEP S4).
+        # =====================================================================================
+        Write-Phase "STEP S1: load the DISC-01 bands"
+        $disc01Path = Join-Path $reportDir 'phase-88-BASE-01.json'
+        if (-not (Test-Path -LiteralPath $disc01Path)) {
+            Write-Phase "the DISC-01 baseline artifact is missing: $disc01Path" 'Red'
+            Write-Phase "REMEDIATION: pwsh -File scripts/phase-88-panel-discriminate.ps1 -ScenarioId BASE-01 -Mode Baseline" 'Yellow'
+            exit 64
+        }
+        $disc01 = Get-Content $disc01Path -Raw | ConvertFrom-Json
+        $Disc01Bands = @($disc01.BaselineBands)
+        if (@($Disc01Bands).Count -eq 0) {
+            Write-Phase "the DISC-01 artifact carries no bands — there is no null hypothesis to test against." 'Red'
+            exit 64
+        }
+        Write-Phase "  $(@($Disc01Bands).Count) DISC-01 band(s), captured $($disc01.BaselineWindowStart) -> $($disc01.BaselineWindowEnd)" 'Gray'
+        $ReplicasBeforeMap = $preReplicas
+
+        # =====================================================================================
+        # STEP S2 — $__rate_interval and the evidentiary horizon, DERIVED (never assumed), so the
+        # artifact states its own "how it verified" block exactly as BASE-01 does.
+        # =====================================================================================
+        try {
+            $ds = Invoke-RestMethod -Uri "$gf/api/datasources/uid/skp-prometheus" -Headers $auth -TimeoutSec 20 -ErrorAction Stop
+            $tiText  = ''
+            $dsNames = @(Get-PropertyNames $ds)
+            if ($dsNames -contains 'jsonData') {
+                $jdNames = @(Get-PropertyNames $ds.jsonData)
+                if ($jdNames -contains 'timeInterval') { $tiText = "$($ds.jsonData.timeInterval)" }
+            }
+            $ti = ConvertFrom-GrafanaDuration $tiText
+            if ($ti -gt 0) {
+                $ScenarioTimeInterval = $tiText
+                $stepS = Get-QueryStepSeconds -RangeSeconds ($SubWindowSeconds * $AfterSubWindowCount) -TimeIntervalSeconds $ti -MaxDataPoints $ViewportWidth
+                $ScenarioRateInterval = Get-RateIntervalSeconds $ti $stepS
+                Write-Phase "STEP S2: timeInterval='$tiText' -> rate_interval=${ScenarioRateInterval}s" 'Gray'
+            }
+        } catch {
+            Write-Phase "STEP S2: the datasource read failed: $($_.Exception.Message)" 'Yellow'
+        }
+        $nowUnixS = ([DateTimeOffset]::UtcNow).ToUnixTimeSeconds()
+        try {
+            $oldestQ = Invoke-ProxyRangeQuery -Query 'up' -StartUnix ($nowUnixS - (336 * 3600)) -EndUnix $nowUnixS -StepSeconds 3600
+            $oldestUnix = $null
+            foreach ($sOld in @($oldestQ.data.result)) {
+                $snOld = @(Get-PropertyNames $sOld)
+                if ($snOld -notcontains 'values') { continue }
+                $valsOld = @($sOld.values)
+                if ($valsOld.Count -eq 0) { continue }
+                $tsOld = [double]($valsOld[0][0])
+                if ($null -eq $oldestUnix -or $tsOld -lt $oldestUnix) { $oldestUnix = $tsOld }
+            }
+            if ($null -ne $oldestUnix) {
+                $OldestSampleUtc = ([System.DateTimeOffset]::FromUnixTimeSeconds([long]$oldestUnix)).UtcDateTime.ToString('o')
+            }
+        } catch { }
+
+        # =====================================================================================
+        # STEP S3 — THE DROPPED-ROW RECORDER (-RecordDroppedRow).
+        #
+        # A missing proof is a ROW, never an absence. This path drives NO fault and issues NO
+        # mutation: it re-checks the probe field that dropped the row, OBSERVES the row's panel over
+        # ordinary pinned windows so PanelStateAfter is a measurement rather than an assertion, and
+        # writes a degraded row in the same schema with the enumerated accepted-unproven reason.
+        # =====================================================================================
+        if ($recordingDroppedRow) {
+            Write-Phase "STEP S3: recording the ACCEPTED-UNPROVEN row for '$canonicalId' — no fault, no mutation"
+
+            $probePath = Join-Path $reportDir 'phase-88-wave0-probe.json'
+            if (-not (Test-Path -LiteralPath $probePath)) {
+                Write-Phase "the wave-0 probe artifact is missing: $probePath — the drop cannot be re-confirmed." 'Red'
+                exit 64
+            }
+            $probe = Get-Content $probePath -Raw | ConvertFrom-Json
+            if (-not $scenario.Contains('droppedProbeField')) {
+                Write-Phase "row '$canonicalId' declares no droppedProbeField — refusing to record a drop nothing measured." 'Red'
+                exit 64
+            }
+            $dropField  = "$($scenario.droppedProbeField)"
+            $dropExpect = "$($scenario.droppedProbeExpect)"
+            $probeNames = @(Get-PropertyNames $probe)
+            if ($probeNames -notcontains $dropField) {
+                Write-Phase "the probe artifact carries no '$dropField' — the drop cannot be re-confirmed." 'Red'
+                exit 64
+            }
+            $dropActual = "$($probe.$dropField)"
+            if (-not [string]::Equals($dropActual, $dropExpect, [System.StringComparison]::OrdinalIgnoreCase)) {
+                Write-Phase "the probe now reports $dropField='$dropActual' but the row was dropped on '$dropExpect'." 'Red'
+                Write-Phase "The measurement that justified the drop no longer holds — re-run the scenario instead of recording it unproven." 'Yellow'
+                exit 64
+            }
+            Write-Phase "  drop re-confirmed: probe $dropField = '$dropActual'." 'Gray'
+
+            $obsEnd = ([datetime]::UtcNow).AddSeconds(-$ExportTrailSeconds)
+            $obsCap = Invoke-Phase88Capture -PanelIdList ([string[]]$subjects) -EndUtc $obsEnd `
+                        -Count $AfterSubWindowCount -Panel4Count $Panel4AfterCount -ShotDir $shotDir -Label 'observe'
+            $ScenarioScreenshotPaths = @($obsCap.ScreenshotPaths)
+
+            $dropPanelResults = @()
+            foreach ($p in $subjects) {
+                $rd = Get-Phase88PanelReading -Capture $obsCap -PanelId $p
+                $stateAfter = if (@($rd.States).Count -gt 0) { (@($rd.States | Select-Object -Unique) -join '|') } else { 'NoReading' }
+                if (-not $rd.Readable) {
+                    $UnevaluablePanels += "panel ${p} ($($Panels[$p].Title)): the reader returned NO reading at all during the accepted-unproven observation"
+                    $ReaderUnavailable = $true
+                }
+                $obsEntry = @($rd.Entries)
+                $obsVals  = if (@($obsEntry).Count -gt 0) { [double[]]@($obsEntry[0].Values) } else { [double[]]@() }
+                $bandRow  = Find-Phase88Band -Bands $Disc01Bands -PanelId ([int]$p) `
+                              -SeriesName "$($Panels[$p].SeriesName)" -SeriesIndex -1
+                $dropPanelResults += [pscustomobject]@{
+                    PanelId                   = [int]$p
+                    PanelTitle                = "$($Panels[$p].Title)"
+                    Regime                    = "$($Panels[$p].Regime)"
+                    SeriesName                = "$($Panels[$p].SeriesName)"
+                    PredictedDirection        = "$($scenario.predictedDirection[$p])"
+                    BandLow                   = if ($null -ne $bandRow) { [double]$bandRow.BandLow } else { $null }
+                    BandHigh                  = if ($null -ne $bandRow) { [double]$bandRow.BandHigh } else { $null }
+                    BandSource                = 'BASE-01 (DISC-01)'
+                    SubWindowSeconds          = [int]$rd.SubWindowSeconds
+                    BaselineValues            = if ($null -ne $bandRow) { [double[]]@($bandRow.Values) } else { [double[]]@() }
+                    BaselineStates            = if ($null -ne $bandRow) { [string[]]@($bandRow.States) } else { [string[]]@() }
+                    AfterValues               = $obsVals
+                    AfterStates               = [string[]]@($rd.States)
+                    Moved                     = $false
+                    ConsecutiveSamplesOutside = 0
+                    PanelStateAfter           = $stateAfter
+                    LegendNamesBaseline       = [string[]]@()
+                    LegendNamesAfter          = [string[]]@(Get-Phase88LegendNames -Reading $rd)
+                    Note                      = 'OBSERVED, not driven. No fault was applied, so this is the panel''s ordinary guarded reading — it is recorded so the accepted-unproven row states what the panel actually shows today rather than asserting it.'
+                }
+            }
+            $PanelResults = @($dropPanelResults)
+
+            # The declared cross-talk list is carried, with Applicable=false: no fault was driven, so
+            # there is no blast radius to bound. Claiming a control HELD when nothing was perturbed
+            # would be a fabricated claim, and an empty list would hide the declaration.
+            foreach ($c in $controls) {
+                $CrossTalkResults += [pscustomobject]@{
+                    PanelId     = [int]$c
+                    PanelTitle  = "$($Panels[$c].Title)"
+                    Applicable  = $false
+                    BandLow     = $null
+                    BandHigh    = $null
+                    AfterValues = [double[]]@()
+                    StayedPut   = $null
+                    MaxExcursion = $null
+                    Note        = 'no fault was driven, so there is no blast radius for this control to bound; not measured rather than claimed'
+                }
+            }
+
+            $restore = Assert-StackRestored -Tiers $Tiers -ExpectedReplicas $preReplicas -ExpectedImages $preImages
+            foreach ($t in $Tiers) { $ReplicasAfterMap[$t] = Get-LiveReplicas -Tier $t }
+
+            $endpointLines = @()
+            if (@(Get-PropertyNames $probe) -contains 'ProbedEndpoints') {
+                foreach ($pe in @($probe.ProbedEndpoints)) {
+                    $endpointLines += ("{0} {1} -> {2}" -f "$($pe.Method)", "$($pe.Path)", "$($pe.Status)")
+                }
+            }
+            $AcceptedUnprovenReason =
+                "$($scenario.statusReason). " +
+                "Enumerated endpoint probe (PQ-03, $($endpointLines.Count) endpoints, zero 5xx on safe input): " +
+                ($endpointLines -join ' | ') + ". " +
+                'The dependency-outage route to a 5xx is NOT substituted: redis has no PVC, so scaling it wipes L2, and under the Phase-86 hard readiness latch the WebApi does not self-heal from a dependency outage — recovery costs a WebApi pod restart, which would perturb every later baseline in this phase. ' +
+                'MAINTENANCE GUIDANCE: panel 13''s guarded green 0 is indistinguishable from "the 5xx counter has never been emitted at all". The first non-zero reading on panel 13 should be corroborated against the WebApi logs for the same window before it is trusted, and once ONE 5xx has ever occurred the numerator series exists permanently — so a zero on panel 13 after that date means something different from today''s zero.'
+
+            $humanDrop = "phase-88 $canonicalId verdict=Inconclusive: DROPPED row RECORDED, not run. " +
+                         "No fault was driven and no cluster mutation was issued. " +
+                         "Drop re-confirmed from the wave-0 probe ($dropField='$dropActual'). " +
+                         "Panel $(@($subjects) -join ',') observed over $AfterSubWindowCount x ${SubWindowSeconds}s pinned windows " +
+                         "($($obsCap.WindowStartUtc) -> $($obsCap.WindowEndUtc)) at ${ViewportWidth}x${ViewportHeight}; " +
+                         "state=$(@($PanelResults | ForEach-Object { $_.PanelStateAfter }) -join ','). " +
+                         "stack clean: seamVars=$($restore.SeamVarsClean) replicas=$($restore.ReplicasRestored) images=$($restore.ImagesUnchanged)."
+
+            $dropReport = [ordered]@{
+                ScenarioId                = $canonicalId
+                Verdict                   = 'Inconclusive'
+                Status                    = 'Dropped'
+                Lever                     = 'none (dropped)'
+                TargetTier                = ''
+                Moved                     = $false
+                CrossTalkHeld             = $null
+                BaselineRecaptured        = $false
+                BaselineRecaptureNote     = 'no rollout occurred because no fault was driven; the DISC-01 bands are carried for reference only'
+                StackRestored             = [bool]$restore.Ok
+                AcceptedUnproven          = $true
+                AcceptedUnprovenReason    = $AcceptedUnprovenReason
+                StatusReason              = "$($scenario.statusReason)"
+                DecidedBy                 = "$($scenario.decidedBy)"
+                DroppedProbeField         = $dropField
+                DroppedProbeValue         = $dropActual
+                ProbedEndpoints           = [string[]]$endpointLines
+                DependencyOutageDriven    = $false
+                PanelResults              = @($PanelResults)
+                CrossTalkPanels           = @($CrossTalkResults)
+                PreArmBaselineValues      = @()
+                RolloutOldInstanceIds     = [string[]]@()
+                RolloutNewInstanceIds     = [string[]]@()
+                RolloutUtc                = $null
+                RolloutNote               = 'no rollout: this row was recorded, not run'
+                ReplicasBefore            = $ReplicasBeforeMap
+                ReplicasAfter             = $ReplicasAfterMap
+                ReplicasRestored          = $restore.ReplicasRestored
+                SeamVarsAfter             = @($restore.SeamVarsFound)
+                SeamVarsClean             = $restore.SeamVarsClean
+                ImagesUnchanged           = $restore.ImagesUnchanged
+                ImageMismatches           = @($restore.ImageMismatches)
+                ReplicaMismatches         = @($restore.ReplicaMismatches)
+                BaselineWindowStart       = "$($disc01.BaselineWindowStart)"
+                BaselineWindowEnd         = "$($disc01.BaselineWindowEnd)"
+                AfterWindowStart          = "$($obsCap.WindowStartUtc)"
+                AfterWindowEnd            = "$($obsCap.WindowEndUtc)"
+                SubWindowSeconds          = $SubWindowSeconds
+                SubWindowCount            = $AfterSubWindowCount
+                ViewportWidth             = $ViewportWidth
+                ViewportHeight            = $ViewportHeight
+                LocatorMode               = $LocatorMode
+                RateIntervalSeconds       = $ScenarioRateInterval
+                DatasourceTimeInterval    = $ScenarioTimeInterval
+                OldestSampleUtc           = $OldestSampleUtc
+                DiagnosticQueryValue      = $null
+                DiagnosticAgreesWithPanel = $null
+                DiagnosticNote            = 'no diagnostic cross-check: nothing was driven, so there is no claim for a proxy value to corroborate'
+                ScreenshotPaths           = @($ScenarioScreenshotPaths)
+                UnevaluablePanels         = @($UnevaluablePanels)
+                CompletedUtc              = ([DateTimeOffset]::UtcNow).ToString('o')
+                HumanSummary              = $humanDrop
+            }
+
+            $dropPath = Join-Path $reportDir ("phase-88-{0}.json" -f $canonicalId)
+            if (-not (Save-Phase88ScenarioArtifact -Report $dropReport -Path $dropPath)) {
+                Write-Phase "the written artifact carries a JSON VALUE of 'System.Object-array' — the serialisation depth is too shallow." 'Red'
+                exit 66
+            }
+            Write-Phase "verdict artifact: $dropPath" 'Green'
+            Write-Phase $humanDrop 'Yellow'
+
+            $dropExit = Resolve-AnalyzerExitCode ([pscustomobject]$dropReport)
+            if (-not $restore.Ok) { $dropExit = 65 }
+            $resolvedDrop = Resolve-SweepClass $dropExit
+            Write-Phase "class=$($resolvedDrop.Class) exit=$dropExit" 'Gray'
+            exit $dropExit
+        }
+
+        # =====================================================================================
+        # STEP S4 — PRE-ARM BASELINE (recorded, NEVER authoritative).
+        #
+        # Taken over the window that has just ELAPSED, offset by the export trail so every sample in
+        # it is already stored. It costs no wall time and it is exactly the state immediately before
+        # the fault; its bounds are recorded so a reader can see which window it was.
+        # =====================================================================================
+        Write-Phase "STEP S4: pre-arm baseline (recorded, not authoritative)"
+        $capturePanels = [string[]]@(@($subjects) + @($controls) | Select-Object -Unique)
+        $preArmEnd = ([datetime]::UtcNow).AddSeconds(-$ExportTrailSeconds)
+        $preArmCap = Invoke-Phase88Capture -PanelIdList $capturePanels -EndUtc $preArmEnd `
+                       -Count $AfterSubWindowCount -Panel4Count $Panel4AfterCount -ShotDir $shotDir -Label 'pre-arm'
+        $ScenarioScreenshotPaths = @($preArmCap.ScreenshotPaths)
+
+        $preArmReadings = @{}
+        foreach ($p in $capturePanels) {
+            $rd = Get-Phase88PanelReading -Capture $preArmCap -PanelId $p
+            $preArmReadings[$p] = $rd
+            foreach ($e in @($rd.Entries)) {
+                $PreArmBaselineValues += [pscustomobject]@{
+                    PanelId          = [int]$p
+                    SeriesIndex      = [int]$e.Index
+                    SeriesName       = "$($e.Name)"
+                    SubWindowSeconds = [int]$rd.SubWindowSeconds
+                    Values           = [double[]]@($e.Values)
+                    States           = [string[]]@($rd.States)
+                }
+            }
+        }
+        Write-Phase "  $(@($PreArmBaselineValues).Count) pre-arm series recorded over $($preArmCap.WindowStartUtc) -> $($preArmCap.WindowEndUtc)" 'Gray'
+
+        # =====================================================================================
+        # STEP S5 — ARM, ROLLOUT, SETTLE, RE-BASELINE.
+        #
+        # `seam` rows arm before the fault and therefore ROLL THE PODS before it. `scale` rows arm
+        # nothing (their rollout IS the fault, at trigger time) but still take a fresh band, because
+        # scoring an hours-old DISC-01 band is a weaker claim than scoring one taken minutes earlier
+        # under the same conditions. `http` rows neither arm nor roll: BaselineRecaptured stays false
+        # and the DISC-01 bands are used directly — STATED, not omitted.
+        # =====================================================================================
+        $ScoringBands   = @($Disc01Bands)
+        $ScoringBandSource = 'BASE-01 (DISC-01)'
+        $affectedTier   = ''
+        $SeamActiveDuringRebaseline = $false
+
+        if ($lever -eq 'http') {
+            $BaselineRecaptureNote = 'lever `http` mutates no workload, so NO rollout occurs, no pod identity changes, and there is nothing to re-baseline against. The DISC-01 bands are therefore authoritative unchanged. This field is stated rather than omitted so that "no rollout happened" and "nobody checked" cannot look alike.'
+            Write-Phase "STEP S5: lever 'http' — no arm, no rollout, no re-baseline (DISC-01 bands stay authoritative)"
+        }
+        else {
+            # A low, steady read-only load runs for the whole of a non-http scenario so the WebApi
+            # cross-talk panels have the same kind of live level BASE-01 banded them against.
+            $bgSeconds = $SettleSecondsAfterRollout + ($SubWindowSeconds * $RebaselineSubWindowCount) + $ExportTrailSeconds + $dwell + ($SubWindowSeconds * $AfterSubWindowCount) + 900
+            $loadJobs  = @(Start-Phase88HttpLoad -Shape 'background' -DurationSeconds $bgSeconds -BaseUri $api)
+            $LoadShape = 'background'
+            Write-Phase "STEP S5: background read-only load started for ${bgSeconds}s so the WebApi controls have a live level" 'Gray'
+
+            if ($lever -eq 'seam') {
+                $seamTier = "$($scenario.seamTier)"
+                $seamVar  = "$($scenario.seamVar)"
+                $RolloutOldInstanceIds = [string[]]@(Get-TierPodNames -Tier $seamTier)
+                Write-Phase "STEP S5: arming '$seamVar' on '$seamTier'"
+                $arm = Set-Phase88Seam -Tier $seamTier -Name $seamVar
+                $seamArmed = [bool]$arm.Armed
+                if (-not $arm.Ok) {
+                    Write-Phase "the seam arm failed: $($arm.Detail)" 'Red'; exit 61
+                }
+                $RolloutNewInstanceIds = [string[]]@($arm.PodNamesAfter)
+                $RolloutUtc = "$($arm.ArmedUtc)"
+                $affectedTier = $seamTier
+                $SeamActiveDuringRebaseline = $true
+
+                if (-not [string]::IsNullOrWhiteSpace("$($scenario.triggerSeamTier)")) {
+                    $seamTier2 = "$($scenario.triggerSeamTier)"
+                    $seamVar2  = "$($scenario.triggerSeamVar)"
+                    Write-Phase "STEP S5: arming the TRIGGER seam '$seamVar2' on '$seamTier2'"
+                    $arm2 = Set-Phase88Seam -Tier $seamTier2 -Name $seamVar2
+                    $seamArmed2 = [bool]$arm2.Armed
+                    if (-not $arm2.Ok) { Write-Phase "the trigger seam arm failed: $($arm2.Detail)" 'Red'; exit 61 }
+                    $RolloutOldInstanceIds = [string[]]@(@($RolloutOldInstanceIds) + @($arm2.PodNamesBefore))
+                    $RolloutNewInstanceIds = [string[]]@(@($RolloutNewInstanceIds) + @($arm2.PodNamesAfter))
+                }
+            }
+            else {
+                $affectedTier = "$($scenario.targetTier)"
+                $BaselineRecaptureNote = 'lever `scale` arms nothing: its rollout IS the fault and happens at TRIGGER time, so there is no pre-fault rollout to re-baseline against. The band is nevertheless re-captured here, minutes before the fault and under the same conditions, which is a stronger null hypothesis than an hours-old DISC-01 band. The discontinuity itself is recorded from the sequencer''s own pod sets.'
+            }
+
+            if (-not [string]::IsNullOrWhiteSpace($affectedTier)) {
+                if (-not (Wait-TierSettled -Tier $affectedTier -TimeoutSeconds 180)) {
+                    Write-Phase "'$affectedTier' did not settle after the arm — refusing to re-baseline against a rolling tier." 'Red'
+                    exit 60
+                }
+            }
+
+            Write-Phase "STEP S5: settling ${SettleSecondsAfterRollout}s (two export cadences) with traffic flowing before the re-baseline..."
+            Start-Sleep -Seconds 150
+
+            $rebaseStart = [datetime]::UtcNow
+            $rebaseHold  = ($SubWindowSeconds * $RebaselineSubWindowCount) + $ExportTrailSeconds
+            Write-Phase "STEP S5: holding ${rebaseHold}s so the authoritative re-baseline window is fully exported..."
+            Start-Sleep -Seconds $rebaseHold
+            $rebaseEnd = $rebaseStart.AddSeconds($SubWindowSeconds * $RebaselineSubWindowCount)
+
+            $rebaseCap = Invoke-Phase88Capture -PanelIdList $capturePanels -EndUtc $rebaseEnd `
+                           -Count $RebaselineSubWindowCount -Panel4Count $Panel4RebaselineCount -ShotDir $shotDir -Label 're-baseline'
+            $ScenarioScreenshotPaths = @(@($ScenarioScreenshotPaths) + @($rebaseCap.ScreenshotPaths) | Select-Object -Unique)
+            $rebaseBands = @(New-Phase88BandSet -Capture $rebaseCap -PanelIdList $capturePanels)
+            if (@($rebaseBands).Count -eq 0) {
+                Write-Phase "the re-baseline capture produced no band at all — refusing to score against a band that does not exist." 'Red'
+                $ReaderUnavailable = $true
+            }
+            else {
+                $ScoringBands = $rebaseBands
+                $ScoringBandSource = "re-captured after the arm rollout ($($rebaseCap.WindowStartUtc) -> $($rebaseCap.WindowEndUtc))"
+                $BaselineRecaptured = $true
+                Write-Phase "  re-baseline: $(@($rebaseBands).Count) band(s) — THIS is what the scenario is scored against." 'Gray'
+            }
+        }
+
+        # =====================================================================================
+        # STEP S6 — TRIGGER THE FAULT, then capture the AFTER window.
+        # =====================================================================================
+        $afterCount = [Math]::Max($AfterSubWindowCount, [int][Math]::Ceiling($dwell / [double]$SubWindowSeconds))
+        $afterSpan  = $afterCount * $SubWindowSeconds
+        $TriggerKind = ''
+
+        if ($lever -eq 'http') {
+            $TriggerKind = 'sustained host HTTP load (about 10 parallel requesters, non-health routes)'
+            $LoadActualSeconds = $LoadRampSeconds + $afterSpan + $ExportTrailSeconds
+            Write-Phase "STEP S6: TRIGGER — sustained HTTP load for ${LoadActualSeconds}s (ramp ${LoadRampSeconds}s + window ${afterSpan}s + export trail ${ExportTrailSeconds}s)"
+            Write-Phase "  the load spans the WHOLE after window plus its trail, because a burst is invisible to a 60 s-sampled gauge." 'Gray'
+            $loadJobs = @(Start-Phase88HttpLoad -Shape 'sustained' -DurationSeconds $LoadActualSeconds -BaseUri $api)
+            $LoadShape = 'sustained'
+            $faultStart = [datetime]::UtcNow
+            $FaultStartUtc = $faultStart.ToString('o')
+            Start-Sleep -Seconds $LoadRampSeconds
+            $afterStart = [datetime]::UtcNow
+            $afterEnd   = $afterStart.AddSeconds($afterSpan)
+            Write-Phase "  after window $($afterStart.ToString('o')) -> $($afterEnd.ToString('o')); holding the load across it plus ${ExportTrailSeconds}s..." 'Gray'
+            Start-Sleep -Seconds ($afterSpan + $ExportTrailSeconds)
+            $HostLoadRequests = Stop-Phase88HttpLoad -Jobs $loadJobs
+            $loadJobs = @()
+            $FaultEndUtc = ([datetime]::UtcNow).ToString('o')
+            Write-Phase "  load stopped; ~$HostLoadRequests requests issued." 'Gray'
+        }
+        elseif ($lever -eq 'scale') {
+            $TriggerKind = "whole-tier scale-0 of '$($scenario.targetTier)' for ${dwell}s"
+            Write-Phase "STEP S6: TRIGGER — $TriggerKind"
+            $scaledTier = "$($scenario.targetTier)"
+            $replicasBefore = Get-LiveReplicas -Tier $scaledTier
+            $sf = Invoke-TierScaleFault -Tier $scaledTier -DwellSeconds $dwell
+            $ScaleFaultResult = $sf
+            $RolloutOldInstanceIds = [string[]]@(@($RolloutOldInstanceIds) + @($sf.PodNamesBefore))
+            $RolloutNewInstanceIds = [string[]]@(@($RolloutNewInstanceIds) + @($sf.PodNamesAfter))
+            if ([string]::IsNullOrWhiteSpace("$RolloutUtc")) { $RolloutUtc = "$($sf.RestoredUtc)" }
+            $FaultStartUtc = "$($sf.FaultStartUtc)"
+            $FaultEndUtc   = "$($sf.FaultEndUtc)"
+            if (-not $sf.Ok) {
+                Write-Phase "the scale fault failed as INFRASTRUCTURE: $($sf.Detail)" 'Red'
+                exit 60
+            }
+            $scaledTier = ''   # the sequencer restored it and CLAIMED the restore; no teardown scale is owed
+            $afterEnd   = [datetime]::Parse("$($sf.FaultEndUtc)", $null, [System.Globalization.DateTimeStyles]::AdjustToUniversal -bor [System.Globalization.DateTimeStyles]::AssumeUniversal)
+            $afterStart = $afterEnd.AddSeconds(-$afterSpan)
+            Write-Phase "  waiting ${ExportTrailSeconds}s so the fault window is fully exported..." 'Gray'
+            Start-Sleep -Seconds $ExportTrailSeconds
+        }
+        else {
+            # `seam` — the seam is already armed, so the trigger is the WORKLOAD that exercises it.
+            $TriggerKind = "workload drive with the seam armed for ${dwell}s"
+            Write-Phase "STEP S6: TRIGGER — $TriggerKind"
+            $wfRaw = ''
+            try { $wfRaw = kubectl -n skp exec statefulset/postgres -- psql -U postgres -d stepsdb -tA -c "SELECT id FROM workflows WHERE name = 'v8-fanout-proof'" } catch { }
+            foreach ($line in @(("$wfRaw") -split "`r?`n")) {
+                $tw = ("$line").Trim()
+                if ($tw -match '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') { $TrafficWorkflowId = $tw; break }
+            }
+            if ([string]::IsNullOrWhiteSpace($TrafficWorkflowId)) {
+                Write-Phase "could not resolve the fan-out workflow id — the seam has nothing to be exercised by. Aborting." 'Red'; exit 50
+            }
+            $startResp = Invoke-DriverApi -Method 'POST' -Path '/api/v1/orchestration/start' -Body (ConvertTo-Json @($TrafficWorkflowId))
+            if ($startResp.Status -ne 204) {
+                Write-Phase "activation gate failed — expected 204, got $($startResp.Status). Aborting." 'Red'; exit 50
+            }
+            $faultStart = [datetime]::UtcNow
+            $FaultStartUtc = $faultStart.ToString('o')
+            $afterStart = $faultStart
+            $afterEnd   = $afterStart.AddSeconds($afterSpan)
+            Start-Sleep -Seconds ($afterSpan + $ExportTrailSeconds)
+            $FaultEndUtc = ([datetime]::UtcNow).ToString('o')
+        }
+
+        Write-Phase "STEP S6: after capture"
+        $afterCap = Invoke-Phase88Capture -PanelIdList $capturePanels -EndUtc $afterEnd `
+                      -Count $afterCount -Panel4Count ([Math]::Max(1, [int][Math]::Floor($afterSpan / $Panel4SubWindowSeconds))) `
+                      -ShotDir $shotDir -Label 'after'
+        $ScenarioScreenshotPaths = @(@($ScenarioScreenshotPaths) + @($afterCap.ScreenshotPaths) | Select-Object -Unique)
+        if ("$($afterCap.State)" -eq 'ReaderMissing') {
+            $readerErr = if ($null -ne $afterCap.Batch) { "$($afterCap.Batch.Error)" } else { 'no batch was produced' }
+            Write-Phase "the panel reader is unavailable: $readerErr. Aborting." 'Red'; exit 63
+        }
+        if ("$($afterCap.State)" -ne 'Ok') {
+            Write-Phase "  the after batch did not complete cleanly ($($afterCap.State)) — panels without a full sample set are declared unevaluable." 'Yellow'
+            $ReaderUnavailable = $true
+        }
+
+        # =====================================================================================
+        # STEP S7 — RESTORE AND DISARM, THEN ASSERT. Done BEFORE scoring so the stack is never held
+        # in a faulted state while numbers are crunched.
+        # =====================================================================================
+        Write-Phase "STEP S7: restore, disarm, assert"
+        if ($LoadShape -ne 'none' -and @($loadJobs).Count -gt 0) {
+            $HostLoadRequests += Stop-Phase88HttpLoad -Jobs $loadJobs
+            $loadJobs = @()
+        }
+        if ($seamArmed2) {
+            $null = Clear-Phase88Seam -Tier $seamTier2 -Name $seamVar2
+            $seamArmed2 = $false
+        }
+        if ($seamArmed) {
+            $null = Clear-Phase88Seam -Tier $seamTier -Name $seamVar
+            $seamArmed = $false
+        }
+        $restore = Assert-StackRestored -Tiers $Tiers -ExpectedReplicas $preReplicas -ExpectedImages $preImages
+        foreach ($t in $Tiers) { $ReplicasAfterMap[$t] = Get-LiveReplicas -Tier $t }
+        Write-Phase "  restore: SeamVarsClean=$($restore.SeamVarsClean) ReplicasRestored=$($restore.ReplicasRestored) ImagesUnchanged=$($restore.ImagesUnchanged)" 'Gray'
+
+        # =====================================================================================
+        # STEP S8 — SCORE THE ASSERTED PANELS.
+        # =====================================================================================
+        Write-Phase "STEP S8: scoring $(@($subjects).Count) asserted panel(s) against $ScoringBandSource"
+        $AnyPanelFailed = $false
+        foreach ($p in $subjects) {
+            $panel = $Panels[$p]
+            $rdAfter = Get-Phase88PanelReading -Capture $afterCap -PanelId $p
+            $rdBase  = $preArmReadings[$p]
+            $stateAfter = if (@($rdAfter.States).Count -gt 0) { (@($rdAfter.States | Select-Object -Unique) -join '|') } else { 'NoReading' }
+            $dirToken = "$($scenario.predictedDirection[$p])"
+
+            if (-not $rdAfter.Readable) {
+                $UnevaluablePanels += "panel ${p} ($($panel.Title)): the reader returned NO reading at all in the after window — an UNEVALUATED assertion, not a failed one"
+                $ReaderUnavailable = $true
+                Write-Phase "  panel $p : NO READING" 'Red'
+                continue
+            }
+
+            # 'slope-up' is Regime C's form of 'up' on the per-window band; 'up-then-nodata' is TWO
+            # assertions over one capture (panel 5 spikes while the stale series is still present,
+            # then empties when it expires) and either satisfies it.
+            $valueDirections = switch ($dirToken) {
+                'up'             { @('up') }
+                'down'           { @('down') }
+                'nonzero'        { @('nonzero') }
+                'slope-up'       { @('up') }
+                'up-then-nodata' { @('up', 'nodata') }
+                'nodata'         { @('nodata') }
+                default          { @() }
+            }
+            if (@($valueDirections).Count -eq 0) {
+                $UnevaluablePanels += "panel ${p} ($($panel.Title)): predicted direction '$dirToken' has no scoring rule"
+                continue
+            }
+
+            $seriesResults = @()
+            $anySeriesMoved = $false
+            $anyFalsifiable = $false
+            foreach ($e in @($rdAfter.Entries)) {
+                $band = Find-Phase88Band -Bands $ScoringBands -PanelId ([int]$p) -SeriesName "$($e.Name)" -SeriesIndex ([int]$e.Index)
+                if ($null -eq $band) {
+                    # A series that did not exist at baseline. It is a RECORDED finding — a new
+                    # legend row is itself a discrimination signal — but it is never scored as
+                    # movement, because there is no null hypothesis it could have moved away from.
+                    $NewSeriesAfter += "panel ${p} series '$($e.Name)' (row $($e.Index)) has NO baseline band — new series, recorded as a finding, not scored"
+                    $seriesResults += [pscustomobject]@{
+                        SeriesIndex = [int]$e.Index; SeriesName = "$($e.Name)"
+                        BandLow = $null; BandHigh = $null; BandSampleCount = 0
+                        AfterValues = [double[]]@($e.Values)
+                        Moved = $false; ConsecutiveSamplesOutside = 0
+                        Falsifiable = $false
+                        Note = 'no baseline band: this series did not exist in the scoring baseline'
+                    }
+                    continue
+                }
+                $bandObj = [pscustomobject]@{ Low = [double]$band.BandLow; High = [double]$band.BandHigh }
+                $thin = ([int]$band.SampleCount -lt $MinBandSamples)
+                $best = $null
+                foreach ($d in $valueDirections) {
+                    $m = Test-PanelMoved -Band $bandObj -AfterValues ([double[]]@($e.Values)) `
+                           -AfterStates ([string[]]@($rdAfter.States)) -Direction $d -MinConsecutive 2
+                    if ($null -eq $best -or [int]$m.ConsecutiveSamplesOutside -gt [int]$best.ConsecutiveSamplesOutside) { $best = $m }
+                    if ($m.Moved) { $best = $m; break }
+                }
+                if (-not $thin) { $anyFalsifiable = $true }
+                if ($best.Moved) { $anySeriesMoved = $true }
+                $seriesResults += [pscustomobject]@{
+                    SeriesIndex               = [int]$e.Index
+                    SeriesName                = "$($e.Name)"
+                    BandLow                   = [double]$band.BandLow
+                    BandHigh                  = [double]$band.BandHigh
+                    BandSampleCount           = [int]$band.SampleCount
+                    BandSubWindowSeconds      = [int]$band.SubWindowSeconds
+                    AfterValues               = [double[]]@($e.Values)
+                    Moved                     = [bool]$best.Moved
+                    ConsecutiveSamplesOutside = [int]$best.ConsecutiveSamplesOutside
+                    Falsifiable               = (-not $thin)
+                    Note                      = if ($thin) { "band computed from only $($band.SampleCount) sample(s) — too thin to falsify a non-move" } else { '' }
+                }
+            }
+
+            # The panel's SCORED series: the mover with the longest consecutive run, or — when
+            # nothing moved — the strongest candidate, so the artifact shows the best evidence there
+            # was rather than an arbitrary row.
+            $scored = $null
+            $movers = @($seriesResults | Where-Object { $_.Moved })
+            if (@($movers).Count -gt 0) {
+                $scored = @($movers | Sort-Object -Property ConsecutiveSamplesOutside -Descending)[0]
+            }
+            elseif (@($seriesResults).Count -gt 0) {
+                $scored = @($seriesResults | Sort-Object -Property ConsecutiveSamplesOutside -Descending)[0]
+            }
+
+            $baseVals   = [double[]]@()
+            $baseStates = [string[]]@()
+            if ($null -ne $rdBase) {
+                $baseStates = [string[]]@($rdBase.States)
+                if ($null -ne $scored) {
+                    $bm = @($rdBase.Entries | Where-Object { [string]::Equals("$($_.Name)", "$($scored.SeriesName)", [System.StringComparison]::Ordinal) })
+                    if (@($bm).Count -eq 0) { $bm = @($rdBase.Entries | Where-Object { [int]$_.Index -eq [int]$scored.SeriesIndex }) }
+                    if (@($bm).Count -gt 0) { $baseVals = [double[]]@($bm[0].Values) }
+                }
+            }
+
+            $panelMoved = $anySeriesMoved
+            if (-not $panelMoved -and -not $anyFalsifiable) {
+                $UnevaluablePanels += "panel ${p} ($($panel.Title)): every series' band was computed from fewer than $MinBandSamples samples, so a non-move here cannot falsify the prediction — INCONCLUSIVE, not a discrimination failure"
+                Write-Phase "  panel $p : no falsifiable band — Inconclusive, not Fail" 'Yellow'
+            }
+            elseif (-not $panelMoved) {
+                $AnyPanelFailed = $true
+                $Findings += "panel ${p} ($($panel.Title)): READ successfully but did NOT move '$dirToken' for 2 consecutive samples in any series — a read panel that did not move is a FAIL, not an Inconclusive"
+                Write-Phase "  panel $p : DID NOT MOVE ($dirToken)" 'Red'
+            }
+            else {
+                Write-Phase ("  panel {0}: MOVED '{1}' on series '{2}' — {3} consecutive sample(s) outside {4:N4}..{5:N4}" -f `
+                    $p, $dirToken, $scored.SeriesName, $scored.ConsecutiveSamplesOutside, $scored.BandLow, $scored.BandHigh) 'Green'
+            }
+
+            $PanelResults += [pscustomobject]@{
+                PanelId                   = [int]$p
+                PanelTitle                = "$($panel.Title)"
+                Regime                    = "$($panel.Regime)"
+                SeriesName                = if ($null -ne $scored) { "$($scored.SeriesName)" } else { '' }
+                ScoredSeriesIndex         = if ($null -ne $scored) { [int]$scored.SeriesIndex } else { -99 }
+                PredictedDirection        = $dirToken
+                BandLow                   = if ($null -ne $scored) { $scored.BandLow } else { $null }
+                BandHigh                  = if ($null -ne $scored) { $scored.BandHigh } else { $null }
+                BandSource                = $ScoringBandSource
+                SubWindowSeconds          = [int]$rdAfter.SubWindowSeconds
+                BaselineValues            = $baseVals
+                BaselineStates            = $baseStates
+                AfterValues               = if ($null -ne $scored) { [double[]]@($scored.AfterValues) } else { [double[]]@() }
+                AfterStates               = [string[]]@($rdAfter.States)
+                Moved                     = [bool]$panelMoved
+                ConsecutiveSamplesOutside = if ($null -ne $scored) { [int]$scored.ConsecutiveSamplesOutside } else { 0 }
+                PanelStateAfter           = $stateAfter
+                LegendNamesBaseline       = if ($null -ne $rdBase) { [string[]]@(Get-Phase88LegendNames -Reading $rdBase) } else { [string[]]@() }
+                LegendNamesAfter          = [string[]]@(Get-Phase88LegendNames -Reading $rdAfter)
+                SeriesResults             = @($seriesResults)
+                SeriesMovedRule           = 'a multi-series panel MOVED when at least one series moved in the predicted direction for >= 2 consecutive samples; every series'' own outcome is in SeriesResults[] so the selection is auditable'
+            }
+        }
+
+        # =====================================================================================
+        # STEP S9 — SCORE THE CROSS-TALK CONTROLS, in the SAME windows as the claim (DISC-03).
+        #
+        # StayedPut is STRICT: inside the band for the ENTIRE window, not "mostly". A drifting
+        # control is a FINDING — either the fault has a wider blast radius than designed or a panel
+        # is wired to the wrong metric, which is exactly what the control exists to catch — and it is
+        # recorded WITH its MaxExcursion and its pre-fault reading, so a wobble and a real blast
+        # radius are distinguishable rather than collapsed into one boolean.
+        # =====================================================================================
+        Write-Phase "STEP S9: cross-talk controls [$(@($controls) -join ',')]"
+        $CrossTalkHeld = $true
+        foreach ($c in $controls) {
+            $rdAfter = Get-Phase88PanelReading -Capture $afterCap -PanelId $c
+            $rdBase  = $preArmReadings[$c]
+            $stateAfter = if (@($rdAfter.States).Count -gt 0) { (@($rdAfter.States | Select-Object -Unique) -join '|') } else { 'NoReading' }
+
+            $ctSeries = @()
+            $panelStayed = $true
+            $maxExc = 0.0
+            $worst = $null
+            $preStayed = $true
+            foreach ($e in @($rdAfter.Entries)) {
+                $band = Find-Phase88Band -Bands $ScoringBands -PanelId ([int]$c) -SeriesName "$($e.Name)" -SeriesIndex ([int]$e.Index)
+                if ($null -eq $band) {
+                    $panelStayed = $false
+                    $Findings += "cross-talk panel ${c} ($($Panels[$c].Title)) series '$($e.Name)': NO baseline band — an unbanded control cannot be claimed to have held"
+                    $ctSeries += [pscustomobject]@{
+                        SeriesIndex = [int]$e.Index; SeriesName = "$($e.Name)"
+                        BandLow = $null; BandHigh = $null; AfterValues = [double[]]@($e.Values)
+                        StayedPut = $false; MaxExcursion = $null; SamplesOutside = 0
+                        Note = 'no baseline band for this series'
+                    }
+                    continue
+                }
+                $lo = [double]$band.BandLow; $hi = [double]$band.BandHigh
+                $sExc = 0.0; $sOut = 0; $sRun = 0; $sBestRun = 0
+                foreach ($v in @($e.Values)) {
+                    $x = Get-Phase88Excursion -Value ([double]$v) -Low $lo -High $hi
+                    if ($x -gt 0) { $sOut++; $sRun++; if ($sRun -gt $sBestRun) { $sBestRun = $sRun } } else { $sRun = 0 }
+                    if ($x -gt $sExc) { $sExc = $x }
+                }
+                $sStayed = ($sOut -eq 0)
+                if (-not $sStayed) { $panelStayed = $false }
+                if ($sExc -gt $maxExc) { $maxExc = $sExc }
+                $entry = [pscustomobject]@{
+                    SeriesIndex               = [int]$e.Index
+                    SeriesName                = "$($e.Name)"
+                    BandLow                   = $lo
+                    BandHigh                  = $hi
+                    BandSampleCount           = [int]$band.SampleCount
+                    AfterValues               = [double[]]@($e.Values)
+                    StayedPut                 = $sStayed
+                    MaxExcursion              = $sExc
+                    SamplesOutside            = $sOut
+                    ConsecutiveSamplesOutside = $sBestRun
+                    Note                      = ''
+                }
+                $ctSeries += $entry
+                if ($null -eq $worst -or $sExc -ge [double]$worst.MaxExcursion) { $worst = $entry }
+
+                # The SAME series read before the fault. A control that had already drifted before
+                # anything was driven is a BASELINE-DRIFT finding, not a blast-radius one, and the
+                # artifact must let a reader tell those two apart.
+                if ($null -ne $rdBase) {
+                    $bm = @($rdBase.Entries | Where-Object { [string]::Equals("$($_.Name)", "$($e.Name)", [System.StringComparison]::Ordinal) })
+                    foreach ($bv in @($bm)) {
+                        foreach ($v in @($bv.Values)) {
+                            if ((Get-Phase88Excursion -Value ([double]$v) -Low $lo -High $hi) -gt 0) { $preStayed = $false }
+                        }
+                    }
+                }
+            }
+            if (-not $panelStayed) {
+                $CrossTalkHeld = $false
+                $Findings += ("cross-talk panel {0} ({1}) DRIFTED outside its band (max excursion {2:N4}); pre-fault reading of the same panel {3} — recorded as a finding, not suppressed" -f `
+                    $c, $Panels[$c].Title, $maxExc, $(if ($preStayed) { 'was INSIDE its band, so the drift coincides with the fault window' } else { 'was ALREADY outside its band, so this is baseline drift rather than blast radius' }))
+                Write-Phase ("  panel {0}: DRIFTED (max excursion {1:N4})" -f $c, $maxExc) 'Red'
+            }
+            else {
+                Write-Phase ("  panel {0}: stayed put (max excursion {1:N4})" -f $c, $maxExc) 'Gray'
+            }
+
+            $CrossTalkResults += [pscustomobject]@{
+                PanelId          = [int]$c
+                PanelTitle       = "$($Panels[$c].Title)"
+                Applicable       = $true
+                BandLow          = if ($null -ne $worst) { $worst.BandLow } else { $null }
+                BandHigh         = if ($null -ne $worst) { $worst.BandHigh } else { $null }
+                BandSource       = $ScoringBandSource
+                SubWindowSeconds = [int]$rdAfter.SubWindowSeconds
+                AfterValues      = if ($null -ne $worst) { [double[]]@($worst.AfterValues) } else { [double[]]@() }
+                StayedPut        = $panelStayed
+                MaxExcursion     = $maxExc
+                PreFaultStayedPut = $preStayed
+                PanelStateAfter  = $stateAfter
+                SeriesResults    = @($ctSeries)
+            }
+        }
+
+        # =====================================================================================
+        # STEP S10 — THE DIAGNOSTIC PROXY VALUE, recorded BESIDE the rendered value (T-88-12).
+        # The rendered panel remains the verdict; a disagreement is a FINDING to record loudly, not
+        # an error to reconcile away. This is the direct control against the Phase-87 defect where
+        # 30/30 query checks reported green against three panels rendering "No data".
+        # =====================================================================================
+        Write-Phase "STEP S10: diagnostic proxy cross-check (diagnosis only)"
+        $afterStartUnix = ([System.DateTimeOffset]::new($afterStart.ToUniversalTime(), [TimeSpan]::Zero)).ToUnixTimeSeconds()
+        $afterEndUnix   = ([System.DateTimeOffset]::new($afterEnd.ToUniversalTime(), [TimeSpan]::Zero)).ToUnixTimeSeconds()
+        $riScenario     = if ($null -ne $ScenarioRateInterval) { [int]$ScenarioRateInterval } else { 240 }
+        try {
+            $dashJson = Get-Content (Join-Path $repoRoot 'k8s/dashboards/business.json') -Raw | ConvertFrom-Json
+            foreach ($dp in @($dashJson.panels)) {
+                $dpNames = @(Get-PropertyNames $dp)
+                if ($dpNames -notcontains 'id' -or $dpNames -notcontains 'targets') { continue }
+                $dpId = "$($dp.id)"
+                if (@($subjects) -notcontains $dpId) { continue }
+                $comparable = $true; $reason = ''; $queries = @(); $proxyMean = $null
+                foreach ($tg in @($dp.targets)) {
+                    $expr = "$($tg.expr)"
+                    if ($expr -match 'histogram_quantile') {
+                        $comparable = $false
+                        $reason = 'histogram_quantile is a per-series quantile; summing across series is not a meaningful aggregate, so no agreement is asserted'
+                    }
+                    $q = $expr.Replace('$__rate_interval', "${riScenario}s").Replace('$__range', "${SubWindowSeconds}s")
+                    $q = $q.Replace('$source', '.*').Replace('$pod', '.*')
+                    $queries += $q
+                    try {
+                        $m = Get-ProxyAggregateMean $q $afterStartUnix $afterEndUnix $SubWindowSeconds
+                        if ($null -ne $m) {
+                            if ($null -eq $proxyMean) { $proxyMean = 0.0 }
+                            $proxyMean += [double]$m
+                        }
+                    } catch {
+                        $reason = "proxy query failed: $($_.Exception.Message)"
+                        $comparable = $false
+                    }
+                }
+                # The rendered side of the comparison: the SUM ACROSS SERIES of each series' own mean
+                # over the after window — the same shape the proxy aggregate produces (all series
+                # summed per timestamp, then averaged over timestamps).
+                $panelSum = $null
+                $mine = @($PanelResults | Where-Object { [int]$_.PanelId -eq [int]$dpId })
+                if (@($mine).Count -gt 0) {
+                    $panelSum = 0.0
+                    foreach ($sr in @($mine[0].SeriesResults)) {
+                        $sv = @($sr.AfterValues)
+                        if ($sv.Count -eq 0) { continue }
+                        $acc = 0.0
+                        foreach ($v in $sv) { $acc += [double]$v }
+                        $panelSum += ($acc / $sv.Count)
+                    }
+                } else {
+                    $comparable = $false
+                    $reason = (("$reason " + 'the panel produced no scored result, so there is nothing to compare the proxy value against').Trim())
+                }
+                $agrees = $null
+                if ($comparable -and $null -ne $proxyMean -and $null -ne $panelSum) {
+                    $tol = [Math]::Max(0.20 * [Math]::Abs([double]$panelSum), 0.05)
+                    $agrees = ([Math]::Abs([double]$proxyMean - [double]$panelSum) -le $tol)
+                    if (-not $agrees) {
+                        $DiagnosticDisagreements += "panel ${dpId} ($($Panels[$dpId].Title)): rendered series-mean sum $panelSum vs proxy aggregate mean $proxyMean (tolerance $tol) — the RENDERED value remains the verdict; recorded as a finding"
+                    }
+                }
+                $DiagnosticEntries += [pscustomobject]@{
+                    PanelId      = [int]$dpId
+                    TargetCount  = @($dp.targets).Count
+                    Queries      = [string[]]$queries
+                    ProxyMean    = $proxyMean
+                    PanelMeanSum = $panelSum
+                    Comparable   = [bool]$comparable
+                    Agrees       = $agrees
+                    Reason       = ("$reason" -replace 'System\.Object\[\]', 'System.Object-array')
+                }
+                if ($null -eq $DiagnosticQueryValue -and $null -ne $proxyMean) { $DiagnosticQueryValue = [double]$proxyMean }
+                Write-Phase ("  panel {0}: proxy={1} panel={2} comparable={3} agrees={4}" -f $dpId, $proxyMean, $panelSum, $comparable, $agrees) 'Gray'
+            }
+        } catch {
+            Write-Phase "  the diagnostic cross-check could not be built: $($_.Exception.Message)" 'Yellow'
+        }
+        $cmpEntries = @($DiagnosticEntries | Where-Object { $_.Comparable -and $null -ne $_.Agrees })
+        if (@($cmpEntries).Count -gt 0) {
+            $DiagnosticAgreesWithPanel = (@($cmpEntries | Where-Object { -not $_.Agrees }).Count -eq 0)
+        }
+
+        # =====================================================================================
+        # STEP S11 — VERDICT AND ARTIFACT. The artifact is written FIRST and the exit code is
+        # resolved from the SAME in-memory object, so an artifact can never disagree with the code
+        # the process returned.
+        # =====================================================================================
+        $subjectsScored = @($PanelResults | ForEach-Object { "$($_.PanelId)" })
+        foreach ($p in $subjects) {
+            if ($subjectsScored -contains "$p") { continue }
+            if (@($UnevaluablePanels | Where-Object { "$_" -match "^panel $p[ :(]" }).Count -gt 0) { continue }
+            $UnevaluablePanels += "panel ${p} ($($Panels[$p].Title)): neither scored nor declared unevaluable"
+        }
+
+        $AllMoved = ((@($PanelResults).Count -gt 0) -and (@($PanelResults | Where-Object { -not $_.Moved }).Count -eq 0))
+
+        # PRECEDENCE: Fail BEATS Inconclusive. A dirty stack, a panel that was read and did not move,
+        # and a control that drifted are all claims that were EVALUATED and came back false — positive
+        # evidence — and no quantity of UNEVALUATED claims makes them less true.
+        $verdict = 'Pass'
+        if (-not $restore.Ok -or $AnyPanelFailed -or -not $CrossTalkHeld) { $verdict = 'Fail' }
+        elseif (@($UnevaluablePanels).Count -gt 0 -or $ReaderUnavailable -or -not $AllMoved) { $verdict = 'Inconclusive' }
+
+        $human = "phase-88 $canonicalId verdict=${verdict}: lever=$lever trigger='$TriggerKind' | " +
+                 "$(@($PanelResults | Where-Object { $_.Moved }).Count)/$(@($subjects).Count) asserted panel(s) moved " +
+                 "[$(@($PanelResults | ForEach-Object { "$($_.PanelId):$(if($_.Moved){'moved'}else{'no'})" }) -join ' ')] | " +
+                 "crossTalkHeld=$CrossTalkHeld [$(@($CrossTalkResults | ForEach-Object { "$($_.PanelId):$(if($_.StayedPut){'held'}else{'DRIFTED'})" }) -join ' ')] | " +
+                 "baselineRecaptured=$BaselineRecaptured band=$ScoringBandSource | " +
+                 "after $($afterStart.ToString('o')) -> $($afterEnd.ToString('o')) at $afterCount x ${SubWindowSeconds}s, " +
+                 "${ViewportWidth}x${ViewportHeight}, rate_interval=${ScenarioRateInterval}s | " +
+                 "load=$LoadShape ~$HostLoadRequests req | diagnosticAgrees=$DiagnosticAgreesWithPanel | " +
+                 "unevaluable=$(@($UnevaluablePanels).Count) findings=$(@($Findings).Count) | " +
+                 "stack clean: seamVars=$($restore.SeamVarsClean) replicas=$($restore.ReplicasRestored) images=$($restore.ImagesUnchanged)"
+
+        $report = [ordered]@{
+            ScenarioId                = $canonicalId
+            Verdict                   = $verdict
+            Status                    = 'Locked'
+            Lever                     = $lever
+            TargetTier                = "$($scenario.targetTier)"
+            TriggerKind               = $TriggerKind
+            DwellSeconds              = $dwell
+
+            Moved                     = $AllMoved
+            CrossTalkHeld             = $CrossTalkHeld
+            BaselineRecaptured        = $BaselineRecaptured
+            BaselineRecaptureNote     = $BaselineRecaptureNote
+            SeamActiveDuringRebaseline = $SeamActiveDuringRebaseline
+            StackRestored             = [bool]$restore.Ok
+            BandSource                = $ScoringBandSource
+
+            PanelResults              = @($PanelResults)
+            CrossTalkPanels           = @($CrossTalkResults)
+            PreArmBaselineValues      = @($PreArmBaselineValues)
+            PreArmWindowStart         = "$($preArmCap.WindowStartUtc)"
+            PreArmWindowEnd           = "$($preArmCap.WindowEndUtc)"
+
+            RolloutOldInstanceIds     = [string[]]@($RolloutOldInstanceIds)
+            RolloutNewInstanceIds     = [string[]]@($RolloutNewInstanceIds)
+            RolloutUtc                = $RolloutUtc
+            RolloutNote               = 'EXPECTED ARTIFACT, not a result. `kubectl set env` and `kubectl scale` mint NEW pods with NEW service_instance_id values, and a k8s restart never RESETS a series — it starts a new one. Every by(service_instance_id) panel therefore gains series at this moment and every aggregate briefly dips; that dip must NOT be scored, which is why the scoring band for any rollout scenario is re-captured afterwards.'
+
+            ReplicasBefore            = $ReplicasBeforeMap
+            ReplicasAfter             = $ReplicasAfterMap
+            ReplicasRestored          = $restore.ReplicasRestored
+            SeamVarsAfter             = @($restore.SeamVarsFound)
+            SeamVarsClean             = $restore.SeamVarsClean
+            ImagesUnchanged           = $restore.ImagesUnchanged
+            ImagesBefore              = $preImages
+            ReplicaMismatches         = @($restore.ReplicaMismatches)
+            ImageMismatches           = @($restore.ImageMismatches)
+            UnknownTiers              = @($restore.UnknownTiers)
+            DependencyOutageDriven    = $false
+
+            BaselineWindowStart       = if ($BaselineRecaptured -and $null -ne $rebaseCap) { "$($rebaseCap.WindowStartUtc)" } else { "$($disc01.BaselineWindowStart)" }
+            BaselineWindowEnd         = if ($BaselineRecaptured -and $null -ne $rebaseCap) { "$($rebaseCap.WindowEndUtc)" } else { "$($disc01.BaselineWindowEnd)" }
+            AfterWindowStart          = $afterStart.ToString('o')
+            AfterWindowEnd            = $afterEnd.ToString('o')
+            SubWindowSeconds          = $SubWindowSeconds
+            SubWindowCount            = $afterCount
+            Panel4SubWindowSeconds    = $Panel4SubWindowSeconds
+            Panel4SubWindowNote       = 'MEASURED in 88-04: panel 4 renders "No data" at a 60 s sub-window, because increase() needs at least TWO samples inside its range and the stored resolution here is 60 s (the SDK export cadence, not the 15 s scrape). Panel 4 is therefore read in its OWN batch at 120 s whenever a scenario asserts or controls on it, and EVERY entry states its own SubWindowSeconds so widths can never be silently cross-compared.'
+            ViewportWidth             = $ViewportWidth
+            ViewportHeight            = $ViewportHeight
+            LocatorMode               = $LocatorMode
+            RateIntervalSeconds       = $ScenarioRateInterval
+            DatasourceTimeInterval    = $ScenarioTimeInterval
+            OldestSampleUtc           = $OldestSampleUtc
+
+            FaultStartUtc             = $FaultStartUtc
+            FaultEndUtc               = $FaultEndUtc
+            LoadShape                 = $LoadShape
+            LoadActualSeconds         = $LoadActualSeconds
+            HostLoadRequests          = $HostLoadRequests
+
+            DiagnosticQueryValue      = $DiagnosticQueryValue
+            DiagnosticQueryValues     = @($DiagnosticEntries)
+            DiagnosticAgreesWithPanel = $DiagnosticAgreesWithPanel
+            DiagnosticDisagreements   = @($DiagnosticDisagreements)
+            DiagnosticNote            = 'The RENDERED panel is the verdict. These proxy query_range values are DIAGNOSIS only; a disagreement is a finding to record, never an error to reconcile away.'
+
+            NewSeriesAfter            = [string[]]@($NewSeriesAfter)
+            Findings                  = [string[]]@($Findings)
+            UnevaluablePanels         = @($UnevaluablePanels)
+            ScreenshotPaths           = @($ScenarioScreenshotPaths)
+            BatchStateAfter           = "$($afterCap.State)"
+            CompletedUtc              = ([DateTimeOffset]::UtcNow).ToString('o')
+            HumanSummary              = $human
+        }
+
+        $reportPath = Join-Path $reportDir ("phase-88-{0}.json" -f $canonicalId)
+        if (-not (Save-Phase88ScenarioArtifact -Report $report -Path $reportPath)) {
+            Write-Phase "the written artifact carries a JSON VALUE of 'System.Object-array' — the serialisation depth is too shallow." 'Red'
+            exit 66
+        }
+        Write-Phase "verdict artifact: $reportPath" 'Green'
+        Write-Phase $human $(if ($verdict -eq 'Pass') { 'Green' } elseif ($verdict -eq 'Fail') { 'Red' } else { 'Yellow' })
+        foreach ($f in $Findings) { Write-Phase "  FINDING: $f" 'Yellow' }
+
+        $exitCode = Resolve-AnalyzerExitCode ([pscustomobject]$report)
+        if ($ReaderUnavailable -and $exitCode -eq 0) { $exitCode = 66 }
+        if (-not $restore.Ok) { $exitCode = 65 }
+        $resolved = Resolve-SweepClass $exitCode
+        Write-Phase "class=$($resolved.Class) exit=$exitCode" 'Gray'
+        exit $exitCode
     }
 
     # =========================================================================================
@@ -1167,33 +2602,8 @@ try {
     # =========================================================================================
     Write-Phase "STEP H: diagnostic proxy cross-check (diagnosis only — the rendered panel is the verdict)"
 
-    # NOTE ON THE PARAMETER NAMES — they are deliberately long, and a single-letter name here is a
-    # BUG, not a style choice. PowerShell variable names are case-INSENSITIVE, so a `[long]$S`
-    # parameter and a `foreach ($s in ...)` loop variable are the SAME variable; the parameter's type
-    # constraint is then re-enforced on the loop assignment and every call throws
-    # "Cannot convert @{metric=; values=System.Object[]} ... to System.Int64". That is exactly how the
-    # first BASE-01 run lost its entire diagnostic cross-check. (Same trap as 88-03 deviation 5, in a
-    # form where the type constraint makes it fail loudly instead of silently.)
-    function Get-ProxyAggregateMean([string]$PromQuery, [long]$StartUnix, [long]$EndUnix, [int]$StepSeconds) {
-        $res = Invoke-ProxyRangeQuery -Query $PromQuery -StartUnix $StartUnix -EndUnix $EndUnix -StepSeconds $StepSeconds
-        $byTs = @{}
-        foreach ($series in @($res.data.result)) {
-            $sn = @(Get-PropertyNames $series)
-            if ($sn -notcontains 'values') { continue }
-            foreach ($v in @($series.values)) {
-                $ts = "$($v[0])"
-                $raw = "$($v[1])"
-                $val = 0.0
-                if (-not [double]::TryParse($raw, [ref]$val)) { continue }
-                if (-not [double]::IsFinite($val)) { continue }   # histogram_quantile yields NaN on empty buckets
-                if ($byTs.ContainsKey($ts)) { $byTs[$ts] += $val } else { $byTs[$ts] = $val }
-            }
-        }
-        if ($byTs.Count -eq 0) { return $null }
-        $sum = 0.0
-        foreach ($k in $byTs.Keys) { $sum += $byTs[$k] }
-        return ($sum / $byTs.Count)
-    }
+    # Get-ProxyAggregateMean is defined once, in the HELPERS section above, because the scenario
+    # engine cross-checks with the same function.
 
     $winStartUnix = ([System.DateTimeOffset]::new($BaselineWindowStartUtc, [TimeSpan]::Zero)).ToUnixTimeSeconds()
     $winEndUnix   = ([System.DateTimeOffset]::new($BaselineWindowEndUtc, [TimeSpan]::Zero)).ToUnixTimeSeconds()
@@ -1453,6 +2863,14 @@ finally {
             $null = Clear-Phase88Seam -Tier $seamTier -Name $seamVar
         }
     }
+    # The SECOND seam slot (ZERO-03 arms a trigger seam as well as a suppression seam). A teardown
+    # that disarmed only the first would leave the other armed on an interrupted run.
+    if ($seamArmed2 -and -not [string]::IsNullOrWhiteSpace($seamTier2) -and -not [string]::IsNullOrWhiteSpace($seamVar2)) {
+        if (Get-Command Clear-Phase88Seam -ErrorAction SilentlyContinue) {
+            Write-Host "[phase-88-panel-discriminate] TEARDOWN: '$seamVar2' is still armed on '$seamTier2' — disarming." -ForegroundColor Yellow
+            $null = Clear-Phase88Seam -Tier $seamTier2 -Name $seamVar2
+        }
+    }
 
     # A tier this script scaled and did not restore is the same class of poisoning as a live seam.
     # The restore target is the count READ before the scale, never a tabled one.
@@ -1469,6 +2887,13 @@ finally {
         Write-Host "[phase-88-panel-discriminate] TEARDOWN: stopping the host HTTP load job." -ForegroundColor Yellow
         try { Stop-Job -Job $trafficJob -ErrorAction SilentlyContinue } catch { }
         try { Remove-Job -Job $trafficJob -Force -ErrorAction SilentlyContinue } catch { }
+    }
+    if (@($loadJobs).Count -gt 0) {
+        Write-Host "[phase-88-panel-discriminate] TEARDOWN: stopping $(@($loadJobs).Count) scenario load job(s)." -ForegroundColor Yellow
+        foreach ($lj in @($loadJobs)) {
+            try { Stop-Job -Job $lj -ErrorAction SilentlyContinue } catch { }
+            try { Remove-Job -Job $lj -Force -ErrorAction SilentlyContinue } catch { }
+        }
     }
 
     # Stop ONLY a forward this script actually started, behind the recycled-PID guard. A forward this
