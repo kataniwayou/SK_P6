@@ -1890,11 +1890,16 @@ try {
                 $bandObj = [pscustomobject]@{ Low = [double]$band.BandLow; High = [double]$band.BandHigh }
                 $thin = ([int]$band.SampleCount -lt $MinBandSamples)
                 $best = $null
+                # WHICH direction carried it must be recorded. A compound token like 'up-then-nodata'
+                # is satisfied by EITHER half, and an artifact that echoes the compound token back as
+                # the "observed" direction would hide which half actually happened — exactly the
+                # question panel 5 exists to answer.
+                $bestDir = ''
                 foreach ($d in $valueDirections) {
                     $m = Test-PanelMoved -Band $bandObj -AfterValues ([double[]]@($e.Values)) `
                            -AfterStates ([string[]]@($rdAfter.States)) -Direction $d -MinConsecutive 2
-                    if ($null -eq $best -or [int]$m.ConsecutiveSamplesOutside -gt [int]$best.ConsecutiveSamplesOutside) { $best = $m }
-                    if ($m.Moved) { $best = $m; break }
+                    if ($null -eq $best -or [int]$m.ConsecutiveSamplesOutside -gt [int]$best.ConsecutiveSamplesOutside) { $best = $m; $bestDir = $d }
+                    if ($m.Moved) { $best = $m; $bestDir = $d; break }
                 }
                 if (-not $thin) { $anyFalsifiable = $true }
                 if ($best.Moved) { $anySeriesMoved = $true }
@@ -1907,9 +1912,12 @@ try {
                     BandSubWindowSeconds      = [int]$band.SubWindowSeconds
                     AfterValues               = [double[]]@($e.Values)
                     Moved                     = [bool]$best.Moved
+                    MovedDirection            = if ($best.Moved) { $bestDir } else { '' }
                     ConsecutiveSamplesOutside = [int]$best.ConsecutiveSamplesOutside
                     Falsifiable               = (-not $thin)
-                    Note                      = if ($thin) { "band computed from only $($band.SampleCount) sample(s) — too thin to falsify a non-move" } else { '' }
+                    Note                      = if ($thin) { "band computed from only $($band.SampleCount) sample(s) — too thin to falsify a non-move" }
+                                                elseif ($best.Moved -and $bestDir -eq 'nodata') { 'carried by the PANEL-LEVEL NoData state, not by this series'' values — the panel emptied' }
+                                                else { '' }
                 }
             }
 
@@ -1920,12 +1928,15 @@ try {
             # panel 9 — deliberately UNGUARDED so a dead keeper is visible rather than comfortable —
             # NoData IS the discrimination signal. It is therefore evaluated against the panel's own
             # STATES, independently of any band, whenever the predicted direction admits it.
-            $PanelStateMove = $null
+            # Computed for EVERY panel, whatever its predicted direction, so PanelStateNoDataRun is
+            # always a stated measurement rather than a zero that could mean "no run" or "not checked".
+            $PanelStateMove = Test-PanelMoved -Band ([pscustomobject]@{ Low = 0.0; High = 0.0 }) `
+                                -AfterValues ([double[]]@()) -AfterStates ([string[]]@($rdAfter.States)) `
+                                -Direction 'nodata' -MinConsecutive 2
+            $PanelStateMoveApplied = $false
             if (@($valueDirections) -contains 'nodata') {
-                $PanelStateMove = Test-PanelMoved -Band ([pscustomobject]@{ Low = 0.0; High = 0.0 }) `
-                                    -AfterValues ([double[]]@()) -AfterStates ([string[]]@($rdAfter.States)) `
-                                    -Direction 'nodata' -MinConsecutive 2
                 if ($PanelStateMove.Moved) {
+                    $PanelStateMoveApplied = $true
                     $anySeriesMoved = $true
                     $anyFalsifiable = $true
                     $seriesResults += [pscustomobject]@{
@@ -1951,10 +1962,50 @@ try {
             # must be able to state them separately. A panel that moved the other way HAS
             # discriminated (DISC-02), and the wrong prediction is a loud FINDING that degrades the
             # verdict to Inconclusive rather than being quietly absorbed into a Pass.
-            $ObservedDirection = if ($anySeriesMoved) { $dirToken } else { '' }
-            $PredictionHeld    = [bool]$anySeriesMoved
+            # The observed direction is the one that ACTUALLY carried the movement — the winning
+            # per-series direction, or 'nodata' when the panel-level state carried it — never the
+            # compound token echoed back. For 'up-then-nodata' this is the whole point: the token is
+            # satisfied by either half, and only this field says which half the stack produced.
+            $ObservedDirection = ''
+            if ($anySeriesMoved) {
+                $winners = @($seriesResults | Where-Object { $_.Moved } |
+                    Sort-Object -Property ConsecutiveSamplesOutside -Descending)
+                if (@($winners).Count -gt 0 -and @(Get-PropertyNames $winners[0]) -contains 'MovedDirection' -and
+                    -not [string]::IsNullOrWhiteSpace("$($winners[0].MovedDirection)")) {
+                    $ObservedDirection = "$($winners[0].MovedDirection)"
+                } elseif ($PanelStateMoveApplied) {
+                    $ObservedDirection = 'nodata'
+                } else {
+                    $ObservedDirection = $dirToken
+                }
+            }
+            # A COMPOUND token is satisfied by either half — the plan says so explicitly for panel 5
+            # ("counts as moved if EITHER segment shows the predicted behaviour; record which") — so
+            # observing only one half is NOT a corrected prediction. It is recorded, not penalised.
+            $PredictionHeld = [bool]$anySeriesMoved
             if (-not $anySeriesMoved) {
-                foreach ($alt in @('down', 'up', 'nonzero', 'nodata')) {
+                # Panel-level NoData first: a panel that emptied has no series for the loop below.
+                if ((@($valueDirections) -notcontains 'nodata') -and $PanelStateMove.Moved) {
+                    $ObservedDirection = 'nodata'
+                    $anySeriesMoved    = $true
+                    $anyFalsifiable    = $true
+                    $seriesResults += [pscustomobject]@{
+                        SeriesIndex               = -2
+                        SeriesName                = '(panel state)'
+                        BandLow                   = $null
+                        BandHigh                  = $null
+                        BandSampleCount           = 0
+                        BandSubWindowSeconds      = [int]$rdAfter.SubWindowSeconds
+                        AfterValues               = [double[]]@()
+                        Moved                     = $true
+                        MovedDirection            = 'nodata'
+                        ConsecutiveSamplesOutside = [int]$PanelStateMove.ConsecutiveSamplesOutside
+                        Falsifiable               = $true
+                        Note                      = "MEASURED DIRECTION 'nodata', which is NOT the predicted '$dirToken': the panel EMPTIED for $($PanelStateMove.ConsecutiveSamplesOutside) consecutive sub-window(s) instead of moving its value. The panel discriminated; the prediction did not hold."
+                    }
+                }
+                foreach ($alt in @('down', 'up', 'nonzero')) {
+                    if ($anySeriesMoved) { break }
                     if (@($valueDirections) -contains $alt) { continue }
                     foreach ($e in @($rdAfter.Entries)) {
                         $band = Find-Phase88Band -Bands $ScoringBands -PanelId ([int]$p) -SeriesName "$($e.Name)" -SeriesIndex ([int]$e.Index)
@@ -1967,7 +2018,7 @@ try {
                         $ObservedDirection = $alt
                         $anySeriesMoved    = $true
                         $anyFalsifiable    = $true
-                        $seriesResults += [pscustomobject]@{
+                        $altEntry = [pscustomobject]@{
                             SeriesIndex               = [int]$e.Index
                             SeriesName                = "$($e.Name)"
                             BandLow                   = [double]$band.BandLow
@@ -1976,13 +2027,24 @@ try {
                             BandSubWindowSeconds      = [int]$band.SubWindowSeconds
                             AfterValues               = [double[]]@($e.Values)
                             Moved                     = $true
+                            MovedDirection            = $alt
                             ConsecutiveSamplesOutside = [int]$altM.ConsecutiveSamplesOutside
                             Falsifiable               = $true
                             Note                      = "MEASURED DIRECTION '$alt', which is NOT the predicted '$dirToken'. The panel discriminated; the prediction did not hold."
                         }
+                        # REPLACED IN PLACE, never appended. A second entry for the same series would
+                        # be counted twice by the STEP S10 diagnostic aggregate — which sums every
+                        # SeriesResults[] row's mean — and would manufacture a proxy disagreement out
+                        # of nothing but double counting.
+                        $repl = @(); $done = $false
+                        foreach ($sr in @($seriesResults)) {
+                            if (-not $done -and [int]$sr.SeriesIndex -eq [int]$e.Index) { $repl += $altEntry; $done = $true }
+                            else { $repl += $sr }
+                        }
+                        if (-not $done) { $repl += $altEntry }
+                        $seriesResults = @($repl)
                         break
                     }
-                    if ($anySeriesMoved) { break }
                 }
                 if ($anySeriesMoved) {
                     $PredictionHeld = $false
@@ -2035,11 +2097,30 @@ try {
                     PanelStateAfter  = if (@($lateStates).Count -gt 0) { (@($lateStates | Select-Object -Unique) -join '|') } else { 'NoReading' }
                     ContainsNoData   = $lateNoData
                 }
+                # THE SPIKE IS TESTED, NOT INFERRED. "Some series moved" is not "the gap spiked":
+                # a series scored MOVED by the panel-level NoData half of this very token would
+                # otherwise be read back as evidence of a spike, and the artifact would then claim a
+                # rise that the recorded values plainly contradict. The test is an explicit UP move,
+                # over the EARLY segment's values only, against the same band the panel is scored on.
                 $spiked = $false
-                foreach ($sr in @($seriesResults)) {
-                    if ([int]$sr.SeriesIndex -lt 0) { continue }
-                    if ($sr.Moved -and [int]$sr.ConsecutiveSamplesOutside -ge 2) { $spiked = $true }
+                $spikeConsecutive = 0
+                $spikeSeries = ''
+                foreach ($es in @($earlySeries)) {
+                    $band = Find-Phase88Band -Bands $ScoringBands -PanelId ([int]$p) -SeriesName "$($es.SeriesName)" -SeriesIndex ([int]$es.SeriesIndex)
+                    if ($null -eq $band) { continue }
+                    $upM = Test-PanelMoved -Band ([pscustomobject]@{ Low = [double]$band.BandLow; High = [double]$band.BandHigh }) `
+                             -AfterValues ([double[]]@($es.Values)) -AfterStates ([string[]]@($earlyStates)) `
+                             -Direction 'up' -MinConsecutive 2
+                    if ([int]$upM.ConsecutiveSamplesOutside -gt $spikeConsecutive) {
+                        $spikeConsecutive = [int]$upM.ConsecutiveSamplesOutside
+                        $spikeSeries = "$($es.SeriesName)"
+                    }
+                    if ($upM.Moved) { $spiked = $true }
                 }
+                $EarlySegment | Add-Member -NotePropertyName 'SpikeObserved'    -NotePropertyValue $spiked
+                $EarlySegment | Add-Member -NotePropertyName 'SpikeConsecutive' -NotePropertyValue $spikeConsecutive
+                $EarlySegment | Add-Member -NotePropertyName 'SpikeSeries'      -NotePropertyValue $spikeSeries
+                $EarlySegment | Add-Member -NotePropertyName 'SpikeTest'        -NotePropertyValue 'an explicit Direction=up test over the EARLY segment values only, against the same scoring band — never inferred from "some series moved"'
                 $SegmentBehaviourObserved =
                     if ($spiked -and $lateNoData) { 'BOTH: the gap spiked while the stale series persisted AND the panel emptied afterwards — the predicted spike-then-empty transition was observed end to end.' }
                     elseif ($spiked)              { 'SPIKE ONLY: the gap rose out of its band while the stale series persisted, and the panel had not emptied by the end of the after window.' }
@@ -2095,8 +2176,9 @@ try {
                 PredictedDirection        = $dirToken
                 ObservedDirection         = $ObservedDirection
                 PredictionHeld            = $PredictionHeld
-                PanelStateMoveApplied     = ($null -ne $PanelStateMove -and $PanelStateMove.Moved)
+                PanelStateMoveApplied     = [bool]$PanelStateMoveApplied
                 PanelStateNoDataRun       = if ($null -ne $PanelStateMove) { [int]$PanelStateMove.ConsecutiveSamplesOutside } else { 0 }
+                PanelStateNoDataNote      = 'PanelStateNoDataRun is measured for EVERY panel regardless of its predicted direction, so a 0 here means "no consecutive NoData run was observed" and never "nobody checked". PanelStateMoveApplied says whether that run is what carried the movement.'
                 EarlyAfterSegment         = $EarlySegment
                 LateAfterSegment          = $LateSegment
                 SegmentBehaviourObserved  = $SegmentBehaviourObserved
