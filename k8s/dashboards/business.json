@@ -66,7 +66,7 @@
       "id": 1,
       "type": "timeseries",
       "title": "Orchestrator consumed vs sent (conservation)",
-      "description": "Overlaying consumed and sent on one axis is what makes the conservation relationship readable at a glance (BPD-02). Both targets are Class A (VER-01): they have live series on a healthy stack and must never carry an or vector(0) guard - lint rule C7 enforces that, because a guarded Class A signal renders 0 and lets a fully stalled pipeline pass the live proof.",
+      "description": "Messages the orchestrator took in versus messages it sent out. The two lines should move together - that is the conservation relationship, and it is the quickest way to see whether the orchestrator is keeping up. Note that sent counts every destination, not just processors, so it normally runs above consumed. Investigate when the lines diverge and stay diverged, or when consumed keeps rising while sent flattens: the orchestrator is taking in work it is not passing on. Both lines at zero simply means the pipeline is idle.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
@@ -97,7 +97,7 @@
       "id": 2,
       "type": "timeseries",
       "title": "Keeper consumed vs sent (conservation)",
-      "description": "GUARDED ON PURPOSE - both targets carry 'or vector(0)', and that is not decoration. keeper_messages_consumed / keeper_messages_sent increment ONLY inside RecoveryConsumerBase.Consume / CountSent, so they fire only during a recovery event: research F-4 measured zero live series and Pitfall 6 records that both names are absent from the entire 15-day Prometheus __name__ index. That places them in REQUIREMENTS.md VER-01 Class B ('any counter with no live series on a healthy stack'), so this is a properly guarded Class-B panel, not a Class-A panel with a hole in it. Lint rule C3 requires the guard on EVERY expression referencing these two counters anywhere in this file, and plan 87-05 STEP F classifies an expression Class A or Class B purely by the presence of this substring - its traffic drive (STEP E) is a happy-path FanOutSeeder run with no fault scenario, so an unguarded target here would be asserted as Class A and would fail the live proof. HOW TO READ A FLAT 0: 'no recovery traffic in this window'. It does NOT mean 'keeper down' - the keeper liveness signal is the Class-A 'Keeper L2 probe heartbeat' panel.",
+      "description": "Recovery messages the keeper took in versus sent back out. Expected: flat zero on a healthy stack, because these counters only move during an actual recovery event - an empty-looking panel here is good news, not a broken panel. Investigate when the two diverge during a recovery: messages entered the recovery path and did not come out. Both lines are deliberately guarded so this reads 0 rather than No data.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
@@ -128,7 +128,7 @@
       "id": 3,
       "type": "timeseries",
       "title": "Processor consumed vs sent by image (conservation)",
-      "description": "The VAR-04 correction in force (research F-6). Every source=\"processor\" series carries the unresolved_0.0.0 MLBL-03 sentinel on service_name, so service_name CANNOT discriminate processor images; identityName (carrying {db.Name}_{db.Version}) is the discriminator, and it exists only on these two business counters. No processor panel on this dashboard groups by service_name - lint rule C5 enforces the identityName grouping. Both targets are Class A (VER-01): they have live series on a healthy stack and must never carry an 'or vector(0)' guard, which lint rule C7 enforces.",
+      "description": "Work each processor image took in versus results it sent back, split by image identity. The lines should track closely. Investigate a sustained gap, meaning work is being consumed without producing results, or one image flatlining while others continue, which isolates the fault to that image. Split by image identity rather than service name because every processor pod reports the same placeholder service name and cannot be distinguished that way.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
@@ -158,8 +158,8 @@
     {
       "id": 4,
       "type": "stat",
-      "title": "Cross-tier conservation gap (orchestrator sent - processor consumed)",
-      "description": "This is the axis the 7-scenario resilience sweep scores on (MG-1 conservation), evaluated over the dashboard window rather than over a sweep run. A sustained positive value means the orchestrator dispatched work the processors never consumed. Class A (VER-01): both counters have live series on a healthy stack, so this expression carries NO 'or vector(0)' guard - lint rule C7 enforces that, because a guarded Class-A expression renders 0 and would let a fully stalled pipeline pass the live proof. Threshold: green base, red at 1 - the operand is an integer message count, so 'red above 0' is 'red at 1'.",
+      "title": "Orchestrator sends minus processor pickups (structural - read the trend)",
+      "description": "Every message the orchestrator sent, minus every message processors picked up. These are deliberately NOT equal and this number is NOT a loss count. The orchestrator sends to processors, to its own result-post queue, and to the keeper, so only about half its sends are bound for a processor - measured at a ratio of 1.8 to 1 on this stack. The difference therefore normally sits close to the processor pickup count itself and grows with traffic. Read the trend, not the value: investigate when it departs sharply from its recent level, which means the two tiers have stopped moving together. It cannot be made to read zero without a code change to label send destinations, so it is shown in a neutral colour rather than as a red alarm.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
       "fieldConfig": {
@@ -168,8 +168,7 @@
           "thresholds": {
             "mode": "absolute",
             "steps": [
-              { "color": "green", "value": null },
-              { "color": "red", "value": 1 }
+              { "color": "text", "value": null }
             ]
           }
         },
@@ -198,7 +197,7 @@
       "id": 5,
       "type": "timeseries",
       "title": "Per-processor dispatch gap",
-      "description": "The analyzer's historical bottleneck view expressed in the current counter names: dispatched-minus-consumed per processor identity. processorId is the DB identity GUID carried on both business counters - note it is a LABEL, not a metric, and it does not match the lint's processor_\\w+ family regex because that regex requires the underscore (pinned by the lint's -SelfTest fixture (e)). Class A (VER-01): unguarded by design, enforced by lint rule C7.",
+      "description": "Per processor identity, the rate the orchestrator sent work minus the rate that processor picked it up. Like the panel above it, this does not settle at zero - the orchestrator sends to destinations other than processors, so a positive offset is structural. What matters is that each identity holds a steady offset. Investigate one identity drifting away from the others, or a line that climbs and keeps climbing: that processor is falling behind the rate work is being dispatched to it.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
@@ -221,7 +220,7 @@
       "id": 6,
       "type": "stat",
       "title": "Orchestrator unresolved steps in range",
-      "description": "DEDICATED fault panel (BPD-02, lint rule C2): its targets reference orchestrator_step_unresolved_total and nothing else, so the indicator is never buried as one series inside a combined graph. GUARDED (VER-01 Class B, lint rule C3): an OTel counter is not exported to Prometheus until its first increment, and a healthy stack should have zero unresolved steps - research F-4 measured 0 live series. Without 'or vector(0)' this panel renders 'No data', which a reviewer reads as 'no faults' when it actually means 'the panel is broken' (threat T-87-16). With the guard it renders an honest 0. Threshold: green base, red at 1 - the value is an integer step count, so 'red above 0' is 'red at 1'.",
+      "description": "Workflow steps the orchestrator could not match to a destination and gave up on. Expected: 0, shown in green - which is deliberately different from No data. Investigate at 1 or more: each count is a step that entered the pipeline and never reached a processor, so work has been lost silently. Cross-check the orchestrator logs in the same window for a Dangling next-step id entry to identify which step.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "fieldConfig": {
@@ -260,7 +259,7 @@
       "id": 7,
       "type": "stat",
       "title": "Processor dropped spawns in range",
-      "description": "DEDICATED fault panel (BPD-02, lint rule C2): a single metric only. GUARDED (VER-01 Class B, lint rule C3): processor_spawn_dropped_total has 0 live series on a healthy stack (research F-4) - it IS present in the 15-day __name__ index, so it has fired historically, but a green stack should drop zero spawns. Without the guard the panel renders 'No data' and is misread as 'no drops' (threat T-87-16). Threshold: green base, red at 1 - the value is an integer drop count, so 'red above 0' is 'red at 1'.",
+      "description": "Follow-on work a processor tried to create and failed to hand off after exhausting its retries. Expected: 0, in green. Investigate at 1 or more: the parent step succeeded but its child work never entered the pipeline, so the workflow is quietly incomplete and nothing downstream will report it. Check the processor logs in the same window and the broker health, since exhausted retries usually mean the broker was unreachable.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
       "fieldConfig": {
@@ -299,7 +298,7 @@
       "id": 8,
       "type": "stat",
       "title": "Keeper consumed - sent gap in range",
-      "description": "DEDICATED keeper fault panel (BPD-02 as amended, lint rule C2 matches this stat - not the timeseries conservation overlay - because its targets reference exactly the two keeper message counters). WHAT IT IS NOT: this is deliberately titled for the gap it computes, not for a reinject / drop-outcome breakdown, because NO SUCH COUNTER EXISTS. Phase 74 removed the legacy label-less reinject-drop counter in favour of the uniform consumed/sent pair, leaving keeper_messages_consumed, keeper_messages_sent and keeper_l2_probe as the keeper's only three instruments (KeeperMetrics.cs:50-52, research F-5). Reinject outcome now lives solely in Elasticsearch as attributes.ReinjectOutcome, and ES panels are out of scope for this milestone. GUARDED (VER-01 Class B, lint rule C3): both counters increment only during a recovery event and are absent from the entire 15-day __name__ index (Pitfall 6), so the guard is what makes a healthy stack render 0 instead of 'No data'. Threshold: green base, red at 1 - the value is an integer message count.",
+      "description": "Recovery messages that entered the keeper and did not come back out during the selected window. Expected: 0, in green. Investigate at 1 or more: something entered the recovery path and was neither reinjected nor cleanly discarded, which is the one failure mode that can lose a message the pipeline had already accepted. On a healthy stack both underlying counters stay at zero, so this reads 0 for the ordinary reason that no recovery was needed.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
       "fieldConfig": {
@@ -338,7 +337,7 @@
       "id": 9,
       "type": "timeseries",
       "title": "Keeper L2 probe heartbeat",
-      "description": "The 'keeper is alive and probing' heartbeat that accompanies the gap panel above; a healthy keeper holds this above zero. UNGUARDED ON PURPOSE - this is a VER-01 Class A signal. Unlike the three guarded fault stats and unlike the guarded keeper conservation overlay (panel 2), keeper_l2_probe_total HAS live series on a healthy stack (research: 2 series live), which is exactly why it is the panel that distinguishes 'keeper idle' from 'keeper dead'. Adding 'or vector(0)' here would demote it to Class B in plan 87-05's mechanical classifier and let a DEAD keeper render 0 and pass the live proof (threat T-87-20), so lint rule C7 forbids the guard on this expression.",
+      "description": "The keeper liveness probe against its Redis projection - a genuine heartbeat, unlike the other keeper panels on this dashboard. Typical: a flat 0.4 probes/sec, and remarkably steady, measured between 0.4001 and 0.4005. Investigate any dip toward zero or a gap in the line: the keeper has stopped probing, meaning it is wedged or has lost Redis, and it will not be able to recover messages if asked to. This is the first panel to check when asking whether the keeper is alive.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
       "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
@@ -361,7 +360,7 @@
       "id": 10,
       "type": "timeseries",
       "title": "WebApi request rate by route",
-      "description": "BPD-03: the WebApi is represented on this dashboard by ASP.NET Core request metrics ONLY. It registers neither a domain meter nor the MassTransit meter, so adding domain counters here is explicitly out of scope - no panel in this row references any *_messages_*, *_step_unresolved_*, *_spawn_dropped_* or *_l2_probe_* counter. CAVEAT (BPD-03, research 'WebApi row'): the OTel collector DROPS every http.server.request.duration datapoint whose http.route starts with /health/ (k8s/02-configmaps.yaml:64-69), so on an idle stack only the orchestration endpoints appear and this row stays near-empty (2 series, _count = 2) until traffic is driven. Driving that traffic before asserting VER-01 is exactly what plan 87-05 does. NOTE ON THE LINT: http_route here is a LABEL name, not a metric name; the lint's Get-MetricTokens treats a family-prefixed token as a metric only when the next non-space character is '{', so it lands in the Bare set and is accepted by rule S15 as a KNOWN_LABEL. If rule S9 ever rejects it, the position scoping has regressed - re-run the lint with -SelfTest (fixtures (a)-(d) pin exactly these four expression shapes) and fix the script, never these panels.",
+      "description": "Incoming HTTP requests per second, split by route. Near zero is expected on this stack when nothing is driving traffic, because the pipeline runs on its own schedule rather than on HTTP. Investigate an unfamiliar route appearing, or a route rate jumping with no matching change on the pipeline panels. Health-check requests are dropped by the metrics collector and never appear here, so their absence is not a fault.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
       "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
@@ -384,7 +383,7 @@
       "id": 11,
       "type": "timeseries",
       "title": "WebApi p95 request duration by route",
-      "description": "p95 over the ASP.NET Core request-duration histogram, per route. The ASP.NET Core histogram is in SECONDS (unlike the MassTransit consume histogram, which is milliseconds), hence unit 's'. The 'le' bucket label must stay in the by (...) clause or histogram_quantile has nothing to interpolate over. Subject to the same /health/ route-drop caveat as the request-rate panel: near-empty until traffic is driven.",
+      "description": "The slowest 5 percent of requests per route: 95 of every 100 requests finished faster than this. Read it per route - one slow route is usually a code problem, whereas every route slowing together points at resource pressure, so check the runtime dashboard GC and thread-pool panels next. Empty when no traffic is flowing. This stack has no established latency baseline yet, so compare against what this panel showed yesterday rather than against an absolute target.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
       "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
@@ -407,7 +406,7 @@
       "id": 12,
       "type": "timeseries",
       "title": "WebApi status-code mix",
-      "description": "Request rate broken down by HTTP response status code. Reads alongside the 5xx ratio stat: this panel shows WHICH codes are being returned, the stat shows what fraction of them are server errors. Subject to the same /health/ route-drop caveat.",
+      "description": "HTTP responses per second grouped by status code. Healthy: 2xx only. Investigate any sustained 5xx, which is a server-side fault, and a rise in 4xx, which usually means a caller is sending something malformed rather than the server being broken. The 5xx ratio panel beside this one is the quicker read for severity.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 40 },
       "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
@@ -430,7 +429,7 @@
       "id": 13,
       "type": "stat",
       "title": "WebApi 5xx ratio",
-      "description": "GUARDED ON PURPOSE, AND THIS GUARD IS NOT A COPY-PASTE FROM THE FAULT STATS. On a healthy stack the 5xx numerator has no series at ALL, so an unguarded ratio returns zero samples; plan 87-05's classifier files an expression Class A in the ABSENCE of the 'or vector(0)' substring, so removing this guard would make the panel be asserted as Class A and fail the live proof (threat T-87-21). This is the ONE expression in the phase that is VER-01 Class B without being one of lint rule C3's four domain counters, which is precisely why it has its own dedicated rule - C8 - rather than an exception inside C3 or C7. Between C3, C7 and C8 no expression in this file sits in a third, lint-unenforced category. NOTE: the in-selector http_response_status_code=~\"5..\" is a LABEL filter, not a metric name; it is the lint's -SelfTest fixture (d), the collision case the rejected strip-clauses approach would have missed. Threshold: green base, red at 0.0001 - the value is a percentunit ratio, so 'red above 0' is a small positive epsilon (0.01% of requests), not 1.",
+      "description": "The share of requests failing with a server error, as a percentage. Expected: 0 percent. Investigate anything above 0 - on a stack carrying this little HTTP traffic, even a single failure is worth opening the logs for. Deliberately guarded so it reads 0 percent rather than No data when there are no errors at all, which is the normal case here.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 48 },
       "fieldConfig": {
@@ -469,7 +468,7 @@
       "id": 14,
       "type": "timeseries",
       "title": "WebApi in-flight requests and Kestrel connections",
-      "description": "Concurrency and connection pressure at the WebApi edge, per pod: in-flight ASP.NET Core requests overlaid with Kestrel's active and queued connection gauges. A rising queued-connection line with flat active connections is the saturation signal. These three are gauges, so they are read directly rather than through rate(). Unlike the request-duration family these are NOT affected by the /health/ route filter (the collector drops datapoints by http.route, and none of these three carries that attribute), so this panel stays populated on an idle stack.",
+      "description": "Requests currently being processed, and TCP connections currently open. Typical: 0 for both, since this WebApi is idle unless something is driving it. Investigate in-flight requests staying above zero while the request rate is flat - requests are arriving and not completing, so something is hanging. Connections outnumbering in-flight requests is normal, because clients hold connections open between calls.",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 48 },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },

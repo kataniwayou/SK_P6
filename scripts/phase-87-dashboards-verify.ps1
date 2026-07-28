@@ -29,17 +29,32 @@
         STEP C   datasource                   isDefault + readOnly + datasource health OK
         STEP D   provisioning                 both uids present, meta.provisioned, provisionedExternalId
         STEP E   drive traffic                seed ~FanOutSeeder -> resolve wfId -> POST /start (204) -> hold
-        STEP F   VER-01 panel sweep           replay every expr through the datasource proxy, two-class rule
+        STEP F   VER-01 panel sweep           replay every expr as a RANGE query through the proxy, two-class rule
         STEP G   dropdowns                    VAR-01 four classes, VAR-02 pod superset, VAR-03 chain filter
         STEP H   VER-02 pod delete            canonical spec byte-equality + no PVC + emptyDir
         STEP I   tamper assertion             POST /api/dashboards/db must be REJECTED
         STEP J   report + verdict             write the artifact, THEN resolve the exit code
         STEP Z   teardown                     stop ONLY this script's forward PID (outer finally)
 
+    RANGE QUERIES, NOT INSTANT ONES (Phase-87 amendment). STEP F issues `/api/v1/query_range` with the
+    step and `$__rate_interval` DERIVED FROM the datasource's provisioned `timeInterval`, because that
+    is what a panel actually issues. The original version used `/api/v1/query` with `$__rate_interval`
+    hardcoded to `5m`, and both choices masked a real defect: an instant query evaluates a single
+    timestamp, and a 5m window spans five 60s-spaced samples, so `rate()` resolved in the gate while
+    the browser's real 60s window returned NO series and three timeseries panels rendered "No data".
+    The sweep recorded 30/30 Class A passing against three empty panels. The lesson is general: a
+    proof that does not reproduce the caller's query shape proves only that the PromQL parses.
+    The instant result is still issued per expression, but ONLY as a recorded diagnostic —
+    `InstantOnlyPassExprs` names any expression that resolves instant and fails range, which is the
+    exact signature of that false PASS. The report also records QueryMode / QueryStepSeconds /
+    RateIntervalSeconds / DatasourceTimeInterval so the artifact states how it verified.
+
     THE TWO-CLASS RULE (REQUIREMENTS.md VER-01) — the heart of STEP F. Classification is PURELY
     MECHANICAL: an expression containing the substring `or vector(0)` is Class B and must return
-    EXACTLY ONE sample (a value of 0 PASSES — it means "this fault has not occurred in this window");
-    every other expression is Class A and must return AT LEAST ONE sample. There is deliberately NO
+    EXACTLY ONE non-empty series (a value of 0 PASSES — it means "this fault has not occurred in this
+    window"); every other expression is Class A and must return AT LEAST ONE non-empty series. A range
+    result can carry a series whose `values` array is empty — that is an empty panel, so it does not
+    count as a hit. There is deliberately NO
     hand-maintained exception list here. That only holds because the authoring side is symmetric:
     dashboard-lint rule C3 FORCES the guard onto every Class-B counter and rule C7 FORBIDS it on every
     Class-A counter, so k8s/dashboards/business.json cannot present an expression this classifier files
@@ -191,6 +206,35 @@ try {
                  -Body @{ query = $Query } -TimeoutSec 45 -ErrorAction Stop
     }
 
+    # RANGE query through the same proxy — this, not the instant form above, is what a panel
+    # actually issues. The distinction is not academic and it cost this phase a false PASS:
+    # an instant query evaluates ONE timestamp, so a `rate()` whose window is too narrow for
+    # the series' real sample spacing can still resolve, while the same expression stepped
+    # across a range returns NO series and the panel renders "No data". That is precisely
+    # what happened with timeInterval=15s against a 60s effective resolution (the collector
+    # emits explicit timestamps, so Prometheus stores one sample per SDK export, not per
+    # scrape) — 30/30 Class A passed here while three timeseries panels were empty in the
+    # browser. Class A/B is now decided on THIS call; the instant form is kept only as a
+    # recorded diagnostic so a future divergence between the two is visible in the artifact
+    # rather than silent.
+    function Invoke-ProxyRangeQuery([string]$Query, [int]$StartUnix, [int]$EndUnix, [int]$StepSeconds) {
+        return Invoke-RestMethod -Method Post -Uri "$proxy/api/v1/query_range" `
+                 -Headers $auth -ContentType 'application/x-www-form-urlencoded' `
+                 -Body @{ query = $Query; start = $StartUnix; end = $EndUnix; step = $StepSeconds } `
+                 -TimeoutSec 90 -ErrorAction Stop
+    }
+
+    # Count series carrying at least one non-null sample. A range result can legitimately
+    # contain a series whose `values` array is empty; that is an empty panel, not a hit.
+    function Get-NonEmptySeriesCount($RangeResult) {
+        $n = 0
+        foreach ($s in @($RangeResult.data.result)) {
+            $names = @(Get-PropertyNames $s)
+            if ($names -contains 'values' -and @($s.values).Count -gt 0) { $n++ }
+        }
+        return $n
+    }
+
     # Property names of a parsed-JSON object, safely. StrictMode Latest makes a bare access to an
     # absent property a terminating error, so every optional field must be membership-tested first —
     # but `$o.PSObject.Properties.Name` is itself unsafe: that is MEMBER ENUMERATION over a collection,
@@ -235,14 +279,46 @@ try {
     # Interpolate the dashboard variables the way Grafana would. `$source` renders as the explicit
     # alternation (allValue is deliberately null, so Grafana's getAllValue() expands "All" to the
     # option list — research F-8: an `allValue: ".*"` would also match series where the label is
-    # ABSENT). `$pod` renders as `.+`, which requires the label to be present. `$__rate_interval` and
-    # `$__range` are resolved to the concrete windows a default 1h dashboard range produces.
+    # ABSENT). `$pod` renders as `.+`, which requires the label to be present.
+    #
+    # `$__rate_interval` is NO LONGER hardcoded. It was '5m', which is wider than anything Grafana
+    # would ever choose and therefore hid the defect this step exists to catch: a five-minute window
+    # spans five 60s-spaced samples, so `rate()` resolved even while the browser's real 60s window
+    # resolved to nothing. The caller now passes the value derived from the datasource's provisioned
+    # timeInterval, so the assertion runs at the window a panel actually uses.
+    #
     # String .Replace() (ordinal, literal) — NOT -replace, whose regex would eat the `$` and the parens.
-    function Expand-DashboardExpr([string]$Expr) {
-        return $Expr.Replace('$__rate_interval', '5m').
-                     Replace('$__range', '1h').
+    function Expand-DashboardExpr {
+        param(
+            [Parameter(Mandatory)][string]$Expr,
+            [Parameter(Mandatory)][string]$RateInterval,   # e.g. '240s' — from the live datasource
+            [Parameter(Mandatory)][string]$Range           # e.g. '1h'   — the dashboard's default
+        )
+        return $Expr.Replace('$__rate_interval', $RateInterval).
+                     Replace('$__range', $Range).
                      Replace('$source', '(webapi|orchestrator|keeper|processor)').
                      Replace('$pod', '.+')
+    }
+
+    # Reproduce Grafana's own arithmetic rather than assuming a number.
+    #   $__interval      floors at the datasource's timeInterval (its "minimum interval")
+    #   $__rate_interval = max(4 x scrapeInterval, $__interval + scrapeInterval)
+    # With timeInterval 60s this yields 240s. Reading it from the live datasource means the gate
+    # tracks the manifest instead of drifting from it: change timeInterval in k8s/23-grafana.yaml
+    # and this follows automatically.
+    function Get-RateIntervalSeconds([int]$TimeIntervalSeconds, [int]$StepSeconds) {
+        return [Math]::Max(4 * $TimeIntervalSeconds, $StepSeconds + $TimeIntervalSeconds)
+    }
+
+    # Parse a Grafana duration string ('15s', '60s', '1m') to seconds. Returns 0 when absent so the
+    # caller can fail loudly rather than silently assume a default.
+    function ConvertFrom-GrafanaDuration([string]$Text) {
+        if ([string]::IsNullOrWhiteSpace($Text)) { return 0 }
+        if ($Text -match '^\s*(\d+)\s*([smh]?)\s*$') {
+            $n = [int]$Matches[1]
+            switch ($Matches[2]) { 'm' { return $n * 60 } 'h' { return $n * 3600 } default { return $n } }
+        }
+        return 0
     }
 
     # Recursive sorted re-serialise. ConvertFrom-Json does NOT preserve key order, so two independently
@@ -460,23 +536,65 @@ try {
     }
     Write-Phase "  collected $($allTargets.Count) target expression(s) across $($dashboardFiles.Count) dashboard(s)." 'Gray'
 
+    # ---- Derive the query window from the LIVE datasource + the dashboard's own default range ----
+    # Everything below is read, not assumed, so the gate cannot drift from the manifest.
+    $dsForStep = Invoke-RestMethod -Method Get -Uri "$gf/api/datasources/uid/skp-prometheus" `
+                    -Headers $auth -TimeoutSec 30 -ErrorAction Stop
+    $dsNames = @(Get-PropertyNames $dsForStep.jsonData)
+    $tiText  = if ($dsNames -contains 'timeInterval') { "$($dsForStep.jsonData.timeInterval)" } else { '' }
+    $tiSec   = ConvertFrom-GrafanaDuration $tiText
+    if ($tiSec -le 0) {
+        Write-Phase "STEP F: datasource jsonData.timeInterval is absent or unparseable ('$tiText') — cannot derive the panel query window." 'Red'
+        exit 64
+    }
+    # $__interval floors at the datasource minimum interval, so the step equals timeInterval.
+    $stepSec  = $tiSec
+    $rateSec  = Get-RateIntervalSeconds -TimeIntervalSeconds $tiSec -StepSeconds $stepSec
+    $rangeSec = 3600                                    # both dashboards ship time.from = now-1h
+    $endUnix   = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+    $startUnix = $endUnix - $rangeSec
+    $rateIntervalText = "$($rateSec)s"
+    Write-Phase "  window: range=${rangeSec}s step=${stepSec}s `$__rate_interval=$rateIntervalText (datasource timeInterval=$tiText)" 'Gray'
+
     $classACount   = 0
     $classBCount   = 0
     $emptyClassA   = @()
     $classBExprs   = @()
     $classBOffKey  = @()
+    $instantOnlyPasses = @()          # passed instant but failed range — the false-PASS signature
     foreach ($t in $allTargets) {
-        $interpolated = Expand-DashboardExpr $t.Expr
+        $interpolated = Expand-DashboardExpr -Expr $t.Expr -RateInterval $rateIntervalText -Range '1h'
         $sampleCount  = -1
         $queryError   = ''
+        $instantCount = -1
         try {
-            $r = Invoke-ProxyQuery $interpolated
-            # ALWAYS @()-wrap before reading .Count — a single-element PromQL result is not an array in
-            # PowerShell (the bug already guarded in scripts/phase-81-sweep.ps1).
-            $sampleCount = @($r.data.result).Count
+            # AUTHORITATIVE: the range query, i.e. what the panel issues.
+            $r = Invoke-ProxyRangeQuery -Query $interpolated -StartUnix $startUnix -EndUnix $endUnix -StepSeconds $stepSec
+            $sampleCount = Get-NonEmptySeriesCount $r
         } catch {
             $queryError = "$($_.Exception.Message)"
             $sampleCount = -1
+        }
+        # DIAGNOSTIC ONLY — never decides the verdict. This deliberately reproduces the SUPERSEDED
+        # method (instant query, $__rate_interval hardcoded to the wide 5m) and flags every
+        # expression the old gate would have called green while the panel renders empty. Comparing
+        # instant-vs-range at the SAME window is worthless — they agree, which is why the first cut
+        # of this diagnostic reported 0 against 16 genuine empties. The interesting comparison is
+        # OLD METHOD vs REALITY, and a non-empty array here is a standing reminder of what the old
+        # sweep could not see.
+        try {
+            $wide = Expand-DashboardExpr -Expr $t.Expr -RateInterval '5m' -Range '1h'
+            $ri = Invoke-ProxyQuery $wide
+            # ALWAYS @()-wrap before reading .Count — a single-element PromQL result is not an array in
+            # PowerShell (the bug already guarded in scripts/phase-81-sweep.ps1).
+            $instantCount = @($ri.data.result).Count
+        } catch { $instantCount = -1 }
+        if ($instantCount -ge 1 -and $sampleCount -lt 1) {
+            $instantOnlyPasses += [pscustomobject]@{
+                File = $t.File; Panel = $t.Panel; RefId = $t.RefId
+                OldMethodSeries = $instantCount; RangeSeries = $sampleCount
+            }
+            Write-Phase "  OLD-METHOD FALSE PASS [$($t.File) / $($t.Panel) / $($t.RefId)] instant@5m=$instantCount range@$rateIntervalText=$sampleCount — the retired sweep would have called this green" 'Red'
         }
 
         # THE ONLY TEST: substring presence. No panel-title list, no expression list, no exceptions.
@@ -721,11 +839,18 @@ try {
         ReproducedAfterPodDelete  = [bool]$ReproducedAfterPodDelete
     }
 
+    # PRECEDENCE: Fail BEATS Inconclusive. A claim that was evaluated and came back FALSE is
+    # positive evidence of a defect, and no amount of *other* unevaluated claims makes it less
+    # true. The original order tested unevaluable first, so any -Skip switch downgraded a genuine
+    # Fail to Inconclusive — caught by the timeInterval negative control, where 16 empty Class A
+    # expressions were reported under a verdict of Inconclusive purely because -SkipPodDelete had
+    # parked one unrelated claim. Inconclusive now means only "nothing failed, but something could
+    # not be checked".
     $verdict = 'Pass'
-    if ($unevaluable.Count -gt 0) {
-        $verdict = 'Inconclusive'
-    } elseif (@($claims.Values | Where-Object { -not $_ }).Count -gt 0) {
+    if (@($claims.Values | Where-Object { -not $_ }).Count -gt 0) {
         $verdict = 'Fail'
+    } elseif ($unevaluable.Count -gt 0) {
+        $verdict = 'Inconclusive'
     }
 
     $failedClaims = @($claims.Keys | Where-Object { -not $claims[$_] })
@@ -753,6 +878,18 @@ try {
         TargetExprCount           = $allTargets.Count
         ClassAExprCount           = $classACount
         ClassBExprCount           = $classBCount
+        # HOW the sweep was evaluated. Recorded because the previous version's silent choices —
+        # instant queries with $__rate_interval hardcoded to 5m — are exactly what let three empty
+        # panels pass. An artifact that does not state its query mode cannot be audited for this.
+        QueryMode                 = 'query_range'
+        QueryRangeSeconds         = $rangeSec
+        QueryStepSeconds          = $stepSec
+        RateIntervalSeconds       = $rateSec
+        DatasourceTimeInterval    = $tiText
+        # Expressions the RETIRED method (instant query at a hardcoded 5m) calls green while the
+        # panel's real range query returns nothing. A non-empty array is the exact false-PASS
+        # signature that let 30/30 Class A be reported against three empty panels.
+        OldMethodFalsePassExprs   = $instantOnlyPasses
         ObservedSources           = $observedSources
         LivePodCount              = $livePodCount
         DropdownPodCount          = $dropdownPodCount

@@ -2,8 +2,9 @@
 phase: 87
 slug: grafana-observability-dashboards
 date: 2026-07-27
+updated: 2026-07-28
 status: accepted
-requirements: [RTD-01, RTD-02, BPD-02, VAR-02, VAR-04, VER-01]
+requirements: [RTD-01, RTD-02, BPD-02, DASH-04, VAR-02, VAR-04, VER-01]
 findings: [F-1, F-2, F-3, F-4, F-5, F-6, F-7]
 evidence: analyzer-reports/phase-87-dashboards.json
 ---
@@ -419,6 +420,254 @@ is out of scope per REQUIREMENTS.md. The anonymous role is read-only and cannot 
 `allowUiUpdates: false` additionally rejects a provisioned-dashboard save outright — actively
 proven in the live run, which attempted the tamper and received `Cannot save provisioned
 dashboard`.
+
+---
+
+## 10. VAR-04 — `identityName` cannot be used on the two cross-service panels
+
+**Asked for:** every panel that aggregates the processor should group by `identityName`, so the
+legend names the image rather than an opaque id (the §8 rule, generalised).
+
+**What exists:** the two counters involved are emitted by *different services* and do not carry
+the same labels.
+
+| Counter | emitted by | `identityName` | `processorId` |
+|---|---|---|---|
+| `orchestrator_messages_sent_total` | orchestrator | **absent** | present |
+| `processor_messages_consumed_total` | processor | present | present |
+| `processor_messages_sent_total` | processor | present | present |
+
+`identityName` is composed by the processor from its **own** resolved identity
+(`ProcessorMetrics.IdentityNameOf` → `$"{name}_{version}"`). The orchestrator never resolves a
+processor's name or version, so it cannot emit that label. `processorId` is the orchestrator's
+**routing key** — `StepDispatcher` sends to `queue:{processorId:D}` — so it is the only label both
+sides carry.
+
+**What shipped, per panel:**
+
+| Panel | counters | grouped by | why |
+|---|---|---|---|
+| 3 `Processor consumed vs sent by image` | processor-only | `identityName` | the rule applies, and lint C5 enforces it |
+| 7 `Processor dropped spawns in range` | processor-only | none | single-value fault stat; no grouping needed |
+| 4 `Orchestrator sends minus processor pickups` | **mixed** | none | scalar total |
+| 5 `Per-processor dispatch gap` | **mixed** | `processorId` | `identityName` is absent on one side |
+
+**Measured evidence.** Panel 5's expression run both ways against the live stack:
+
+```
+sum by (processorId)   (rate(orchestrator_...)) - sum by (processorId)   (rate(processor_...))  ->  1 series, 0.6004
+sum by (identityName)  (rate(orchestrator_...)) - sum by (identityName)  (rate(processor_...))  ->  0 series
+```
+
+Substituting `identityName` does not degrade the panel, it **empties** it: the orchestrator side
+collapses to a single series carrying no `identityName`, PromQL's binary `-` finds no matching
+label set, and the result is silently nothing. That is the same silent-empty failure class as §11
+reached from a different direction, which is why it is recorded rather than left to be
+rediscovered as a defect.
+
+**Why it cannot be closed inside this milestone.** Either the orchestrator learns the processor's
+name+version and stamps `identityName` on its send counter — a `src/` change, and it would have to
+resolve an identity it deliberately does not hold — or Grafana maps `processorId` to a friendly
+name via a transformation, which would hard-code database ids into the dashboard JSON and break
+DASH-04 portability. Both are out of scope. The `processorId` grouping on panel 5 is therefore
+**correct as shipped**, not an oversight.
+
+**Related:** the three identifiers naming one processor, only one of which is meaningful —
+`source_hash` (`933d5e2a…`, what identity resolution actually keys on), `processors.id`
+(`c3242cd2-…`, a database primary key doubling as the queue name), and the `Guid.NewGuid():N`
+embedded in the seeded name (`sample-proc-ea1076…`, decorative — minted by
+`tests/BaseApi.Tests/Orchestrator/*E2ETests.cs`). A fresh reseed changes all three; only
+`source_hash` is derived from anything real.
+
+---
+
+## 11. VER-01 — `timeInterval` must track the EXPORT cadence, not the scrape interval
+
+**Defect, found live and fixed in this phase.** Every `rate()` timeseries panel rendered "No data"
+in a browser while the live proof reported 30/30 Class A passing.
+
+**Root cause.** The collector's prometheus exporter emits **explicit millisecond timestamps** on
+every sample:
+
+```
+orchestrator_messages_consumed_total{...} 10679 1785224418509
+                                                ^^^^^^^^^^^^^ explicit timestamp
+```
+
+Prometheus honours an explicit timestamp and discards a re-scrape bearing one it has already
+stored. The stored resolution is therefore the .NET SDK's `PeriodicExportingMetricReader`
+interval — **60s** — not `prometheus.yml`'s `scrape_interval: 15s`. Measured:
+`count_over_time(<any series>[2m]) == 2`, and value-change gaps of 60, 60, 60, 60, 60 … s.
+
+The datasource was provisioned `timeInterval: "15s"` mirroring the scrape interval, so Grafana
+computed `$__rate_interval = max(4 × 15s, step + 15s) = 60s`. `rate()` needs two samples inside its
+window; with samples exactly 60s apart most 60s windows contain one, so the result is no series.
+
+**Measured, through the Grafana proxy:**
+
+| query | result |
+|---|---|
+| `rate(…[60s])` range | **0 series** |
+| `rate(…[5m])` range | 241 points, all non-zero |
+
+**Fix:** `k8s/23-grafana.yaml` → `timeInterval: "60s"`, flooring `$__rate_interval` at 240s.
+Requires a **Grafana pod restart** — datasource provisioning is boot-time only, unlike dashboards,
+which the provider re-reads every 30s.
+
+**Blast radius when reintroduced as a negative control: 16 of 30 Class A expressions empty** —
+wider than the three conservation panels found by eye. Seven runtime panels (GC collections,
+allocation rate, GC time, thread-pool completion, exceptions, lock contention, JIT) were also
+silently empty.
+
+**Standing hazard.** If the SDK export cadence ever changes, `timeInterval` must follow it. The
+scrape interval is *not* the number to track, and the manifest comment now says so.
+
+---
+
+## 12. VER-01 — the live proof was verifying a query shape no panel issues
+
+**Defect in the verification, not the dashboards.** `scripts/phase-87-dashboards-verify.ps1`
+recorded `Verdict=Pass`, 30/30 Class A, against three panels rendering "No data". Two independent
+choices caused it:
+
+1. **Instant queries** (`/api/v1/query`) — evaluates one timestamp, never steps across a range.
+2. **`$__rate_interval` hardcoded to `5m`** — wider than anything Grafana would choose, spanning
+   five 60s-spaced samples where the real 60s window spanned one.
+
+Either alone would have masked §11. The general lesson: *a proof that does not reproduce the
+caller's query shape proves only that the PromQL parses.*
+
+**Fix.** STEP F now issues `/api/v1/query_range` with step and `$__rate_interval` **derived from
+the live datasource's `timeInterval`**, so the gate tracks the manifest instead of drifting from
+it. Class A/B counts *non-empty* series — a range result can carry a series whose `values` array is
+empty, which is an empty panel, not a hit. The report records `QueryMode`, `QueryStepSeconds`,
+`RateIntervalSeconds` and `DatasourceTimeInterval`, because an artifact that does not state its
+query mode cannot be audited for this class of bug.
+
+The retired method is still executed per expression as a **diagnostic only** and never decides the
+verdict: `OldMethodFalsePassExprs` names every expression the old sweep would have called green
+while the panel renders empty.
+
+**Proven with a negative control** — the live ConfigMap patched back to `15s`, repo file untouched:
+
+| | timeInterval 15s | timeInterval 60s |
+|---|---|---|
+| Verdict | **Fail** | **Pass** |
+| Empty Class A | **16 of 30** | 0 of 30 |
+| `OldMethodFalsePassExprs` | **16** | 0 |
+
+**A second, pre-existing bug the control exposed.** Verdict precedence tested `Inconclusive` before
+`Fail`, so 16 false claims were reported as *Inconclusive* purely because `-SkipPodDelete` had
+parked one unrelated claim. Any `-Skip` switch could downgrade a genuine failure. Fixed — a claim
+evaluated as false is positive evidence of a defect, and no quantity of *other* unevaluated claims
+makes it less true. `Inconclusive` now means only "nothing failed, but something could not be
+checked".
+
+---
+
+## 13. BPD-02 — panel 4 measured a difference that can never be zero
+
+**Defect, fixed in this phase.** `Cross-tier conservation gap (orchestrator sent - processor
+consumed)` carried a `green@null, red@1` threshold, i.e. red at any value above zero. It was
+therefore **permanently red**, and red carried no signal.
+
+**Why the difference is structural.** `orchestrator_messages_sent_total` increments at four sites
+and only one targets a processor:
+
+| site | destination | a processor? |
+|---|---|---|
+| `StepDispatcher.cs:51` | `queue:{processorId:D}` | **yes** |
+| `OrchestratorPrePipeline.cs:161` | `orchestrator-result-post` | no — its own queue |
+| `OrchestratorPrePipeline.cs:213` | `keeper-recovery` | no |
+| `RelocateTail.cs:105` | `keeper-recovery` | no |
+
+`orchestrator_messages_consumed_total` increments at exactly **one** site
+(`TypedResultConsumer.cs:56`). In the steady-state loop each consumed result triggers **two** sends
+— the fan-out handoff to `result-post`, then the dispatch to the processor queue — so the baseline
+is 2:1.
+
+**Confirmed three independent ways:** reading the four call sites; 6h counter totals (2262 / 1279 =
+1.77); and live rates on the panel itself (sent 1.32 / consumed 0.709 = **1.86**). It lands under
+2.0 because terminal step G consumes a result and sends nothing, and convergent fan-in dispatches G
+once for two inbound edges.
+
+**Fix:** retitled to `Orchestrator sends minus processor pickups (structural - read the trend)`,
+threshold reduced to a single neutral base step so it stops crying wolf, and the tooltip states the
+expected ratio and that the panel cannot read zero without a `src/` change to label send
+destinations.
+
+**The conservation invariant that DOES hold exactly:** `processor sent (1268.7) == orchestrator
+consumed (1269.7)` over 30 minutes. Every result a processor emits is consumed by the orchestrator.
+Neither panel's *within-service* ratio is supposed to be 1.0 — this cross-boundary identity is the
+one to watch.
+
+**Unresolved sub-finding.** `processor consumed − sent = 60 messages / 30 min = 0.0333/s`, exactly
+the `*/30 * * * * *` cron rate — one message per fire is consumed without producing a result. The
+best-fitting explanation is convergent step G (in-degree 2: two dispatches consumed, one execution
+gated), but it **could not be confirmed** — the counters carry `workflowId`/`processorId`/
+`identityName` but no step id, so metrics cannot split by step. Recorded as a hypothesis, not a
+fact.
+
+---
+
+## 14. Operator-facing tooltips, and the sample window behind their numbers
+
+All 31 non-row panels now carry a `description` written for an operator rather than a requirement
+reader: *what it shows → what healthy looks like → when to investigate → a caveat only where the
+panel is not measuring the obvious thing*. Thirteen runtime panels previously had **no description
+at all** and rendered no ⓘ icon; the four RTD-02 substitution panels were the only ones the earlier
+plans required.
+
+**New lint rule S16** requires a non-empty `description` on every non-row panel (rows are layout
+dividers with no tooltip), generalising the RTD-02 duty so bare panels cannot return. Negative
+control: deleting one description gives exit 1 naming that panel; restoring it returns exit 0.
+
+**Caveat on the numbers.** The "typical on this stack" figures were measured live, excluding
+series with no `source` label (the stale-image emissions the dashboards' own selectors exclude
+anyway). But **retention at the time of measurement was ~12 h, not the 7 d window queried** —
+oldest sample `2026-07-27T18:59Z`. They are honest observations from a half-day sample on a dev
+cluster, **not long-run baselines**, and are worded "typical on this stack" rather than as
+thresholds. Anyone tuning alerts off them should re-measure first.
+
+**Render-verified, not just served.** Grafana's API serving 31 descriptions and 31 tooltips
+actually rendering are different claims. A Playwright pass hovered every ⓘ on both dashboards:
+description text absent pre-hover, present post-hover, full string matched — **31/31**. Negative
+control with the hover suppressed: **0/31**, which is what makes the first number mean anything.
+
+---
+
+## 15. DASH-04 — portability verified against Grafana 11.1.0
+
+The org's Grafana is **11.1.0**; this stack pins 12.3.9. Both dashboard files were provisioned
+unmodified into a real `grafana/grafana:11.1.0` container (the live ConfigMap payloads, datasource
+repointed at the host port-forward — otherwise byte-identical).
+
+| check | result |
+|---|---|
+| provisioning errors in log | none |
+| `schemaVersion` as served | **39, unmigrated** |
+| panels / targets | 17+14, 17+19 — intact |
+| template variables, `allValue` | `datasource, source, pod`; still `null` |
+| datasource refs | `${datasource}` only |
+| tooltips rendering | 31/31 |
+| expression replay through 11.1.0's proxy | 36/36, same 30 A / 6 B split |
+| tamper POST | HTTP 400 `Cannot save provisioned dashboard` |
+
+`schemaVersion` returning **39 unmigrated** is the load-bearing result: Grafana migrates schema
+upward only, so an unrewritten 39 means it is native to 11.1.0 and nothing is being silently
+converted. Verified across 11.1.0, 12.3.9 and (in research) 13.1.1.
+
+**The real dependency is the data, not the platform** — a Prometheus scraping these services.
+Point the files at one that does not and every panel renders blank, correctly.
+
+**The way this breaks is editing, not loading.** Saving through a Grafana 12.x editor returns
+`schemaVersion` 41, which will not load safely on 11.1.0. `allowUiUpdates: false` blocks that in
+this cluster and lint S2 catches it if it reaches the repo, but a manual round-trip through a 12.x
+instance would.
+
+**Not tested:** the org's actual instance — auth, RBAC, folder permissions and plugin policy are
+out of scope. Two `level=error` lines in the 11.1.0 log are Grafana's own `xychart` plugin
+double-registering, unrelated to these dashboards.
 
 ---
 

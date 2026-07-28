@@ -42,6 +42,7 @@
           S13 BPD-03 — the webapi is never pinned with a literal source="webapi"
           S14 T-87-08 — `kubectl kustomize k8s/` exits 0 (offline; the JSON-layer twin of T-80-14)
           S15 T-87-14 — every BARE token is a KNOWN_LABEL (closes S9's position-scoping escape hatch)
+          S16 T-87-15 — every non-row panel carries a non-empty operator-facing `description`
 
         COVERAGE (skipped by -ShapeOnly; scoped by -Dashboard)
           C1  BPD-01 — all nine DOMAIN counters referenced
@@ -58,7 +59,7 @@
     being a domain counter. That is why 87-05's live classifier needs no hand-maintained exception
     list: no expression in `business.json` sits in a third, lint-unenforced category.
 
-    Rule numbering is APPEND-ONLY. S15, C7 and C8 are appended after S14 / C6 rather than inserted
+    Rule numbering is APPEND-ONLY. S15, S16, C7 and C8 are appended after S14 / C6 rather than inserted
     beside their logical siblings, because plans 87-02/87-03/87-04/87-05 already cite these ids by
     number.
 
@@ -632,6 +633,24 @@ foreach ($d in $docs) {
     }
     if ($d.Raw | Select-String -SimpleMatch '"type": "graph"' -Quiet) {
         Add-Failure -Rule 'S6' -File $d.Rel -Remediation 'the Angular "graph" panel was removed in Grafana 11 — use "timeseries"'
+    }
+
+    # --- S16 T-87-15: every non-row panel carries a non-empty `description`.
+    # The description IS the operator-facing surface — it renders as the panel's info
+    # tooltip and is the only place a reader learns what "normal" looks like and when to
+    # act. RTD-02 already required one on the four substitution panels so a proxy metric
+    # could never be mistaken for the real measurement; this rule generalises that duty to
+    # every panel, because a bare panel silently pushes the same interpretation burden onto
+    # the reader. Rows are exempt: a row is a layout divider with no data and no tooltip.
+    # Numbering note: appended after S14/S15 per the append-only convention (plans
+    # 87-02/03/04/05 already cite the earlier rule ids by number).
+    Add-Rule 'S16'
+    foreach ($p in @($d.Panels)) {
+        if ([string](Get-Prop $p 'type' '') -eq 'row') { continue }
+        if ([string]::IsNullOrWhiteSpace([string](Get-Prop $p 'description' ''))) {
+            Add-Failure -Rule 'S16' -File $d.Rel -Panel ([string](Get-Prop $p 'title' '(untitled)')) `
+                -Remediation 'add a description: what the panel shows, what healthy looks like, and when to investigate (RTD-02 generalised — the tooltip is the operator''s only in-context guidance)'
+        }
     }
 
     # --- S7..S10, S15: per-target expression rules.
