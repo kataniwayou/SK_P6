@@ -1263,12 +1263,69 @@ try {
         # discrimination signal — when an `or vector(0)` guard stops firing, the label-less series is
         # replaced by a labelled one — so it is recorded for every timeseries panel even when the
         # numeric assertion already passed.
+        # THE UNION OF EVERY NAME THE PANEL RENDERED IN ANY SUB-WINDOW, not the by-index name.
+        #
+        # MEASURED IN ZERO-02 RUN 2. `$Reading.Entries` is built by ROW INDEX, and its Name comes from
+        # the FIRST sub-window in which that index existed. A legend that GAINS rows mid-capture — which
+        # is precisely the guarded-panel transition ZERO-02 exists to assert — therefore reports stale
+        # names for every row after the insertion point. Panel 2 rendered, verbatim:
+        #     windows 1-2:  consumed 0 ops/s | sent 0 ops/s
+        #     windows 3-6:  consumed 0 | consumed keeper 0.00944 | sent 0 | sent keeper 0.00944
+        # and the by-index collector returned `consumed, sent, sent, sent keeper` — silently dropping
+        # `consumed keeper`, the exact name the scenario's second signal is about. Walking the readings
+        # directly makes LegendNamesAfter a record of what was RENDERED rather than of how rows were
+        # indexed. Names are returned in first-seen order and de-duplicated.
         function Get-Phase88LegendNames {
             [CmdletBinding()]
-            param([Parameter(Mandatory)]$Reading)
+            param([Parameter(Mandatory)]$Reading, $Capture = $null, [string]$PanelId = '')
             $names = @()
-            foreach ($e in @($Reading.Entries)) { $names += "$($e.Name)" }
+            if ($null -ne $Capture -and -not [string]::IsNullOrWhiteSpace($PanelId)) {
+                $batch = if ($PanelId -eq '4') { $Capture.Panel4Batch } else { $Capture.Batch }
+                if ($null -ne $batch) {
+                    foreach ($r in @($batch.Readings)) {
+                        $rn = @(Get-PropertyNames $r)
+                        if ($rn -notcontains 'panelId' -or "$($r.panelId)" -ne $PanelId) { continue }
+                        if ($rn -notcontains 'series') { continue }
+                        foreach ($s in @($r.series)) {
+                            $sn = @(Get-PropertyNames $s)
+                            if ($sn -notcontains 'name') { continue }
+                            $nm = "$($s.name)"
+                            if ($names -notcontains $nm) { $names += $nm }
+                        }
+                    }
+                }
+            }
+            if (@($names).Count -gt 0) { return [string[]]$names }
+            foreach ($e in @($Reading.Entries)) { if ($names -notcontains "$($e.Name)") { $names += "$($e.Name)" } }
             return [string[]]$names
+        }
+
+        # The legend rows rendered in EACH sub-window, in order, so the transition is auditable window
+        # by window rather than as a merged set the reader must take on trust. The plan asks for exactly
+        # this: "record both arrays verbatim ... so a reader can see the transition".
+        function Get-Phase88LegendNamesPerWindow {
+            [CmdletBinding()]
+            param([Parameter(Mandatory)]$Capture, [Parameter(Mandatory)][string]$PanelId)
+            $out = @()
+            $batch = if ($PanelId -eq '4') { $Capture.Panel4Batch } else { $Capture.Batch }
+            if ($null -eq $batch) { return @($out) }
+            foreach ($r in @($batch.Readings)) {
+                $rn = @(Get-PropertyNames $r)
+                if ($rn -notcontains 'panelId' -or "$($r.panelId)" -ne $PanelId) { continue }
+                $rowNames = @()
+                if ($rn -contains 'series') {
+                    foreach ($s in @($r.series)) {
+                        $sn = @(Get-PropertyNames $s)
+                        $rowNames += $(if ($sn -contains 'name') { "$($s.name)" } else { '' })
+                    }
+                }
+                $out += [pscustomobject]@{
+                    FromUtc     = $(if ($rn -contains 'fromUtc') { "$($r.fromUtc)" } else { '' })
+                    ToUtc       = $(if ($rn -contains 'toUtc') { "$($r.toUtc)" } else { '' })
+                    LegendNames = [string[]]@($rowNames)
+                }
+            }
+            return @($out)
         }
 
         # Band lookup: BY NAME FIRST, falling back to the row index. 88-04 measured that a new series
@@ -2560,8 +2617,11 @@ try {
                 Moved                     = [bool]$panelMoved
                 ConsecutiveSamplesOutside = if ($null -ne $scored) { [int]$scored.ConsecutiveSamplesOutside } else { 0 }
                 PanelStateAfter           = $stateAfter
-                LegendNamesBaseline       = if ($null -ne $rdBase) { [string[]]@(Get-Phase88LegendNames -Reading $rdBase) } else { [string[]]@() }
-                LegendNamesAfter          = [string[]]@(Get-Phase88LegendNames -Reading $rdAfter)
+                LegendNamesBaseline       = if ($null -ne $rdBase) { [string[]]@(Get-Phase88LegendNames -Reading $rdBase -Capture $preArmCap -PanelId $p) } else { [string[]]@() }
+                LegendNamesAfter          = [string[]]@(Get-Phase88LegendNames -Reading $rdAfter -Capture $afterCap -PanelId $p)
+                LegendNamesBaselinePerWindow = @(Get-Phase88LegendNamesPerWindow -Capture $preArmCap -PanelId $p)
+                LegendNamesAfterPerWindow    = @(Get-Phase88LegendNamesPerWindow -Capture $afterCap -PanelId $p)
+                LegendNamesNote           = 'LegendNames* are the UNION of every row the panel RENDERED in any sub-window, collected from the readings themselves rather than by row index. A legend that GAINS rows mid-capture — the guarded-panel transition itself — shifts every later index, and an index-keyed collector then reports a stale name for exactly the row that matters. The *PerWindow arrays carry the rows window by window so the transition is auditable rather than merged.'
                 SeriesResults             = @($seriesResults)
                 SeriesMovedRule           = 'a multi-series panel MOVED when at least one series moved in the predicted direction for >= 2 consecutive samples; every series'' own outcome is in SeriesResults[] so the selection is auditable'
             }

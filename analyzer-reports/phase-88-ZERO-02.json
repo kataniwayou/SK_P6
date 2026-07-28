@@ -1,0 +1,1614 @@
+{
+  "ScenarioId": "ZERO-02",
+  "Verdict": "Pass",
+  "Status": "Locked",
+  "Lever": "seam",
+  "TargetTier": "",
+  "TriggerKind": "workload drive with the seam armed, in bounded arm/claim/roll cycles",
+  "DwellSeconds": 90,
+  "Moved": true,
+  "CrossTalkHeld": true,
+  "BaselineRecaptured": true,
+  "BaselineRecaptureNote": "",
+  "SeamActiveDuringRebaseline": true,
+  "SeamActiveDuringRebaselineResolution": "RESOLVED IN 88-07 — a seam-active re-baseline IS a valid comparison basis on this stack, and the run proves it rather than arguing it. Both Phase-88 seams are CAPABILITIES that a separate act must trigger: PROCESSOR_DEFEAT_READ short-circuits (no Redis call, no claim, no fault) until the out-of-band slot skp:test:defeat-read-arm exists to be claimed, and that slot is armed at TRIGGER time only; KEEPER_DEFEAT_REINJECT can only fire inside ReinjectConsumer.HandleAsync, which cannot run until the processor seam has already fired. The re-baseline is therefore taken AFTER the rollout the arm caused — which is the real DISC-06 discontinuity — and BEFORE the fault. RebaselineInertnessProven records the per-run PROOF: every Regime-B subject panel's re-baseline band must still be exactly 0..0 with the seam armed. A contaminated re-baseline would show a non-zero guarded band and the scenario would be comparing fault against fault. The pre-arm capture is NOT used as the scoring band, because it predates the rollout and its series would be compared across a pod-identity change.",
+  "RebaselineInertnessProven": true,
+  "RebaselineInertnessChecks": [
+    "panel 2 series 'consumed': re-baseline band 0..0 with the seam ARMED — the capability was inert until the trigger",
+    "panel 2 series 'sent': re-baseline band 0..0 with the seam ARMED — the capability was inert until the trigger"
+  ],
+  "SeamValuesArmed": [
+    "processor-sample/PROCESSOR_DEFEAT_READ=Step_C"
+  ],
+  "ReinjectArmKey": "skp:test:defeat-read-arm",
+  "ReinjectArmPasses": 6,
+  "ReinjectArmClaimObserved": true,
+  "ReinjectArmCleared": true,
+  "ReinjectArmStillSet": false,
+  "ActivationPostsRebaseline": 6,
+  "ActivationPostsAfter": 3,
+  "ActivationCadenceNote": "the seam drive's own POST /api/v1/orchestration/start is issued on the SAME 120s cadence during the re-baseline hold and during the after window, so panels 10 and 12 are scored against a band that already contains the driver's HTTP footprint. ZERO-02 run 1 did not do this and correctly recorded the driver's single activation as cross-talk DRIFT (max excursion 0.0056 on panel 10's .../Orchestration/start series and panel 12's 204 series) — a false statement about the fault's blast radius, because the perturbation was the driver's own request.",
+  "DriveRolledPods": [
+    "processor-sample-6d48c49799-r8w8z",
+    "processor-sample-6d48c49799-2jc4s"
+  ],
+  "DriveRollNote": "Each processor replica assigns its _reinjectTriggerTarget static exactly once per PROCESS, so once every replica has claimed a victim, re-arming the Redis slot mints no further faults however many times it is set. ONE replica is therefore rolled between drive cycles — never the whole tier, so the pipeline is never out — which is what spreads the keeper events across more than one 60 s export interval. That spread is not a nicety: a burst confined to a single export interval is INVISIBLE to rate() (see ReinjectArmNote and the run-1 discard).",
+  "ReinjectArmNote": "MEASURED IN 88-07 and load-bearing for every seam row: `kubectl set env PROCESSOR_DEFEAT_READ=<label>` is NOT the fault. src/BaseProcessor.Core/Processing/ProcessorPipeline.cs:105-128 requires BOTH the hop payload to contain the label AND the Redis slot named above to exist, so the hop's KeyDelete can atomically CLAIM it (true for exactly ONE caller across replicas). ReinjectArmClaimObserved true means the slot was consumed by a hop — the fault fired. A run that armed the env var and never armed the slot would have driven NOTHING while looking fully armed, and would then have scored the resulting flat panel as evidence about the deployed image.",
+  "StackRestored": true,
+  "BandSource": "re-captured after the arm rollout (2026-07-28T22:38:54.4300000Z -> 2026-07-28T22:48:54.4300000Z)",
+  "PanelResults": [
+    {
+      "PanelId": 2,
+      "PanelTitle": "Keeper consumed vs sent (conservation)",
+      "Regime": "B",
+      "SeriesName": "sent",
+      "ScoredSeriesIndex": 1,
+      "PredictedDirection": "nonzero",
+      "ObservedDirection": "nonzero",
+      "PredictionHeld": true,
+      "PanelStateMoveApplied": false,
+      "PanelStateNoDataRun": 0,
+      "PanelStateNoDataNote": "PanelStateNoDataRun is measured for EVERY panel regardless of its predicted direction, so a 0 here means \"no consecutive NoData run was observed\" and never \"nobody checked\". PanelStateMoveApplied says whether that run is what carried the movement.",
+      "EarlyAfterSegment": null,
+      "LateAfterSegment": null,
+      "SegmentBehaviourObserved": "",
+      "BandLow": 0.0,
+      "BandHigh": 0.0,
+      "BandSource": "re-captured after the arm rollout (2026-07-28T22:38:54.4300000Z -> 2026-07-28T22:48:54.4300000Z)",
+      "SubWindowSeconds": 60,
+      "BaselineValues": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "BaselineStates": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ],
+      "AfterValues": [
+        0.0,
+        0.0,
+        0.00944,
+        0.00812,
+        0.00958,
+        0.00895
+      ],
+      "AfterStates": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ],
+      "Moved": true,
+      "ConsecutiveSamplesOutside": 4,
+      "PanelStateAfter": "Rendered",
+      "LegendNamesBaseline": [
+        "consumed",
+        "sent"
+      ],
+      "LegendNamesAfter": [
+        "consumed",
+        "sent",
+        "consumed keeper",
+        "sent keeper"
+      ],
+      "SeriesResults": [
+        {
+          "SeriesIndex": 0,
+          "SeriesName": "consumed",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "BandSubWindowSeconds": 60,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Moved": false,
+          "MovedDirection": "",
+          "ConsecutiveSamplesOutside": 0,
+          "Falsifiable": true,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 1,
+          "SeriesName": "sent",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "BandSubWindowSeconds": 60,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.00944,
+            0.00812,
+            0.00958,
+            0.00895
+          ],
+          "Moved": true,
+          "MovedDirection": "nonzero",
+          "ConsecutiveSamplesOutside": 4,
+          "Falsifiable": true,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 2,
+          "SeriesName": "sent",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "BandSubWindowSeconds": 60,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "Moved": false,
+          "MovedDirection": "",
+          "ConsecutiveSamplesOutside": 0,
+          "Falsifiable": true,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 3,
+          "SeriesName": "sent keeper",
+          "BandLow": null,
+          "BandHigh": null,
+          "BandSampleCount": 0,
+          "AfterValues": [
+            0.00944,
+            0.00812,
+            0.00958,
+            0.00895
+          ],
+          "Moved": false,
+          "ConsecutiveSamplesOutside": 0,
+          "Falsifiable": false,
+          "Note": "no baseline band: this series did not exist in the scoring baseline"
+        }
+      ],
+      "SeriesMovedRule": "a multi-series panel MOVED when at least one series moved in the predicted direction for >= 2 consecutive samples; every series' own outcome is in SeriesResults[] so the selection is auditable",
+      "LegendNamesBaselinePerWindow": [
+        {
+          "FromUtc": "",
+          "ToUtc": "",
+          "LegendNames": [
+            "consumed",
+            "sent"
+          ],
+          "RawText": "Name\tMean\tMax /  / consumed / \t0 ops/s\t0 ops/s /  / sent / \t0 ops/s\t0 ops/s"
+        },
+        {
+          "FromUtc": "",
+          "ToUtc": "",
+          "LegendNames": [
+            "consumed",
+            "sent"
+          ],
+          "RawText": "Name\tMean\tMax /  / consumed / \t0 ops/s\t0 ops/s /  / sent / \t0 ops/s\t0 ops/s"
+        },
+        {
+          "FromUtc": "",
+          "ToUtc": "",
+          "LegendNames": [
+            "consumed",
+            "sent"
+          ],
+          "RawText": "Name\tMean\tMax /  / consumed / \t0 ops/s\t0 ops/s /  / sent / \t0 ops/s\t0 ops/s"
+        },
+        {
+          "FromUtc": "",
+          "ToUtc": "",
+          "LegendNames": [
+            "consumed",
+            "sent"
+          ],
+          "RawText": "Name\tMean\tMax /  / consumed / \t0 ops/s\t0 ops/s /  / sent / \t0 ops/s\t0 ops/s"
+        },
+        {
+          "FromUtc": "",
+          "ToUtc": "",
+          "LegendNames": [
+            "consumed",
+            "sent"
+          ],
+          "RawText": "Name\tMean\tMax /  / consumed / \t0 ops/s\t0 ops/s /  / sent / \t0 ops/s\t0 ops/s"
+        },
+        {
+          "FromUtc": "",
+          "ToUtc": "",
+          "LegendNames": [
+            "consumed",
+            "sent"
+          ],
+          "RawText": "Name\tMean\tMax /  / consumed / \t0 ops/s\t0 ops/s /  / sent / \t0 ops/s\t0 ops/s"
+        }
+      ],
+      "LegendNamesAfterPerWindow": [
+        {
+          "FromUtc": "",
+          "ToUtc": "",
+          "LegendNames": [
+            "consumed",
+            "sent"
+          ],
+          "RawText": "Name\tMean\tMax /  / consumed / \t0 ops/s\t0 ops/s /  / sent / \t0 ops/s\t0 ops/s"
+        },
+        {
+          "FromUtc": "",
+          "ToUtc": "",
+          "LegendNames": [
+            "consumed",
+            "sent"
+          ],
+          "RawText": "Name\tMean\tMax /  / consumed / \t0 ops/s\t0 ops/s /  / sent / \t0 ops/s\t0 ops/s"
+        },
+        {
+          "FromUtc": "",
+          "ToUtc": "",
+          "LegendNames": [
+            "consumed",
+            "consumed keeper",
+            "sent",
+            "sent keeper"
+          ],
+          "RawText": "Name\tMean\tMax /  / consumed / \t0 ops/s\t0 ops/s /  / consumed keeper / \t0.00944 ops/s\t0.00944 ops/s /  / sent / \t0 ops/s\t0 ops/s /  / sent keeper / \t0.00944 ops/s\t0.00944 ops/s"
+        },
+        {
+          "FromUtc": "",
+          "ToUtc": "",
+          "LegendNames": [
+            "consumed",
+            "consumed keeper",
+            "sent",
+            "sent keeper"
+          ],
+          "RawText": "Name\tMean\tMax /  / consumed / \t0 ops/s\t0 ops/s /  / consumed keeper / \t0.00812 ops/s\t0.00944 ops/s /  / sent / \t0 ops/s\t0 ops/s /  / sent keeper / \t0.00812 ops/s\t0.00944 ops/s"
+        },
+        {
+          "FromUtc": "",
+          "ToUtc": "",
+          "LegendNames": [
+            "consumed",
+            "consumed keeper",
+            "sent",
+            "sent keeper"
+          ],
+          "RawText": "Name\tMean\tMax /  / consumed / \t0 ops/s\t0 ops/s /  / consumed keeper / \t0.00958 ops/s\t0.0124 ops/s /  / sent / \t0 ops/s\t0 ops/s /  / sent keeper / \t0.00958 ops/s\t0.0124 ops/s"
+        },
+        {
+          "FromUtc": "",
+          "ToUtc": "",
+          "LegendNames": [
+            "consumed",
+            "consumed keeper",
+            "sent",
+            "sent keeper"
+          ],
+          "RawText": "Name\tMean\tMax /  / consumed / \t0 ops/s\t0 ops/s /  / consumed keeper / \t0.00895 ops/s\t0.0124 ops/s /  / sent / \t0 ops/s\t0 ops/s /  / sent keeper / \t0.00895 ops/s\t0.0124 ops/s"
+        }
+      ]
+    }
+  ],
+  "CrossTalkPanels": [
+    {
+      "PanelId": 8,
+      "PanelTitle": "Keeper consumed - sent gap in range",
+      "Applicable": true,
+      "BandLow": 0.0,
+      "BandHigh": 0.0,
+      "BandSource": "re-captured after the arm rollout (2026-07-28T22:38:54.4300000Z -> 2026-07-28T22:48:54.4300000Z)",
+      "SubWindowSeconds": 60,
+      "AfterValues": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "StayedPut": true,
+      "MaxExcursion": 0.0,
+      "PreFaultStayedPut": true,
+      "PanelStateAfter": "Rendered",
+      "SeriesResults": [
+        {
+          "SeriesIndex": -1,
+          "SeriesName": "gap",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        }
+      ]
+    },
+    {
+      "PanelId": 9,
+      "PanelTitle": "Keeper L2 probe heartbeat",
+      "Applicable": true,
+      "BandLow": 0.18,
+      "BandHigh": 0.21999999999999997,
+      "BandSource": "re-captured after the arm rollout (2026-07-28T22:38:54.4300000Z -> 2026-07-28T22:48:54.4300000Z)",
+      "SubWindowSeconds": 60,
+      "AfterValues": [
+        0.2,
+        0.2,
+        0.2,
+        0.2,
+        0.2,
+        0.2
+      ],
+      "StayedPut": true,
+      "MaxExcursion": 0.0,
+      "PreFaultStayedPut": true,
+      "PanelStateAfter": "Rendered",
+      "SeriesResults": [
+        {
+          "SeriesIndex": 0,
+          "SeriesName": "keeper-99b8c574b-9c6p6",
+          "BandLow": 0.18,
+          "BandHigh": 0.21999999999999997,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.2,
+            0.2,
+            0.2,
+            0.2,
+            0.2,
+            0.2
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 1,
+          "SeriesName": "keeper-99b8c574b-b87h8",
+          "BandLow": 0.18,
+          "BandHigh": 0.21999999999999997,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.2,
+            0.2,
+            0.2,
+            0.2,
+            0.2,
+            0.2
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        }
+      ]
+    },
+    {
+      "PanelId": 10,
+      "PanelTitle": "WebApi request rate by route",
+      "Applicable": true,
+      "BandLow": 0.0,
+      "BandHigh": 0.0,
+      "BandSource": "re-captured after the arm rollout (2026-07-28T22:38:54.4300000Z -> 2026-07-28T22:48:54.4300000Z)",
+      "SubWindowSeconds": 60,
+      "AfterValues": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "StayedPut": true,
+      "MaxExcursion": 0.0,
+      "PreFaultStayedPut": false,
+      "PanelStateAfter": "Rendered",
+      "SeriesResults": [
+        {
+          "SeriesIndex": 0,
+          "SeriesName": "Value",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 1,
+          "SeriesName": "api/v{version:apiVersion}/Assignments",
+          "BandLow": 0.06697225789248978,
+          "BandHigh": 0.0935877421075102,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0833,
+            0.0833,
+            0.0833,
+            0.0833,
+            0.0833,
+            0.0806
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 2,
+          "SeriesName": "api/v{version:apiVersion}/Assignments/{id:guid}",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 3,
+          "SeriesName": "api/v{version:apiVersion}/Orchestration/start",
+          "BandLow": -0.00229237492242738,
+          "BandHigh": 0.01563437492242738,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.00556,
+            0.00556,
+            0.00556,
+            0.00833,
+            0.00833,
+            0.00833
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 4,
+          "SeriesName": "api/v{version:apiVersion}/Orchestration/stop",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 5,
+          "SeriesName": "api/v{version:apiVersion}/Processors",
+          "BandLow": 0.06690315825930564,
+          "BandHigh": 0.09425684174069439,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0806,
+            0.0778,
+            0.0778,
+            0.0806,
+            0.0833,
+            0.0833
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 6,
+          "SeriesName": "api/v{version:apiVersion}/Processors/by-source-hash/{sourceHash}",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 7,
+          "SeriesName": "api/v{version:apiVersion}/Schemas",
+          "BandLow": 0.06872029856723895,
+          "BandHigh": 0.09517970143276107,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0806,
+            0.0833,
+            0.0833,
+            0.0833,
+            0.0833,
+            0.0833
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 8,
+          "SeriesName": "api/v{version:apiVersion}/Schemas/{id:guid}",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 9,
+          "SeriesName": "api/v{version:apiVersion}/Steps",
+          "BandLow": 0.06757636580101116,
+          "BandHigh": 0.09468363419898886,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0833,
+            0.0833,
+            0.0833,
+            0.0833,
+            0.0833,
+            0.0833
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 10,
+          "SeriesName": "api/v{version:apiVersion}/Steps/{id:guid}",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 11,
+          "SeriesName": "api/v{version:apiVersion}/Workflows",
+          "BandLow": 0.06943417418795352,
+          "BandHigh": 0.0916858258120465,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0833,
+            0.0833,
+            0.0806,
+            0.0778,
+            0.0778,
+            0.0806
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 12,
+          "SeriesName": "api/v{version:apiVersion}/Workflows/{id:guid}",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        }
+      ]
+    },
+    {
+      "PanelId": 12,
+      "PanelTitle": "WebApi status-code mix",
+      "Applicable": true,
+      "BandLow": 0.0,
+      "BandHigh": 0.0,
+      "BandSource": "re-captured after the arm rollout (2026-07-28T22:38:54.4300000Z -> 2026-07-28T22:48:54.4300000Z)",
+      "SubWindowSeconds": 60,
+      "AfterValues": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "StayedPut": true,
+      "MaxExcursion": 0.0,
+      "PreFaultStayedPut": false,
+      "PanelStateAfter": "Rendered",
+      "SeriesResults": [
+        {
+          "SeriesIndex": 0,
+          "SeriesName": "200",
+          "BandLow": 0.34694060669776916,
+          "BandHigh": 0.4616593933022307,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.411,
+            0.411,
+            0.408,
+            0.408,
+            0.411,
+            0.411
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 1,
+          "SeriesName": "201",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 2,
+          "SeriesName": "204",
+          "BandLow": -0.00229237492242738,
+          "BandHigh": 0.01563437492242738,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.00556,
+            0.00556,
+            0.00556,
+            0.00833,
+            0.00833,
+            0.00833
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 3,
+          "SeriesName": "400",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 4,
+          "SeriesName": "404",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        },
+        {
+          "SeriesIndex": 5,
+          "SeriesName": "422",
+          "BandLow": 0.0,
+          "BandHigh": 0.0,
+          "BandSampleCount": 10,
+          "AfterValues": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ],
+          "StayedPut": true,
+          "MaxExcursion": 0.0,
+          "SamplesOutside": 0,
+          "ConsecutiveSamplesOutside": 0,
+          "Note": ""
+        }
+      ]
+    }
+  ],
+  "PreArmBaselineValues": [
+    {
+      "PanelId": 2,
+      "SeriesIndex": 0,
+      "SeriesName": "consumed",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 2,
+      "SeriesIndex": 1,
+      "SeriesName": "sent",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 8,
+      "SeriesIndex": -1,
+      "SeriesName": "gap",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 9,
+      "SeriesIndex": 0,
+      "SeriesName": "keeper-99b8c574b-9c6p6",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.2,
+        0.2,
+        0.2,
+        0.2,
+        0.2,
+        0.2
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 9,
+      "SeriesIndex": 1,
+      "SeriesName": "keeper-99b8c574b-b87h8",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.2,
+        0.2,
+        0.2,
+        0.2,
+        0.2,
+        0.2
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 10,
+      "SeriesIndex": 0,
+      "SeriesName": "Value",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 10,
+      "SeriesIndex": 1,
+      "SeriesName": "api/v{version:apiVersion}/Assignments",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 10,
+      "SeriesIndex": 2,
+      "SeriesName": "api/v{version:apiVersion}/Assignments/{id:guid}",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 10,
+      "SeriesIndex": 3,
+      "SeriesName": "api/v{version:apiVersion}/Orchestration/start",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 10,
+      "SeriesIndex": 4,
+      "SeriesName": "api/v{version:apiVersion}/Orchestration/stop",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 10,
+      "SeriesIndex": 5,
+      "SeriesName": "api/v{version:apiVersion}/Processors",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 10,
+      "SeriesIndex": 6,
+      "SeriesName": "api/v{version:apiVersion}/Processors/by-source-hash/{sourceHash}",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 10,
+      "SeriesIndex": 7,
+      "SeriesName": "api/v{version:apiVersion}/Schemas",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 10,
+      "SeriesIndex": 8,
+      "SeriesName": "api/v{version:apiVersion}/Schemas/{id:guid}",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 10,
+      "SeriesIndex": 9,
+      "SeriesName": "api/v{version:apiVersion}/Steps",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 10,
+      "SeriesIndex": 10,
+      "SeriesName": "api/v{version:apiVersion}/Steps/{id:guid}",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 10,
+      "SeriesIndex": 11,
+      "SeriesName": "api/v{version:apiVersion}/Workflows",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 10,
+      "SeriesIndex": 12,
+      "SeriesName": "api/v{version:apiVersion}/Workflows/{id:guid}",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 12,
+      "SeriesIndex": 0,
+      "SeriesName": "200",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 12,
+      "SeriesIndex": 1,
+      "SeriesName": "201",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 12,
+      "SeriesIndex": 2,
+      "SeriesName": "204",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 12,
+      "SeriesIndex": 3,
+      "SeriesName": "400",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 12,
+      "SeriesIndex": 4,
+      "SeriesName": "404",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    },
+    {
+      "PanelId": 12,
+      "SeriesIndex": 5,
+      "SeriesName": "422",
+      "SubWindowSeconds": 60,
+      "Values": [
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "States": [
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered",
+        "Rendered"
+      ]
+    }
+  ],
+  "PreArmWindowStart": "2026-07-28T22:26:43.35Z",
+  "PreArmWindowEnd": "2026-07-28T22:32:43.35Z",
+  "RolloutOldInstanceIds": [
+    "processor-sample-684fdf596f-9tn9w",
+    "processor-sample-684fdf596f-qdwf7"
+  ],
+  "RolloutNewInstanceIds": [
+    "processor-sample-6d48c49799-r8w8z",
+    "processor-sample-6d48c49799-xdgn5"
+  ],
+  "RolloutUtc": "2026-07-29T01:36:24.1057747+03:00",
+  "RolloutNote": "EXPECTED ARTIFACT, not a result. `kubectl set env` and `kubectl scale` mint NEW pods with NEW service_instance_id values, and a k8s restart never RESETS a series — it starts a new one. Every by(service_instance_id) panel therefore gains series at this moment and every aggregate briefly dips; that dip must NOT be scored, which is why the scoring band for any rollout scenario is re-captured afterwards.",
+  "ReplicasBefore": {
+    "orchestrator": 3,
+    "processor-sample": 2,
+    "baseapi-service": 1,
+    "keeper": 2
+  },
+  "ReplicasAfter": {
+    "orchestrator": 3,
+    "processor-sample": 2,
+    "baseapi-service": 1,
+    "keeper": 2
+  },
+  "ScaledTier": "",
+  "ReplicasBeforeByTier": {
+    "orchestrator": 3,
+    "processor-sample": 2,
+    "baseapi-service": 1,
+    "keeper": 2
+  },
+  "ReplicasAfterByTier": {
+    "orchestrator": 3,
+    "processor-sample": 2,
+    "baseapi-service": 1,
+    "keeper": 2
+  },
+  "ReplicasFieldNote": "this row scaled no tier, so ReplicasBefore/ReplicasAfter carry the four-tier MAPS (identical to ReplicasBeforeByTier/ReplicasAfterByTier)",
+  "ReplicasRestored": true,
+  "SeamVarsAfter": [],
+  "SeamVarsClean": true,
+  "ImagesUnchanged": true,
+  "ImagesBefore": {
+    "orchestrator": "orchestrator:tags-const-1544",
+    "processor-sample": "processor-sample:tags-const-1544",
+    "baseapi-service": "baseapi-service:tags-const-1544",
+    "keeper": "keeper:tags-const-1544"
+  },
+  "ReplicaMismatches": [],
+  "ImageMismatches": [],
+  "UnknownTiers": [],
+  "DependencyOutageDriven": false,
+  "BaselineWindowStart": "2026-07-28T22:38:54.43Z",
+  "BaselineWindowEnd": "2026-07-28T22:48:54.43Z",
+  "AfterWindowStart": "2026-07-28T22:51:50.8345067Z",
+  "AfterWindowEnd": "2026-07-28T22:57:50.8345067Z",
+  "SubWindowSeconds": 60,
+  "SubWindowCount": 6,
+  "Panel4SubWindowSeconds": 120,
+  "Panel4SubWindowNote": "MEASURED in 88-04: panel 4 renders \"No data\" at a 60 s sub-window, because increase() needs at least TWO samples inside its range and the stored resolution here is 60 s (the SDK export cadence, not the 15 s scrape). Panel 4 is therefore read in its OWN batch at 120 s whenever a scenario asserts or controls on it, and EVERY entry states its own SubWindowSeconds so widths can never be silently cross-compared.",
+  "ViewportWidth": 1920,
+  "ViewportHeight": 1080,
+  "LocatorMode": "viewpanel",
+  "RateIntervalSeconds": 240,
+  "DatasourceTimeInterval": "60s",
+  "OldestSampleUtc": "2026-07-19T07:34:43Z",
+  "FaultStartUtc": "2026-07-28T22:51:50.8345067Z",
+  "FaultEndUtc": "2026-07-28T22:59:51.4363711Z",
+  "LoadShape": "background",
+  "LoadActualSeconds": 0,
+  "HostLoadRequests": 0,
+  "DiagnosticQueryValue": 0.012535279507080619,
+  "DiagnosticQueryValues": [
+    {
+      "PanelId": 2,
+      "TargetCount": 2,
+      "Queries": [
+        "sum by (source) (rate(keeper_messages_consumed_total{source=~\".*\", service_instance_id=~\".*\"}[240s])) or vector(0)",
+        "sum by (source) (rate(keeper_messages_sent_total{source=~\".*\", service_instance_id=~\".*\"}[240s])) or vector(0)"
+      ],
+      "ProxyMean": 0.012535279507080619,
+      "PanelMeanSum": 0.015037499999999999,
+      "Comparable": true,
+      "Agrees": true,
+      "Reason": ""
+    }
+  ],
+  "DiagnosticAgreesWithPanel": true,
+  "DiagnosticDisagreements": [],
+  "DiagnosticNote": "The RENDERED panel is the verdict. These proxy query_range values are DIAGNOSIS only; a disagreement is a finding to record, never an error to reconcile away.",
+  "DecompositionResults": [],
+  "DecompositionNote": "DIAGNOSIS ONLY — nothing here can make a panel Moved. A guarded panel that renders 0 does not say WHY, and `sum(increase(A)) - sum(increase(B)) or vector(0)` renders the identical comfortable 0 in four different situations: A and B moved together; neither moved; A moved but B has no series at all so the subtraction is EMPTY and the guard supplies the 0; or the sub-window is too narrow for increase() to have two samples inside it. These rows evaluate the panel's OWN terms over the SAME after window at several range widths, keeping the per-timestamp values, so a reader can tell those four apart. Empty=true means the expression produced no result at all at any step — which is precisely the case the guard hides.",
+  "RangeCumulativeLevelAfter": null,
+  "RangeCumulativeWindowSeconds": 3600,
+  "RangeCumulativeNote": "Panel 4 (Regime C) at its WIDE default range — the number an operator actually sees on the shipped dashboard. RECORDED AND NEVER SCORED: it grows on a demonstrably healthy stack too, so applying a Regime-A band to it would be a guaranteed false positive. Panel 4's Moved computation uses only the per-120 s value scored against a 120 s band.",
+  "ObservedPanels": [],
+  "ObservedPanelsNote": "Panels captured for the RECORD only — neither asserted nor used as a cross-talk control. They exist so a statement the scenario must make about them is a measurement rather than an assertion.",
+  "TrafficResumedAfterRestore": null,
+  "TrafficResumeDetail": "",
+  "PredictionsCorrectedByMeasurement": [],
+  "PredictionNote": "A panel whose PredictionHeld is false MOVED — it left its healthy band, or emptied, for at least two consecutive sub-windows — but not in the direction this plan predicted. DISC-02 asks whether the panel discriminates, and it does; the wrong prediction is a finding carried to the HAND-02 misleading-by-default list, and it degrades the verdict to Inconclusive so that a wrong model can never be absorbed into a Pass.",
+  "NewSeriesAfter": [
+    "panel 2 series 'sent keeper' (row 3) has NO baseline band — new series, recorded as a finding, not scored"
+  ],
+  "Findings": [],
+  "UnevaluablePanels": [],
+  "ScreenshotPaths": [
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785277603350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785277603350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785277603350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785277603350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785277603350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785277663350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785277663350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785277663350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785277663350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785277663350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785277723350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785277723350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785277723350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785277723350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785277723350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785277783350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785277783350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785277783350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785277783350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785277783350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785277843350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785277843350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785277843350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785277843350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785277843350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785277903350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785277903350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785277903350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785277903350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785277903350.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785278334430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785278334430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785278334430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785278334430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785278334430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785278394430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785278394430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785278394430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785278394430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785278394430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785278454430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785278454430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785278454430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785278454430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785278454430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785278514430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785278514430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785278514430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785278514430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785278514430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785278574430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785278574430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785278574430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785278574430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785278574430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785278634430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785278634430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785278634430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785278634430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785278634430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785278694430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785278694430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785278694430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785278694430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785278694430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785278754430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785278754430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785278754430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785278754430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785278754430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785278814430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785278814430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785278814430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785278814430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785278814430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785278874430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785278874430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785278874430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785278874430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785278874430.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785279110834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785279110834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785279110834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785279110834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785279110834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785279170834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785279170834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785279170834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785279170834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785279170834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785279230834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785279230834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785279230834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785279230834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785279230834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785279290834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785279290834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785279290834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785279290834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785279290834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785279350834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785279350834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785279350834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785279350834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785279350834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-2-1785279410834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-8-1785279410834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-9-1785279410834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-10-1785279410834.png",
+    "C:\\Users\\UserL\\source\\repos\\SK_P6\\analyzer-reports\\phase-88-screenshots\\ZERO-02\\panel-12-1785279410834.png"
+  ],
+  "BatchStateAfter": "Ok",
+  "CompletedUtc": "2026-07-29T02:02:15.9412876+03:00",
+  "HumanSummary": "phase-88 ZERO-02 verdict=Pass: lever=seam trigger='workload drive with the seam armed, in bounded arm/claim/roll cycles' | 1/1 asserted panel(s) moved [2:moved] | crossTalkHeld=True [8:held 9:held 10:held 12:held] | baselineRecaptured=True band=re-captured after the arm rollout (2026-07-28T22:38:54.4300000Z -> 2026-07-28T22:48:54.4300000Z) | after 2026-07-28T22:51:50.8345067Z -> 2026-07-28T22:57:50.8345067Z at 6 x 60s, 1920x1080, rate_interval=240s | load=background ~0 req | diagnosticAgrees=True | unevaluable=0 findings=0 | stack clean: seamVars=True replicas=True images=True",
+  "LegendNamesReDerived": {
+    "PanelId": 2,
+    "ReDerivedUtc": "2026-07-28T23:06:14.8622345+00:00",
+    "Reason": "the run's by-index legend collector takes each row's name from the FIRST sub-window in which that index existed, so a legend that GAINS rows mid-capture reports a stale name for every row after the insertion point — dropping exactly the name the guarded-panel assertion is about",
+    "ReplacedBaseline": [
+      "consumed",
+      "sent"
+    ],
+    "ReplacedAfter": [
+      "consumed",
+      "sent",
+      "sent",
+      "sent keeper"
+    ],
+    "BaselineWindowEnd": "07/28/2026 22:32:43",
+    "AfterWindowEnd": "07/28/2026 22:57:50",
+    "SubWindowSeconds": 60,
+    "SubWindowCount": 6,
+    "BaselineBatchState": "Ok",
+    "AfterBatchState": "Ok",
+    "NotARerun": "The windows re-read here are the ABSOLUTE, pinned windows the run itself recorded, and Prometheus retains ~9.4 days — so these are the same samples the run scored, read again with a corrected collector. No fault was driven, no cluster mutation was issued, and no numeric value, band, cross-talk result or restore claim was altered: only the LegendNames* fields, whose previous contents are preserved above."
+  }
+}
