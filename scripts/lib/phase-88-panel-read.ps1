@@ -42,10 +42,25 @@
         Get-PinnedWindowSeries      -EndUtc -SubWindowSeconds -Count         -> window objects, oldest first
         Invoke-PanelReadBatch       -PanelIds -Windows [-DashboardUid] ...   -> @{ Readings; Requested;
                                                                                   Emitted; Complete; State }
-        Get-PanelSamples            -Readings -PanelId [-SeriesName]         -> double[] in window order
+        Get-PanelSamples            -Readings -PanelId [-SeriesIndex|-SeriesName]
+                                                                             -> double[] in window order
+        Get-PanelSeriesCount        -Readings -PanelId                       -> int (max legend rows)
+        Get-PanelSeriesNameAt       -Readings -PanelId -SeriesIndex          -> @{ Name; Names; Stable; Source }
         Get-PanelStates             -Readings -PanelId                       -> string[] in window order
         Get-PanelBand               -Values                                  -> band object
         Test-PanelMoved             -Band -AfterValues -AfterStates -Direction -MinConsecutive
+
+    READER AMENDMENT (88-PROBE-DECISIONS.md Record 3 — applied by plan 88-04 BEFORE the DISC-01
+    baseline). The wave-0 probe measured that legend VALUES parsed while legend NAMES bound to
+    nothing, and that the `data-testid VizLegend series <name>` recovery path matches ZERO elements on
+    this Grafana render. Consequently:
+      * per-series reads are POSITIONAL (-SeriesIndex); the name is recorded beside the band, never
+        used as the selector;
+      * the testid attribute route is treated as ABSENT, not as a fallback;
+      * panel 2's discrimination is asserted NUMERICALLY first (Regime B: a 0..0 band that any real
+        event falsifies), with the legend SUFFIX change (`consumed` -> `consumed keeper`) as the
+        corroborating second signal. The trailing-space formulation does NOT survive innerText and
+        must never be looked for.
 
 .NOTES
     Dev/ops-only tooling. No product source touched. This library never starts, stops, or records a
@@ -329,8 +344,17 @@ function Invoke-PanelReadBatch {
 
 # -------------------------------------------------------------------------------------------------
 # The values for one panel, in window order. A stat panel yields statValue; a timeseries yields the
-# Mean of the named series (exact match first, then a trimmed match so the label-less guard series —
-# rendered by `or vector(0)` as the literal `consumed ` with a trailing space — is still reachable).
+# Mean of ONE legend series, selected either POSITIONALLY (-SeriesIndex, preferred) or by name
+# (-SeriesName, exact match first then trimmed).
+#
+# AMENDMENT 2 (88-PROBE-DECISIONS.md Record 3, measured 2026-07-28): -SeriesName was UNUSABLE on this
+# stack before the reader's parser amendment, because every parsed row carried an empty `name` and a
+# name-matched read therefore returned an empty array — indistinguishable from "the panel had no such
+# series". The reader now pairs each legend name line with the values line that follows it, so
+# -SeriesName works again; but POSITIONAL row index remains the reliable axis and is what the Phase-88
+# baseline bands on. A name is RECORDED beside each band (see Get-PanelSeriesNameAt) as the
+# corroborating second signal, never as the selector.
+#
 # A NoData (or Error) reading contributes NO value; its position is preserved by the paired
 # Get-PanelStates, so the caller can always tell a gap from a zero.
 # -------------------------------------------------------------------------------------------------
@@ -339,7 +363,8 @@ function Get-PanelSamples {
     param(
         [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Readings,
         [Parameter(Mandatory)][string]$PanelId,
-        [string]$SeriesName = ''
+        [string]$SeriesName = '',
+        [int]$SeriesIndex = -1
     )
 
     $values = @()
@@ -348,7 +373,7 @@ function Get-PanelSamples {
         if ($names -notcontains 'panelId') { continue }
         if ("$($r.panelId)" -ne $PanelId) { continue }
 
-        if ([string]::IsNullOrEmpty($SeriesName)) {
+        if ([string]::IsNullOrEmpty($SeriesName) -and $SeriesIndex -lt 0) {
             if ($names -contains 'statValue' -and $null -ne $r.statValue) {
                 $values += [double]$r.statValue
             }
@@ -357,24 +382,118 @@ function Get-PanelSamples {
 
         if ($names -notcontains 'series') { continue }
         $hit = $null
-        foreach ($s in @($r.series)) {
-            $sNames = @(Get-PropertyNames $s)
-            if ($sNames -notcontains 'name') { continue }
-            if ("$($s.name)" -ceq $SeriesName) { $hit = $s; break }
+
+        if ($SeriesIndex -ge 0) {
+            # POSITIONAL. Prefer the reader's own seriesIndex field when present (it is authoritative
+            # about the row's position in the rendered legend); fall back to array position for a
+            # reading produced by an older reader version.
+            foreach ($s in @($r.series)) {
+                $sNames = @(Get-PropertyNames $s)
+                if ($sNames -notcontains 'seriesIndex') { continue }
+                if ([int]$s.seriesIndex -eq $SeriesIndex) { $hit = $s; break }
+            }
+            if ($null -eq $hit) {
+                $arr = @($r.series)
+                if ($SeriesIndex -lt $arr.Count) { $hit = $arr[$SeriesIndex] }
+            }
         }
-        if ($null -eq $hit) {
+        else {
             foreach ($s in @($r.series)) {
                 $sNames = @(Get-PropertyNames $s)
                 if ($sNames -notcontains 'name') { continue }
-                if ("$($s.name)".Trim() -eq $SeriesName.Trim()) { $hit = $s; break }
+                if ("$($s.name)" -ceq $SeriesName) { $hit = $s; break }
+            }
+            if ($null -eq $hit) {
+                foreach ($s in @($r.series)) {
+                    $sNames = @(Get-PropertyNames $s)
+                    if ($sNames -notcontains 'name') { continue }
+                    if ("$($s.name)".Trim() -eq $SeriesName.Trim()) { $hit = $s; break }
+                }
             }
         }
+
         if ($null -eq $hit) { continue }
         $hNames = @(Get-PropertyNames $hit)
         if ($hNames -contains 'mean' -and $null -ne $hit.mean) { $values += [double]$hit.mean }
     }
     # Emitted UNWRAPPED — `@()`-wrap at the call site before reading .Count (repo convention).
     return [double[]]$values
+}
+
+# -------------------------------------------------------------------------------------------------
+# How many legend series did this panel render? The MAXIMUM row count across the panel's readings, so
+# a single NoData window (which renders zero rows) cannot silently shrink the series set the caller
+# then bands. Returns 0 for a stat panel.
+# -------------------------------------------------------------------------------------------------
+function Get-PanelSeriesCount {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Readings,
+        [Parameter(Mandatory)][string]$PanelId
+    )
+
+    $max = 0
+    foreach ($r in @($Readings)) {
+        $names = @(Get-PropertyNames $r)
+        if ($names -notcontains 'panelId') { continue }
+        if ("$($r.panelId)" -ne $PanelId) { continue }
+        if ($names -notcontains 'series') { continue }
+        $c = @($r.series).Count
+        if ($c -gt $max) { $max = $c }
+    }
+    return $max
+}
+
+# -------------------------------------------------------------------------------------------------
+# The series NAME observed at a given row index, VERBATIM, plus whether it was stable across the
+# capture. Panel 2's corroborating signal is a legend-name change, so a name that DIFFERS between
+# windows is itself information and must not be silently collapsed to the first value.
+#
+# Returns @{ Name; Names[]; Stable; Source } — Names[] is every distinct verbatim name seen at that
+# index, Stable is $true only when exactly one was seen.
+# -------------------------------------------------------------------------------------------------
+function Get-PanelSeriesNameAt {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Readings,
+        [Parameter(Mandatory)][string]$PanelId,
+        [Parameter(Mandatory)][int]$SeriesIndex
+    )
+
+    $seen = @()
+    $source = ''
+    foreach ($r in @($Readings)) {
+        $names = @(Get-PropertyNames $r)
+        if ($names -notcontains 'panelId') { continue }
+        if ("$($r.panelId)" -ne $PanelId) { continue }
+        if ($names -notcontains 'series') { continue }
+
+        $hit = $null
+        foreach ($s in @($r.series)) {
+            $sNames = @(Get-PropertyNames $s)
+            if ($sNames -notcontains 'seriesIndex') { continue }
+            if ([int]$s.seriesIndex -eq $SeriesIndex) { $hit = $s; break }
+        }
+        if ($null -eq $hit) {
+            $arr = @($r.series)
+            if ($SeriesIndex -lt $arr.Count) { $hit = $arr[$SeriesIndex] }
+        }
+        if ($null -eq $hit) { continue }
+
+        $hNames = @(Get-PropertyNames $hit)
+        $nm = if ($hNames -contains 'name') { "$($hit.name)" } else { '' }
+        if ($seen -notcontains $nm) { $seen += $nm }
+        if ([string]::IsNullOrEmpty($source) -and $hNames -contains 'nameSource') {
+            $source = "$($hit.nameSource)"
+        }
+    }
+
+    return [pscustomobject]@{
+        Name   = if (@($seen).Count -gt 0) { $seen[0] } else { '' }
+        Names  = [string[]]$seen
+        Stable = (@($seen).Count -le 1)
+        Source = $source
+    }
 }
 
 # -------------------------------------------------------------------------------------------------

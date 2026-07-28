@@ -35,12 +35,15 @@
  *                      panel-<id>-<fromMs>.png
  *   GRAFANA_BASIC_AUTH optional base64 'user:pass'; applied as an Authorization header when non-empty
  *   HEADLESS           optional, 'false' opens a visible browser (debugging only; default headless)
+ *   PANEL_READ_SELFTEST optional, '1' runs the HERMETIC parser self-test and exits, launching no
+ *                      browser and touching no cluster (see runSelfTest below)
  *
  * OUTPUT (stdout)
  *   ##PANEL-JSON##      one compact-JSON line per (panel, window) pair, window-major order.
  *   ##PANEL-BATCH-END## exactly one, LAST: {"requested":N,"emitted":M}. This lets the caller tell a
  *                       TRUNCATED batch from a complete one instead of silently banding a partial
  *                       sample set as if it were whole.
+ *   ##PANEL-SELFTEST##  exactly one, only under PANEL_READ_SELFTEST=1.
  *
  * WHY THE WINDOW MUST BE ABSOLUTE
  *   A timeseries legend's Mean/Max are computed over the VISIBLE time range, and the dashboard ships
@@ -72,7 +75,18 @@
 
 const fs = require('fs');
 const path = require('path');
-const { chromium } = require('playwright');
+
+// playwright is resolved LAZILY and DEFENSIVELY. Two reasons, both load-bearing:
+//   1. run.js copies this file into the skill directory before require()ing it, so `playwright`
+//      resolves from the SKILL's node_modules — but the hermetic parser self-test below must be
+//      runnable straight from the repo, where that module does not resolve at all.
+//   2. A bare top-level require() that throws kills the process before ANY sentinel line is printed,
+//      which the caller can only report as "the reader produced no sentinel line at all". Capturing
+//      it here turns a missing dependency into a NAMED batch-end error instead.
+let chromium = null;
+let playwrightLoadError = null;
+try { chromium = require('playwright').chromium; }
+catch (e) { playwrightLoadError = (e && e.message) ? e.message : String(e); }
 
 const READER_VERSION = '1';
 const SENTINEL_READING = '##PANEL-JSON##';
@@ -148,9 +162,29 @@ function parseCell(text) {
  * Parse `data-testid panel content` innerText.
  *   stat        -> a single big number, possibly with a unit suffix       -> statValue set, series []
  *   timeseries  -> table-legend rows of `name`, `Mean`, `Max`             -> series set, statValue null
- * Names are carried VERBATIM (a trailing space is signal, not noise — panel 2's guard renders the
- * label-less series as the literal `consumed ` and gains `consumed keeper` the moment the counter
- * exists), with a separate nameTrimmed field for convenience.
+ *
+ * AMENDMENT 1 (88-PROBE-DECISIONS.md Record 3, measured 2026-07-28 — REQUIRED before any Phase-88
+ * baseline is captured). On THIS Grafana render `innerText` puts each legend series NAME on its own
+ * line and the numeric cells on the line that FOLLOWS it:
+ *
+ *     Name<TAB>Mean<TAB>Max
+ *     <blank>
+ *     keeper-99b8c574b-29mzq
+ *     <TAB>0.200 ops/s<TAB>0.200 ops/s
+ *
+ * The original parser required >= 2 cells on ONE line, so every name line was discarded as noise and
+ * every emitted row read {"name":"","nameTrimmed":"","mean":<number>}: values bound, names bound to
+ * NOTHING. Panel 2's entire discrimination signal is a legend-name change, so a baseline captured on
+ * the unamended parser would have been structurally blind to what it exists to measure. A lone
+ * non-numeric line is therefore HELD as a pending name and paired with the next values line whose own
+ * first cell is blank. POSITIONAL row index (seriesIndex) is the reliable axis; name matching is not.
+ *
+ * Names are carried VERBATIM, with a separate nameTrimmed for convenience — but note that `innerText`
+ * NORMALISES THE TRAILING SPACE AWAY ENTIRELY (Record 3 supplementary measurement): panel 2's
+ * label-less guard series renders as the bare word `consumed`, NOT as `consumed ` with a trailing
+ * space. The observable signal is the SUFFIX change `consumed` -> `consumed keeper`; the
+ * trailing-space formulation the research proposed does not exist on this render and must not be
+ * looked for.
  */
 function parsePanelText(rawText) {
   const result = { statValue: null, series: [] };
@@ -163,6 +197,7 @@ function parsePanelText(rawText) {
   let maxIndex = 2;
   let headerSeen = false;
   const rows = [];
+  let pendingName = null;   // AMENDMENT 1: the name line awaiting its values line
 
   for (let i = 0; i < lines.length; i++) {
     let cells = lines[i].split('\t');
@@ -172,7 +207,12 @@ function parsePanelText(rawText) {
       const spaced = lines[i].split(/ {2,}/);
       if (spaced.length >= 2) { cells = spaced; }
     }
-    if (cells.length < 2) { continue; }
+    if (cells.length < 2) {
+      // Not a values line. If it carries text at all it is a legend NAME line — hold it VERBATIM
+      // rather than discarding it (that discard was the Record-3 defect).
+      if (lines[i].trim().length > 0) { pendingName = lines[i]; }
+      continue;
+    }
 
     const tail = cells.slice(1).map(function (c) { return c.trim().toLowerCase(); });
     const isHeader = !headerSeen && tail.indexOf('mean') >= 0;
@@ -182,9 +222,20 @@ function parsePanelText(rawText) {
       const xi = tail.indexOf('max');
       if (mi >= 0) { meanIndex = mi + 1; }
       if (xi >= 0) { maxIndex = xi + 1; }
+      pendingName = null;   // a column header is never a series name
       continue;
     }
-    rows.push(cells);
+
+    let nameSource = 'inline';
+    if (String(cells[0]).trim().length === 0 && pendingName !== null) {
+      cells = cells.slice();
+      cells[0] = pendingName;
+      nameSource = 'precedingLine';
+    }
+    // Consumed (or deliberately dropped when the values line carried its own name): a pending name
+    // must never bind to a SECOND row, which would silently mislabel every row after the first.
+    pendingName = null;
+    rows.push({ cells: cells, nameSource: nameSource });
   }
 
   if (rows.length === 0) {
@@ -194,11 +245,15 @@ function parsePanelText(rawText) {
   }
 
   for (let i = 0; i < rows.length; i++) {
-    const cells = rows[i];
+    const cells = rows[i].cells;
     const name = cells[0];
     result.series.push({
+      // seriesIndex is the POSITIONAL axis Record 3 amendment 2 requires: per-series reads are taken
+      // by row index, because a name-matched read returns nothing whenever names fail to bind.
+      seriesIndex: i,
       name: name,
       nameTrimmed: String(name).trim(),
+      nameSource: nameSource_of(rows[i]),
       mean: (cells.length > meanIndex) ? parseCell(cells[meanIndex]) : null,
       max: (cells.length > maxIndex) ? parseCell(cells[maxIndex]) : null
     });
@@ -206,8 +261,17 @@ function parsePanelText(rawText) {
   return result;
 }
 
-// Recover series names verbatim from the legend testid attribute values. innerText can normalise the
-// trailing space out of the guard's label-less series; the attribute value cannot.
+// Tiny accessor so the row shape stays a single object rather than two parallel arrays.
+function nameSource_of(row) { return row && row.nameSource ? row.nameSource : 'inline'; }
+
+// Recover series names verbatim from the legend testid attribute values.
+//
+// AMENDMENT 3 (88-PROBE-DECISIONS.md Record 3): this route is MEASURED ABSENT on this Grafana render.
+// `[data-testid^="data-testid VizLegend series"]` matched ZERO elements on every reading of the
+// wave-0 probe (`legendSeriesNames` came back empty throughout, `Panel9LegendNames: []`). The code is
+// kept because it is harmless and version-dependent — a future Grafana may emit the attribute again —
+// but NOTHING may depend on it. It is a bonus corroboration channel, never a fallback, and the caller
+// is told whether it produced anything via the additive `legendTestIdAvailable` field.
 async function readLegendSeriesNames(scope) {
   try {
     const names = await scope.$$eval(SEL_LEGEND_SERIES_PREFIX, function (els, prefix) {
@@ -232,6 +296,73 @@ function buildUrl(grafanaUrl, dashboardUid, panelId, fromMs, toMs, includeViewPa
     '&var-source=All&var-pod=All&kiosk&refresh=';
 }
 
+/**
+ * HERMETIC SELF-TEST (PANEL_READ_SELFTEST=1) — launches NO browser, touches no cluster.
+ *
+ * It asserts AMENDMENT 1 against the VERBATIM innerText that the wave-0 probe actually recorded from
+ * this Grafana instance (88-PROBE-DECISIONS.md Record 3), so "the parser now binds legend names" is a
+ * re-runnable check rather than a claim in a summary. Run it with:
+ *     PANEL_READ_SELFTEST=1 node scripts/phase-88-panel-read.js
+ * Prints one ##PANEL-SELFTEST## line and exits 0 (all cases pass) or 1 (any case failed).
+ */
+function runSelfTest() {
+  const cases = [];
+  function check(label, actual, expected) {
+    const a = JSON.stringify(actual);
+    const e = JSON.stringify(expected);
+    cases.push({ label: label, ok: a === e, actual: actual, expected: expected });
+  }
+
+  // 1 + 2. The two rawText payloads recorded live by the wave-0 probe. The name is on its own line
+  //        and the numbers on the line after it — the exact shape that used to bind no names at all.
+  const panel9 = 'Name\tMean\tMax\n\nkeeper-99b8c574b-29mzq\n\t0.200 ops/s\t0.200 ops/s\n\nkeeper-99b8c574b-x4wqr\n\t0.200 ops/s\t0.200 ops/s';
+  const p9 = parsePanelText(panel9);
+  check('panel9-names', p9.series.map(function (s) { return s.nameTrimmed; }),
+    ['keeper-99b8c574b-29mzq', 'keeper-99b8c574b-x4wqr']);
+  check('panel9-means', p9.series.map(function (s) { return s.mean; }), [0.2, 0.2]);
+  check('panel9-indices', p9.series.map(function (s) { return s.seriesIndex; }), [0, 1]);
+
+  const panel2 = 'Name\tMean\tMax\n\nconsumed\n\t0 ops/s\t0 ops/s\n\nsent\n\t0 ops/s\t0 ops/s';
+  const p2 = parsePanelText(panel2);
+  check('panel2-names', p2.series.map(function (s) { return s.nameTrimmed; }), ['consumed', 'sent']);
+  check('panel2-means', p2.series.map(function (s) { return s.mean; }), [0, 0]);
+  // The SUFFIX transition is what remains observable once the guard stops firing (the trailing-space
+  // formulation does not survive innerText and must never be looked for).
+  const p2after = parsePanelText('Name\tMean\tMax\n\nconsumed keeper\n\t0.4 ops/s\t0.5 ops/s\n\nsent keeper\n\t0.4 ops/s\t0.5 ops/s');
+  check('panel2-suffix-transition', p2after.series.map(function (s) { return s.nameTrimmed; }),
+    ['consumed keeper', 'sent keeper']);
+
+  // 3. A legend that DOES put the name inline must keep working — the amendment is additive.
+  const inline = parsePanelText('Name\tMean\tMax\nfoo\t1.5\t2\nbar\t3\t4');
+  check('inline-names', inline.series.map(function (s) { return s.nameTrimmed; }), ['foo', 'bar']);
+  check('inline-source', inline.series.map(function (s) { return s.nameSource; }), ['inline', 'inline']);
+
+  // 4. A stat panel is still a stat panel: no rows, one number, no invented series.
+  const stat = parsePanelText('0');
+  check('stat-value', stat.statValue, 0);
+  check('stat-no-series', stat.series.length, 0);
+  const statLabelled = parsePanelText('gap\n1.23 K');
+  check('stat-labelled-value', statLabelled.statValue, 1.23);
+
+  // 5. A pending name must NEVER bind to a second row. If it did, one stray line would mislabel every
+  //    row after it — a silent, plausible-looking wrong answer, which is worse than an empty name.
+  const stray = parsePanelText('Name\tMean\tMax\nstray-line\n\t1\t1\n\t2\t2');
+  check('stray-name-binds-once', stray.series.map(function (s) { return s.nameTrimmed; }), ['stray-line', '']);
+  check('stray-name-sources', stray.series.map(function (s) { return s.nameSource; }), ['precedingLine', 'inline']);
+
+  const failed = cases.filter(function (c) { return !c.ok; });
+  console.log('##PANEL-SELFTEST## ' + JSON.stringify({
+    readerVersion: READER_VERSION,
+    total: cases.length,
+    failed: failed.length,
+    cases: cases
+  }));
+  process.exitCode = (failed.length === 0) ? 0 : 1;
+}
+
+if (String(process.env.PANEL_READ_SELFTEST || '') === '1') {
+  runSelfTest();
+} else {
 (async () => {
   // ---------------------------------------------------------------------------------------------
   // env contract
@@ -320,6 +451,12 @@ function buildUrl(grafanaUrl, dashboardUid, panelId, fromMs, toMs, includeViewPa
   let context = null;
   let page = null;
 
+  if (chromium === null) {
+    emitBatchEnd(requested, 0, 'the playwright module could not be loaded: ' + playwrightLoadError);
+    process.exitCode = 1;
+    return;
+  }
+
   try {
     browser = await chromium.launch({ headless: headless });
     const contextOptions = { viewport: { width: viewportWidth, height: viewportHeight } };
@@ -372,6 +509,7 @@ function buildUrl(grafanaUrl, dashboardUid, panelId, fromMs, toMs, includeViewPa
           rawText: null,
           series: [],
           legendSeriesNames: [],
+          legendTestIdAvailable: false,
           statValue: null,
           screenshotPath: null,
           readerVersion: READER_VERSION,
@@ -445,13 +583,16 @@ function buildUrl(grafanaUrl, dashboardUid, panelId, fromMs, toMs, includeViewPa
             reading.series = parsed.series;
             reading.statValue = parsed.statValue;
             reading.legendSeriesNames = await readLegendSeriesNames(scope);
-            // Prefer the testid-derived name when it matches by trimmed form: innerText can
-            // normalise away the trailing space that IS panel 2's discrimination signal.
+            // AMENDMENT 3: recorded so a reader can see whether the attribute route produced anything
+            // at all. It was measured EMPTY on every wave-0 reading, so the loop below is a no-op on
+            // this stack — the names now come from AMENDMENT 1's name-line pairing, not from here.
+            reading.legendTestIdAvailable = (reading.legendSeriesNames.length > 0);
             for (let si = 0; si < reading.series.length; si++) {
               const trimmed = reading.series[si].nameTrimmed;
               for (let ni = 0; ni < reading.legendSeriesNames.length; ni++) {
                 if (String(reading.legendSeriesNames[ni]).trim() === trimmed) {
                   reading.series[si].name = reading.legendSeriesNames[ni];
+                  reading.series[si].nameSource = 'testid';
                   break;
                 }
               }
@@ -492,3 +633,4 @@ function buildUrl(grafanaUrl, dashboardUid, panelId, fromMs, toMs, includeViewPa
     emitBatchEnd(requested, emitted, null);
   }
 })();
+}
