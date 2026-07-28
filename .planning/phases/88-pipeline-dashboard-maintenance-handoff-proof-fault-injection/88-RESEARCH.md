@@ -765,7 +765,25 @@ This phase mutates live cluster state without changing files. Every mutation mus
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED at planning — 2026-07-28)
+
+> All six were closed when Phase 88 was planned. Four are answered mechanically by the blocking
+> Wave-0 probe (plan 88-03) and locked into `88-PROBE-DECISIONS.md` before any downstream plan can
+> depend on them; two were decided at planning. Resolution index, for a reader who consults this
+> document alone:
+>
+> | # | Resolved by | Outcome |
+> |---|---|---|
+> | 1 | **PQ-01** — probe 88-03 Task 2 STEP G, branch locked in Task 3 | `KeeperRecoveryTrafficObserved` true → ZERO-02 lever `scale`; false → lever `seam` (`PROCESSOR_DEFEAT_READ`). Exercised by ZERO-02/ZERO-03 in plan 88-07. |
+> | 2 | **PQ-02** — probe 88-03 Task 1 STEP D, locator locked in Task 3 | `ViewPanelUrlWorks` + both parse flags → `LocatorMode viewpanel`, else the header-walk fallback. The reader (plan 88-01) is written against whichever wins. |
+> | 3 | **PQ-03** — probe 88-03 Task 2 STEP E | `Safe5xxFound` decides whether panel 13 is proven by WEB-02 (plan 88-05) or joins the accepted-unproven register with panel 7. No dependency outage is budgeted. |
+> | 4 | **Decided at planning: RECORD, do not fix.** | `k8s/dashboards/business.json` is modified by no plan; 88-10 Task 3 asserts `git status --porcelain k8s/` is empty. Panel 5's empty-instead-of-spike behaviour is carried as a `misleadingByDefault` note in the 88-09 matrix and as a HAND-02 gap in the 88-10 verdict. |
+> | 5 | **Decided at planning.** | Eight scenarios plus the ladder, run strictly sequentially across waves 4–7 (plans 88-05 → 88-08), cheapest-and-safest HTTP scenarios first exactly as recommended. One addition the research did not anticipate: **PQ-05** was added after `CycleDetector.cs:91-95` showed the D-08 missing-step gate rejects a dangling `nextStepIds` edge at activation, so panel 6's proposed lever is likely infeasible as written — the probe enumerates an L2-step-key route instead, and panel 6 falls to the register if neither works. |
+> | 6 | **Decided at planning.** | `docs/runbooks/business-dashboard-runbook.md` — the location a maintenance department would actually find — with a non-duplicating pointer at `88-RUNBOOK.md` in the phase directory. Authored in plan 88-10. |
+>
+> Two further probe questions were added beyond the research's list: **PQ-06** (does `kubectl set env`
+> land and clear a seam on a live keeper pod) and **PQ-07** (oldest available Prometheus sample at
+> run start, against the ~12 h retention horizon).
 
 1. **Does a tier crash alone drive keeper recovery? (A1 — the phase's biggest unknown)**
    - Known: the orchestrator sends to `keeper-recovery` from `OrchestratorPrePipeline.cs:213` and `RelocateTail.cs:105`; a whole-tier processor crash is what `TEST-02` drives.
