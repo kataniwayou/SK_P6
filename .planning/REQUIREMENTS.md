@@ -68,19 +68,19 @@ No production source code changes: every label and series the dashboards consume
 
 | REQ-ID | Phase | Status |
 |--------|-------|--------|
-| DASH-01 | 87 | Not started |
-| DASH-02 | 87 | Not started |
-| DASH-03 | 87 | Not started |
-| DASH-04 | 87 | Not started |
-| RTD-01 | 87 | Not started |
-| RTD-02 | 87 | Not started |
-| RTD-03 | 87 | Not started |
-| BPD-01 | 87 | Not started |
-| BPD-02 | 87 | Not started |
-| BPD-03 | 87 | Not started |
-| VAR-01 | 87 | Not started |
-| VAR-02 | 87 | Not started |
-| VAR-03 | 87 | Not started |
-| VAR-04 | 87 | Not started |
-| VER-01 | 87 | Not started |
-| VER-02 | 87 | Not started |
+| DASH-01 | 87 | Complete |
+| DASH-02 | 87 | Complete |
+| DASH-03 | 87 | Complete |
+| DASH-04 | 87 | Complete |
+| RTD-01 | 87 | Complete |
+| RTD-02 | 87 | Complete |
+| RTD-03 | 87 | Complete |
+| BPD-01 | 87 | Complete |
+| BPD-02 | 87 | Complete |
+| BPD-03 | 87 | Complete |
+| VAR-01 | 87 | Complete |
+| VAR-02 | 87 | Complete |
+| VAR-03 | 87 | Complete |
+| VAR-04 | 87 | Complete |
+| VER-01 | 87 | Complete |
+| VER-02 | 87 | Complete |

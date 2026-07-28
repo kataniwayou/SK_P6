@@ -33,7 +33,8 @@
 
 ### Phases
 
-- [ ] **Phase 87: Grafana Observability Dashboards** — deploy Grafana into the k8s stack (datasource + dashboard provisioning from config, no PVC), then land the two portable dashboard JSONs: runtime instrumentation across all four service classes, and business/pipeline counters across orchestrator/keeper/processor, both driven by multi-select `source` + pod dropdowns.
+- [x] **Phase 87: Grafana Observability Dashboards** ✅ 2026-07-28 — deploy Grafana into the k8s stack (datasource + dashboard provisioning from config, no PVC), then land the two portable dashboard JSONs: runtime instrumentation across all four service classes, and business/pipeline counters across orchestrator/keeper/processor, both driven by multi-select `source` + pod dropdowns.
+- [ ] **Phase 88: Pipeline dashboard maintenance-handoff proof** — prove every business-dashboard panel *discriminates*: drive each fault the panel exists to reveal, and assert through the rendered Grafana panel (Playwright) that it moves — and that the panels it should not affect stay put. Ends in a handoff readiness verdict for the maintenance department.
 
 ### Phase Details
 
@@ -60,8 +61,46 @@
   - [x] 87-02-PLAN.md — Wave 2: Grafana k8s deployment — `k8s/23-grafana.yaml` (Service + Deployment + datasource ConfigMap + dashboard-provider ConfigMap, `emptyDir` not PVC) + the kustomization `configMapGenerator` for the dashboard JSONs + live apply/health smoke (DASH-01, DASH-02, DASH-03)
   - [x] 87-03-PLAN.md — Wave 2: runtime dashboard panels — 17 panels over `process_runtime_dotnet_*` (GC, committed memory, thread pool, exceptions, contention, JIT, pods reporting, restarts), per-pod separable, honestly-titled CPU/uptime/working-set proxies (RTD-01, RTD-02, RTD-03, VAR-03, DASH-04)
   - [x] 87-04-PLAN.md — Wave 2: business/pipeline dashboard panels — 14 panels: three conservation overlays, cross-tier + per-processor gaps, three `or vector(0)`-guarded fault stats, keeper L2 heartbeat, five WebApi ASP.NET Core request panels, `identityName` per-image discrimination (BPD-01..03, VAR-03, VAR-04, DASH-04)
-  - [ ] 87-05-PLAN.md — Wave 3: live proof — `scripts/phase-87-dashboards-verify.ps1` replays every checked-in panel expression through Grafana's datasource proxy under the Class A / Class B rule, asserts dropdown membership, deletes the Grafana pod for the portability proof, and writes `analyzer-reports/phase-87-dashboards.json` (VER-01, VER-02, DASH-01..03, VAR-01..03)
-  - [ ] 87-06-PLAN.md — Wave 4: accepted-limitations record (`87-FINDINGS.md`: RTD-02 CPU/uptime/working-set gap, BPD-02 keeper substitution, VAR-04 correction, VER-01 dropdown superset) + human checkpoint for panel legibility and dropdown interaction (RTD-02, BPD-02, VAR-04, VER-01, VER-02)
+  - [x] 87-05-PLAN.md — Wave 3: live proof — `scripts/phase-87-dashboards-verify.ps1` replays every checked-in panel expression through Grafana's datasource proxy under the Class A / Class B rule, asserts dropdown membership, deletes the Grafana pod for the portability proof, and writes `analyzer-reports/phase-87-dashboards.json` (VER-01, VER-02, DASH-01..03, VAR-01..03)
+  - [x] 87-06-PLAN.md — Wave 4: accepted-limitations record (`87-FINDINGS.md`: RTD-02 CPU/uptime/working-set gap, BPD-02 keeper substitution, VAR-04 correction, VER-01 dropdown superset) + human checkpoint for panel legibility and dropdown interaction (RTD-02, BPD-02, VAR-04, VER-01, VER-02)
+
+#### Phase 88: Pipeline dashboard maintenance-handoff proof — fault-injection sweep asserting every panel discriminates, validated through Grafana panels via Playwright
+
+**Goal**: Establish whether the business/pipeline dashboard is fit to hand to a maintenance department that did not build this system. Phase 87 proved every panel *renders real data*; it did not prove any panel *discriminates*. Every observation to date has been of a single healthy steady state, and **ten of the fourteen panels have only ever been seen in one state** — panels 2, 6, 7, 8 and 13 have shown nothing but zero, panel 9 nothing but a flat line, and the WebApi row (10-14) nothing but idle. A panel that always reads the same value is indistinguishable from a broken one, so this phase drives, for each panel, the actual fault condition that panel exists to reveal, and asserts **through the rendered Grafana panel** that it moves in the expected direction — paired with a cross-talk control asserting the panels it should *not* affect stay put. Also establishes the healthy baseline band per panel (without which "it moved" is unfalsifiable) and the **minimum detectable fault duration**: at 60 s series resolution with `$__rate_interval` at 240 s, a short outage may not render at all, which is a first-order handoff fact. Ends in a readiness verdict plus a symptom → panel → action runbook, each row backed by the scenario that proved it.
+
+**Constraints**: **No new metrics and no `src/` instrumentation changes** — panels compose only what is already emitted (the nine domain counters, the five WebApi/Kestrel metrics, the 17 `process_runtime_dotnet_*` names). Fault scenarios change *system state*, never instrumentation; a panel can therefore only be proven by driving its real fault condition. **Final validation is through the Grafana panels themselves, driven by Playwright** — Prometheus may be queried for diagnosis when a panel disagrees with the data, but never as the verdict. Panel expressions may be recomposed from existing metrics if a scenario exposes a genuinely wrong one.
+
+**Depends on**: Phase 87 (the dashboards, the lint gate, and `phase-87-dashboards-verify.ps1` whose `query_range` correction and derived `$__rate_interval` this phase's assertions rely on)
+
+**Verified precondition — the fault seams exist in code but are UNREACHABLE on k8s (checked 2026-07-28).** The keeper-recovery scenario is the highest-value one in the phase (panels 2 and 8 are `or vector(0)`-guarded, so they render a confident green `0` whether the keeper is idle or dead, and have never once been observed non-zero). It depends on two Phase-79 seams, and the check found this:
+
+  | Seam | Env var | in `src/` | in `k8s/` | on live pods |
+  |---|---|---|---|---|
+  | processor read-fault TRIGGER | `PROCESSOR_DEFEAT_READ` (`ProcessorPipeline.cs:110`) | ✅ committed | ❌ | ❌ |
+  | keeper suppress-send LOSS | `KEEPER_DEFEAT_REINJECT` (`ReinjectConsumer.cs:104`, commit `7ec9169`) | ✅ committed | ❌ | ❌ |
+  | keeper reinject DELAY (FALSIFY-02) | `KEEPER_REINJECT_DELAY_MS` (`ReinjectConsumer.cs:55`) | ⚠️ **uncommitted, working tree only** | ❌ | ❌ |
+
+  Both seams the keeper scenario needs are committed and intact, and both short-circuit to inert when unset. But **no `k8s/` manifest carries any of them** — the deliberate Phase-80 D-08 decision — and `kubectl get deploy` confirms **0 seam vars** on `keeper` and `processor-sample`. The only scripts that reference them (`phase-67-harness.ps1`, `phase-79-falsify.ps1`) are compose-era; `phase-79-falsify.ps1` merely *mentions* `KEEPER_DEFEAT_REINJECT` in its doc comment and neither exports it nor calls `kubectl`. **There is therefore no existing path to arm these on the k8s stack, and building one is a deliverable of this phase, not an improvisation mid-run.** The intended mechanism is runtime-only injection — `kubectl -n skp set env deployment/keeper KEEPER_DEFEAT_REINJECT=1` … drive … `kubectl -n skp set env deployment/keeper KEEPER_DEFEAT_REINJECT-` — with no manifest edit (an `apply -k` would strip it regardless). Two riders: the **FALSIFY-02 delay seam is uncommitted**, so it could be lost and the deployed `keeper:tags-const-1544` image may not even contain it — the keeper scenario does not need it, but any later combined-fault scenario must resolve that first; and arming a seam is **not** required for the trigger side if a fault can be driven by system state alone, which should be preferred wherever it is possible.
+
+**Design consequence — arming a seam restarts the pod, which is itself a signal.** `kubectl set env` triggers a rollout: new pods, new `service_instance_id` values, and a visible discontinuity in every panel — exactly when a clean before/after measurement is being taken. Left unhandled, the restart artifact and the fault signal are indistinguishable, which would invalidate the assertion the scenario exists to make. Every seam-dependent scenario must therefore **arm first → let the stack settle → re-capture the baseline → only then trigger the fault**, and the restart discontinuity must be recorded as an expected artifact in the captured evidence rather than read as a result. The same applies to any scenario using `kubectl scale`.
+
+**Requirements**: TBD — to be derived during planning. Expected to introduce a DISC-* (panel discrimination) and HAND-* (handoff readiness) family; VER-01's two-class rule is a prerequisite, not a deliverable, here.
+
+**Success Criteria** (what must be TRUE):
+
+  1. Every business-dashboard panel has a recorded healthy baseline band (value range, shape, axis) captured from a settled stack, so later movement is measurable rather than impressionistic.
+  2. Each of the fourteen panels has been observed **changing** under the fault it exists to reveal, asserted from the rendered Grafana panel — or is explicitly recorded as accepted-unproven with the reason its fault could not be driven safely.
+  3. Each scenario carries a cross-talk control: the panels it should not affect are asserted unchanged, so a panel wired to the wrong metric is caught.
+  4. The keeper conservation panels (2, 8) have been seen **non-zero** during a real recovery event — they are guarded, so they render a confident green `0` whether the keeper is idle or dead, and have never yet been observed otherwise.
+  5. A repeatable, runtime-only mechanism exists for arming and disarming the Phase-79 fault seams on the k8s stack (none exists today — the seams are committed in `src/` but absent from every manifest and from the live pods), it edits no manifest, and it leaves the stack byte-identical afterwards: seam vars gone, replica counts and images restored.
+  6. Every seam-dependent or `kubectl scale`-dependent scenario re-captures its baseline **after** the resulting pod rollout has settled, and the rollout discontinuity is recorded in the evidence as an expected artifact — so a restart can never be mistaken for the fault signal.
+  7. The minimum detectable fault duration is measured and recorded, so maintenance knows what length of outage this dashboard cannot show them.
+  8. A symptom → panel → action runbook exists, every row traceable to the scenario that proved it.
+  9. A handoff readiness verdict is recorded, listing any blocking gaps and any panel that misleads by default (the structural offsets on 4 and 5, the axis-zoom on 9, the guarded zeros).
+
+**Plans**: 0 plans (run `/gsd:plan-phase 88` to break down)
+
+  - [ ] TBD
 
 ## ✅ v12.0.0 Resilience & Health-Probe Hardening (SHIPPED — 2026-07-27, tag `v12.0.0`)
 
@@ -1513,3 +1552,4 @@ Plans:
 | 68 | Live Resilience Proof — 7 Scenarios (Capstone) | 2/2 | Complete    | 2026-06-15 |
 
 **Coverage:** 23/23 v8.0.0 requirements mapped (CRON-01/02 → 63 · PROC-01/02/03 → 64 · WF-01/02 + ENV-01/02 → 65 · OBS-01/02/03/04 → 66 · FAULT-01/02/03 → 67 · TEST-01..07 → 68). No orphans, no duplicates.
+

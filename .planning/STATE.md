@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v13.0.0
 milestone_name: Observability Dashboards
-status: executing
-stopped_at: Completed 87-03-PLAN.md
-last_updated: "2026-07-27T19:30:04.568Z"
+status: ready_to_plan
+stopped_at: Phase 87 complete (6/6) — ready to discuss Phase 88
+last_updated: 2026-07-28T12:01:01.219Z
 last_activity: 2026-07-27
 progress:
   total_phases: 2
   completed_phases: 1
   total_plans: 15
-  completed_plans: 14
+  completed_plans: 22
   percent: 50
 ---
 
@@ -20,17 +20,17 @@ progress:
 
 See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof) CLOSED & ARCHIVED**; archives at milestones/v8.0.0-{ROADMAP,REQUIREMENTS}.md + phases 63-68 → milestones/v8.0.0-phases/; tagged v8.0.0)
 
-**Current focus:** Phase 87 — grafana-observability-dashboards
+**Current focus:** Phase 88 — pipeline dashboard maintenance handoff proof fault injection
 
 **Core value:** A solid, observable, validated CRUD foundation that future workflow-platform features build on without rework. **Validated at v3.2.0 ship; extended at v3.3.0 (L3→L1→L2 build pipeline), v3.4.0 (BaseConsole + two-process orchestrator messaging), v3.5.0 (Processor Console + execution round-trip), v3.6.0 (exactly-once-effect idempotency), v3.7.0 (Keeper L2-outage dead-letter recovery + workflow pause/resume), v5.0.0 (slot-array + 3-state keeper recovery re-architecture), v6.0.0 (typed base-config seam + Gate A config-schema compatibility), and v7.0.0 (per-replica processor liveness + self-watchdog — closed audit-override, live close gate deferred to v8.0.0).**
 **Current focus:** Phase 68 — live-resilience-proof-7-scenarios-capstone
 
 ## Current Position
 
-Phase: 87 (grafana-observability-dashboards) — EXECUTING
-Plan: 6 of 6
-Status: Ready to execute
-Last activity: 2026-07-27
+Phase: 88
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-07-28
 Current focus: Phase 87 — awaiting `/gsd-plan-phase 87`
 
 ### Quick Tasks Completed
@@ -47,6 +47,7 @@ Current focus: Phase 87 — awaiting `/gsd-plan-phase 87`
 
 ### Roadmap Evolution
 
+- 2026-07-28 — **Phase 88 added** (v13.0.0, after Phase 87): `pipeline-dashboard-maintenance-handoff-proof-fault-injection` — prove the business/pipeline dashboard is fit to hand to a maintenance department that did not build the system. **Motivating observation:** Phase 87 proved every panel *renders real data*; it never proved any panel *discriminates*. Every observation was of one healthy steady state, and **10 of the 14 panels have only ever been seen in a single state** — panels 2/6/7/8/13 nothing but zero, panel 9 nothing but a flat line, the WebApi row (10-14) nothing but idle. A panel that always reads the same value is indistinguishable from a broken one. So the phase drives, per panel, the real fault condition it exists to reveal and asserts **from the rendered Grafana panel** that it moves, **paired with a cross-talk control** asserting the panels it should not affect stay put (that half is what catches a panel wired to the wrong metric). Also captures a healthy baseline band per panel (without which "it moved" is unfalsifiable) and the **minimum detectable fault duration** — at 60 s series resolution with `$__rate_interval` 240 s, a short outage may not render at all, which is a first-order fact for maintenance. **Highest-value scenario = the keeper recovery event** (panels 2 and 8): they are `or vector(0)`-guarded, so they render a confident green `0` whether the keeper is idle or dead, and have never once been seen non-zero. **Locked constraints (user, this session):** (a) **no new metrics, no `src/` instrumentation change** — panels compose only what is already emitted, so a panel can only be proven by driving its real fault; (b) **final validation is through the Grafana panels themselves via the Playwright skill** — Prometheus may be queried for diagnosis when a panel disagrees with the data, never as the verdict. Depends on Phase 87 (dashboards, lint gate, and the `query_range` + derived-`$__rate_interval` correction in `phase-87-dashboards-verify.ps1`). Requirements TBD at planning — expected DISC-* (discrimination) + HAND-* (handoff readiness). **Seam precondition CHECKED 2026-07-28 — seams exist in code but are UNREACHABLE on k8s.** `PROCESSOR_DEFEAT_READ` (`ProcessorPipeline.cs:110`) and `KEEPER_DEFEAT_REINJECT` (`ReinjectConsumer.cs:104`, commit `7ec9169`) are both committed and intact, and both short-circuit to inert when unset — but **no `k8s/` manifest carries them** (the deliberate Phase-80 D-08 omission) and `kubectl get deploy` shows **0 seam vars** on `keeper` and `processor-sample`. The only scripts referencing them (`phase-67-harness.ps1`, `phase-79-falsify.ps1`) are compose-era; `phase-79-falsify.ps1` merely *mentions* `KEEPER_DEFEAT_REINJECT` in a doc comment and neither exports it nor calls `kubectl`. **So there is no existing path to arm them on k8s — building one is now a Phase-88 deliverable (success criterion 5), not an improvisation mid-run:** runtime-only `kubectl set env` injection, no manifest edit, disarmed and stack-restored afterwards. Also found: the FALSIFY-02 delay seam `KEEPER_REINJECT_DELAY_MS` (`ReinjectConsumer.cs:55`) is **uncommitted, working-tree only** — so it could be lost, and the deployed `keeper:tags-const-1544` image may not contain it; the keeper scenario does not need it, but any later combined-fault scenario must resolve that first. **Second-order design consequence (success criterion 6):** arming a seam via `set env` triggers a rollout — new pods, new `service_instance_id`, a visible discontinuity in every panel — so every seam- or `kubectl scale`-dependent scenario must arm → settle → **re-baseline** → only then trigger, and record the rollout discontinuity as an expected artifact. Without that, the restart and the fault signal are indistinguishable and the assertion is void. **Open scoping question still carried into planning:** whether to drive panel 7 (`processor_spawn_dropped`) for real — it needs a broker fault mid-spawn, the riskiest injection in the set — or record it accepted-unproven. **Numbering bug recurred ([[gsd-phase-numbering]], 8th occurrence):** `phase.add` numbered correctly (**88**, `naming_mode: sequential`, `Depends on: Phase 87`) but again inserted the stub at **EOF**, landing inside the archived v8.0.0 section under its coverage line. Removed and re-authored manually into the v13.0.0 section after Phase 87, with full Goal / Constraints / Success Criteria. Root cause still unfixed in the tool — after any `phase.add`, verify placement before trusting it. Next: `/gsd:plan-phase 88`.
 - 2026-07-27 — **Milestone v13.0.0 (Observability Dashboards) started + Phase 87 added.** Two Grafana dashboards over the telemetry the stack already emits: **runtime instrumentation** across all four service classes (`webapi`/`orchestrator`/`keeper`/`processor` — the one instrumentation every service shares) and **business/pipeline** counters across the three services that emit domain counters (`orchestrator_messages_consumed/sent_total` + `orchestrator_step_unresolved_total`, `keeper_messages_consumed/sent_total` + `keeper_l2_probe_total`, `processor_messages_consumed/sent_total` + `processor_spawn_dropped_total`). Both dashboards carry the same two `label_values()`-populated multi-select variables — `source` (service class) and `service_instance_id` (pod), pod chained to source — plus a datasource variable for portability. Grafana deploys into the existing `skp` k8s stack (Deployment + Service + kustomization, datasource + dashboard-provider ConfigMaps) with **no PVC**: dashboards are checked-in JSON, file-provisioned, and a pod recreate must reproduce them exactly. **Scoped decisions (user, this session):** (a) new milestone rather than appending to the shipped/archived v12.0.0; (b) ONE phase, THREE plans (deploy → runtime dashboard → business dashboard + live verify); (c) the WebApi is represented on the business dashboard by **ASP.NET Core request metrics only** — it registers no domain meter and not even the MassTransit meter (`ObservabilityServiceCollectionExtensions.cs:96-118` = AspNetCore + HttpClient + Runtime), and adding WebApi business counters was explicitly ruled OUT of scope so a dashboards milestone does not widen production instrumentation. **Feasibility pre-checked:** no code change is needed for either dropdown — the collector's `resource_to_telemetry_conversion: true` (`k8s/02-configmaps.yaml:85`) already promotes `source` + `service_instance_id` + `service_name` to Prometheus labels. No Grafana existed anywhere in the repo (greenfield). 16 requirements mapped (DASH-01…04, RTD-01…03, BPD-01…03, VAR-01…04, VER-01…02) — all to Phase 87, no orphans. **Numbering:** created MANUALLY (not `phase.add`) with continued numbering from v12.0.0's Phase 86 → **87**, and `STATE.milestone` set to **v13.0.0** BEFORE anything else — deliberately avoiding both [[gsd-phase-numbering]] bugs (stale-pointer mis-numbering + the EOF mis-placement), same approach that worked for Phases 82/83. **Bookkeeping:** v11.0.0's `REQUIREMENTS.md` (still live in the working file, never archived) was copied to `milestones/v11.0.0-REQUIREMENTS.md` before `REQUIREMENTS.md` was rewritten for v13.0.0 — without that step this would have repeated the documented v9.0.0 requirements loss. v11.0.0 itself remains un-closed. Next: `/gsd-plan-phase 87`.
 - 2026-07-21 — **v11.0.0 roadmap created** — 2 phases (84-85), standard granularity, **11/11 requirements mapped** (DATA-01..05 → Phase 84, KIMP-01..06 → Phase 85; no orphans, no duplicates). Dependency-driven order (the byte[] channel is the prerequisite the importer writes into): **84** `byte[]` Data-Channel Widening (DATA-01 ground-truth `byte[]`, DATA-02 JSON-schema-as-lens, DATA-03 byte-for-byte string/JSON equivalence, DATA-04 **the existing 7-scenario fault-recovery sweep `scripts/phase-68-sweep.ps1` reproducing all-PASS is the SOLE acceptance gate — no new test suite**, DATA-05 recovery carries `byte[]` losslessly) → **85** KafkaImporter Processor (KIMP-01 Mode-2 pull-≤N-per-dispatch entry step, KIMP-02 executionId-per-file + bytes-direct-to-L2/never-on-bus, KIMP-03 per-message offset commit fail-loud after confirmed store+hand-off, KIMP-04 content-agnostic, KIMP-05 standalone Kafka container via `host.docker.internal:9092`, KIMP-06 topic/group/N in `ProcessorConfig`). Phase 84 `Depends on: —`; Phase 85 `Depends on: Phase 84`. **Deferred to a future milestone (NOT phases here):** file-manipulator step (MANIP-01) + KafkaExporter terminal step (KEXP-01). **Numbering:** continued from v10.0.0 (ended at Phase 83) → **84/85**; `STATE.milestone` already correctly set to **v11.0.0** (no stale-pointer bug this run). Next: `/gsd-plan-phase 84`.
 - 2026-07-18 — **Milestone v10.0.0 (Orchestrator High Availability) started + Phases 82-83 added** (new milestone after v9.0.0 completed): orchestrator run as N≥2 replicas with single-leader mutual exclusion. **Phase 82** `orchestrator-ha-leader-election` — `KubernetesClient` `LeaderElector` (`RunAndTryToHoldLeadershipForeverAsync`) over a `coordination.k8s.io/v1` Lease in a `BackgroundService`; single-writer volatile `LeaderState`; the leader gate wraps `WorkflowFireJob`'s entry-step `foreach…DispatchAsync` loop ONLY (followers still reschedule + refresh L1; `RelocateTail` step-advancement stays ungated so in-flight workflows never stall on failover); `OrchestratorRoleLogEnricher` stamps `attributes.role`; RBAC Role/RoleBinding for `leases` in `skp`; orchestrator Deployment → N≥2 (HA-01..HA-06). **Phase 83** `orchestrator-ha-failover-proof` — kill the leader mid-run, prove zero duplicate triggers (distinct per-fire correlationIds) + bounded single-leader recovery (HA-07). Design confirmed in the 2026-07-18 conversation; mechanism = library-over-BackgroundService (not roll-your-own), verified `KubernetesClient` API. New dep: `KubernetesClient`. **Numbering:** created MANUALLY (not `phase.add`) with continued numbering (82/83) and `STATE.milestone` set to **v10.0.0** — avoided the [[gsd-phase-numbering]] stale-pointer bug (pointer was stale `v7.0.0`); did NOT run `phases.clear` (would have deleted unarchived v9.0.0 phase dirs 80-81). v9.0.0 left complete-but-unarchived. Created `REQUIREMENTS.md` (HA-01..HA-07).
@@ -749,7 +750,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 
 **Velocity:**
 
-- Total plans completed: 302
+- Total plans completed: 308
 - Average duration: —
 - Total execution time: —
 
@@ -836,6 +837,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | 83 | 5 | - | - |
 | 85 | 4 | - | - |
 | 86 | 9 | - | - |
+| 87 | 6 | - | - |
 
 **Recent Trend:**
 
