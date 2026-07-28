@@ -138,10 +138,12 @@ $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 
 # Declared BEFORE the try so the outer finally can read them under StrictMode even when the
 # precondition gate exits before the step that would have set them ever runs.
-$gfForwardPid    = 0
-$gfForwardOwned  = $false
-$seamArmed       = $false
-$probeWorkflowId = ''
+$gfForwardPid       = 0
+$gfForwardOwned     = $false
+$seamArmed          = $false
+$probeWorkflowId    = ''
+$probeAssignmentIds = @()
+$probeStepIds       = @()
 
 Push-Location $repoRoot
 try {
@@ -227,6 +229,11 @@ try {
     $UnresolvedRouteL2StepKeyViable       = $null
     $UnresolvedRouteChosen                = $null
     $ProbeWorkflowCleanedUp               = $null
+    # PowerShell variable names are case-INSENSITIVE, so the artifact's recorded id deliberately does
+    # NOT differ from the live teardown flag by capitalisation alone — that would be the SAME variable
+    # and clearing one would clear the other.
+    $ProbeWorkflowIdRecorded              = ''
+    $ScaleFaultDetail                     = ''
     # PQ-06
     $SeamArmLanded                 = $null
     $SeamDisarmClean               = $null
@@ -697,15 +704,618 @@ try {
     Write-Phase "  $(@($ScreenshotPaths).Count) screenshot(s) under analyzer-reports/phase-88-screenshots/" 'Gray'
 
     # =========================================================================================
-    # STEPs E-H and STEP J (PQ-01, PQ-03, PQ-05, PQ-06 and the artifact writer) are added by task 2
-    # of plan 88-03. Until then this build answers PQ-02, PQ-04 and PQ-07 only, so it exits 2
-    # (INCONCLUSIVE) — it must never exit 0 while four of the seven questions are unanswered.
+    # STEP E — PQ-03: IS THERE A SAFE ROUTE TO A WebApi 5xx?
+    #
+    # The candidate list is a STATIC in-script [ordered] table. Nothing is derived from a caller
+    # parameter (this script has none) and nothing is discovered from a Swagger document — Swagger is
+    # dev-only in this stack and is not served under the k8s Production environment, so "read the API
+    # surface at runtime and probe whatever it lists" is not available and would not be wanted if it
+    # were (T-88-13 / the T-81-01 precedent).
+    #
+    # Every candidate is a GET plus ONE inert POST — an empty JSON array to the activation route,
+    # which by construction starts nothing. NO dependency outage is driven: taking redis down is a
+    # documented route to a 5xx and it is deliberately excluded, because the Phase-86 hard readiness
+    # latch means the WebApi does not self-heal from it and would need a pod restart, perturbing every
+    # later baseline in the phase (T-88-16).
     # =========================================================================================
-    Write-Phase "PQ-01 / PQ-03 / PQ-05 / PQ-06 are not implemented in this build — exiting 2 (Inconclusive)." 'Yellow'
-    exit 2
+    Write-Phase "STEP E: PQ-03 — static safe-input endpoint enumeration for a 5xx"
+
+    $SafeEndpointCandidates = [ordered]@{
+        'workflow-absent-guid'   = @{ Method = 'GET';  Path = '/api/v1/workflows/00000000-0000-0000-0000-000000000001'; Body = $null; Note = 'well-formed but nonexistent workflow GUID' }
+        'workflow-malformed-id'  = @{ Method = 'GET';  Path = '/api/v1/workflows/not-a-guid';                            Body = $null; Note = 'malformed non-GUID on the same route' }
+        'schema-absent-guid'     = @{ Method = 'GET';  Path = '/api/v1/schemas/00000000-0000-0000-0000-000000000002';    Body = $null; Note = 'nonexistent schema GUID' }
+        'processor-absent-hash'  = @{ Method = 'GET';  Path = '/api/v1/processors/by-source-hash/0000000000000000000000000000000000000000000000000000000000000000'; Body = $null; Note = 'nonexistent processor source-hash lookup' }
+        'unmatched-path'         = @{ Method = 'GET';  Path = '/api/v1/__phase88_probe_unmatched';                       Body = $null; Note = 'unmatched route — expected 404; this is also the 404 driver panel 12 will need' }
+        'orchestration-start-[]' = @{ Method = 'POST'; Path = '/api/v1/orchestration/start';                             Body = '[]';  Note = 'inert activation: an empty JSON array starts nothing' }
+    }
+
+    # ---- one place that issues an HTTP call and returns the status as DATA. -SkipHttpErrorCheck
+    # ---- keeps a 4xx/5xx a RESULT rather than an exception, which is the whole point of this step.
+    function Invoke-ProbeApi {
+        param(
+            [Parameter(Mandatory)][ValidateSet('GET', 'POST', 'PUT', 'DELETE')][string]$Method,
+            [Parameter(Mandatory)][string]$Path,
+            [string]$Body = $null
+        )
+        $out = @{ Method = $Method; Path = $Path; Status = 0; Body = ''; Json = $null; Error = '' }
+        try {
+            $req = @{
+                Method             = $Method
+                Uri                = "$api$Path"
+                TimeoutSec         = 30
+                SkipHttpErrorCheck = $true
+                UseBasicParsing    = $true
+                ErrorAction        = 'Stop'
+            }
+            if ($null -ne $Body) { $req['Body'] = $Body; $req['ContentType'] = 'application/json' }
+            $resp = Invoke-WebRequest @req
+            $out.Status = [int]$resp.StatusCode
+            $out.Body = "$($resp.Content)"
+            if (-not [string]::IsNullOrWhiteSpace($out.Body)) {
+                try { $out.Json = ($out.Body | ConvertFrom-Json) } catch { $out.Json = $null }
+            }
+        } catch {
+            $out.Status = -1
+            $out.Error = "$($_.Exception.Message)"
+        }
+        return $out
+    }
+
+    foreach ($label in $SafeEndpointCandidates.Keys) {
+        $cand = $SafeEndpointCandidates[$label]
+        $r = Invoke-ProbeApi -Method $cand.Method -Path $cand.Path -Body $cand.Body
+        $ProbedEndpoints += [pscustomobject]@{
+            Label  = "$label"
+            Method = "$($cand.Method)"
+            Path   = "$($cand.Path)"
+            Status = [int]$r.Status
+            Note   = "$($cand.Note)"
+        }
+        Write-Phase "  $($cand.Method) $($cand.Path) -> $($r.Status)" 'Gray'
+    }
+
+    # =========================================================================================
+    # STEP F — PQ-05: WHICH ROUTE REACHES AN `orchestrator_step_unresolved` INCREMENT?
+    #
+    # Route A (api-dangling-edge): a step whose NextStepIds names an id absent from the graph. The
+    #   D-08 missing-step gate in CycleDetector rejects exactly this at activation, so the route is
+    #   EXPECTED to be blocked — recording the ACTUAL status, and at which stage it is refused, is
+    #   the point. If the create is what refuses it, the observation is appended to ProbedEndpoints
+    #   as well, because a 5xx there would also be a PQ-03 answer.
+    #
+    # Route B (l2-step-key): delete the L2 projection of a NON-ENTRY step so the orchestrator's L1
+    #   hydration BFS leaves it out of the step map and StepAdvancement.SelectNext files its id under
+    #   UnresolvedIds. Viable only if the deletion SURVIVES: if a stop/start rewrites the key from
+    #   the database, the hole closes before it can ever produce an unresolved edge.
+    #
+    # Everything created here is created on a SEPARATE workflow — never v8-fanout-proof — and is
+    # stopped through the API BEFORE anything is deleted. Deleting workflow rows while the
+    # orchestrator is running leaves an orphaned Quartz cron firing forever and breaks later
+    # conservation checks with Missing=0. The probe workflow also carries a daily 04:00 cron
+    # precisely so it cannot fire during the probe.
+    # =========================================================================================
+    Write-Phase "STEP F: PQ-05 — unresolved-step route enumeration on a SEPARATE probe workflow"
+
+    $probeStepIds       = @()
+    $probeAssignmentIds = @()
+    $guidPattern        = '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$'
+    $probeCron          = '0 0 4 * * *'   # daily 04:00:00 — never inside this probe's wall clock
+
+    # Stop-then-delete, in the only safe order, callable from the happy path AND the outer finally.
+    function Remove-ProbeArtifacts {
+        param([string]$WorkflowId, $AssignmentIds, $StepIds)
+        $ok = $true
+        if (-not [string]::IsNullOrWhiteSpace($WorkflowId)) {
+            $stop = Invoke-ProbeApi -Method 'POST' -Path '/api/v1/orchestration/stop' -Body (ConvertTo-Json @($WorkflowId))
+            Write-Phase "  cleanup: POST /orchestration/stop -> $($stop.Status)" 'Gray'
+            $del = Invoke-ProbeApi -Method 'DELETE' -Path "/api/v1/workflows/$WorkflowId"
+            Write-Phase "  cleanup: DELETE /workflows/$WorkflowId -> $($del.Status)" 'Gray'
+            if ($del.Status -lt 200 -or $del.Status -ge 300) { $ok = $false }
+        }
+        foreach ($aid in @($AssignmentIds)) {
+            $d = Invoke-ProbeApi -Method 'DELETE' -Path "/api/v1/assignments/$aid"
+            Write-Phase "  cleanup: DELETE /assignments/$aid -> $($d.Status)" 'Gray'
+            if ($d.Status -lt 200 -or $d.Status -ge 300) { $ok = $false }
+        }
+        # Steps last, and only after their outgoing edges are cleared: both step_next_steps FKs are
+        # OnDelete(Restrict), so a step that still points at another cannot be removed. An UPDATE
+        # with NextStepIds null is what deletes the junction rows.
+        foreach ($s in @($StepIds)) {
+            $sid = "$($s.Id)"
+            $clear = [pscustomobject]@{
+                name = "$($s.Name)"; version = '1.0.0'; description = $null
+                processorId = "$($s.ProcessorId)"; nextStepIds = $null; entryCondition = 4
+            }
+            $u = Invoke-ProbeApi -Method 'PUT' -Path "/api/v1/steps/$sid" -Body ($clear | ConvertTo-Json -Depth 10)
+            Write-Phase "  cleanup: PUT /steps/$sid (edges cleared) -> $($u.Status)" 'Gray'
+        }
+        foreach ($s in @($StepIds)) {
+            $sid = "$($s.Id)"
+            $d = Invoke-ProbeApi -Method 'DELETE' -Path "/api/v1/steps/$sid"
+            Write-Phase "  cleanup: DELETE /steps/$sid -> $($d.Status)" 'Gray'
+            if ($d.Status -lt 200 -or $d.Status -ge 300) { $ok = $false }
+        }
+        return $ok
+    }
+
+    try {
+        # ---- resolve the shared processor id (a READ; nothing is created) ------------------------
+        $procList = Invoke-ProbeApi -Method 'GET' -Path '/api/v1/processors'
+        $procId = ''
+        if ($procList.Status -eq 200 -and $null -ne $procList.Json) {
+            foreach ($p in @($procList.Json)) {
+                $pn = @(Get-PropertyNames $p)
+                if ($pn -contains 'id' -and "$($p.id)" -match $guidPattern) { $procId = "$($p.id)"; break }
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($procId)) {
+            throw "no processor row could be read from GET /api/v1/processors (status $($procList.Status))"
+        }
+        Write-Phase "  shared processor id = $procId" 'Gray'
+
+        # ---- ROUTE A — the dangling next-step edge ------------------------------------------------
+        $danglingTarget = [guid]::NewGuid().ToString()
+        $danglingStep = [pscustomobject]@{
+            name = "phase88-probe-dangling-$([guid]::NewGuid().ToString('N'))"; version = '1.0.0'
+            description = 'phase-88 wave-0 probe PQ-05 route A'; processorId = $procId
+            nextStepIds = @($danglingTarget); entryCondition = 4
+        }
+        $ra = Invoke-ProbeApi -Method 'POST' -Path '/api/v1/steps' -Body ($danglingStep | ConvertTo-Json -Depth 10)
+        Write-Phase "  route A: POST /steps with a dangling nextStepIds entry -> $($ra.Status)" 'Gray'
+        $ProbedEndpoints += [pscustomobject]@{
+            Label  = 'step-create-dangling-edge'
+            Method = 'POST'
+            Path   = '/api/v1/steps'
+            Status = [int]$ra.Status
+            Note   = 'PQ-05 route A: a well-formed step whose nextStepIds names an id that does not exist'
+        }
+
+        if ($ra.Status -ge 200 -and $ra.Status -lt 300 -and $null -ne $ra.Json) {
+            # The create was accepted, so the route survives to activation and the ACTIVATION status
+            # is the real answer. Track the step for cleanup before anything else can fail.
+            $danglingId = "$($ra.Json.id)"
+            $probeStepIds += [pscustomobject]@{ Id = $danglingId; Name = "$($ra.Json.name)"; ProcessorId = $procId }
+            $asgA = Invoke-ProbeApi -Method 'POST' -Path '/api/v1/assignments' -Body ([pscustomobject]@{
+                name = "phase88-probe-asg-$([guid]::NewGuid().ToString('N'))"; version = '1.0.0'
+                description = $null; stepId = $danglingId; payload = '{"number":1,"label":"Step_A"}'
+            } | ConvertTo-Json -Depth 10)
+            if ($asgA.Status -ge 200 -and $asgA.Status -lt 300 -and $null -ne $asgA.Json) {
+                $probeAssignmentIds += "$($asgA.Json.id)"
+                $wfA = Invoke-ProbeApi -Method 'POST' -Path '/api/v1/workflows' -Body ([pscustomobject]@{
+                    name = "phase88-probe-dangling-$([guid]::NewGuid().ToString('N'))"; version = '1.0.0'
+                    description = $null; entryStepIds = @($danglingId)
+                    assignmentIds = @("$($asgA.Json.id)"); cronExpression = $probeCron
+                } | ConvertTo-Json -Depth 10)
+                if ($wfA.Status -ge 200 -and $wfA.Status -lt 300 -and $null -ne $wfA.Json) {
+                    $probeWorkflowId = "$($wfA.Json.id)"
+                    $startA = Invoke-ProbeApi -Method 'POST' -Path '/api/v1/orchestration/start' -Body (ConvertTo-Json @($probeWorkflowId))
+                    $UnresolvedRouteApiDanglingEdgeStatus = [int]$startA.Status
+                    $UnresolvedRouteApiDanglingEdgeStage  = 'activation'
+                    Write-Phase "  route A: POST /orchestration/start -> $($startA.Status)" 'Gray'
+                } else {
+                    $UnresolvedRouteApiDanglingEdgeStatus = [int]$wfA.Status
+                    $UnresolvedRouteApiDanglingEdgeStage  = 'workflow-create'
+                }
+            } else {
+                $UnresolvedRouteApiDanglingEdgeStatus = [int]$asgA.Status
+                $UnresolvedRouteApiDanglingEdgeStage  = 'assignment-create'
+            }
+            # Tear route A down completely before route B builds its own graph.
+            $null = Remove-ProbeArtifacts -WorkflowId $probeWorkflowId -AssignmentIds $probeAssignmentIds -StepIds $probeStepIds
+            $probeWorkflowId = ''; $probeAssignmentIds = @(); $probeStepIds = @()
+        } else {
+            $UnresolvedRouteApiDanglingEdgeStatus = [int]$ra.Status
+            $UnresolvedRouteApiDanglingEdgeStage  = 'step-create'
+        }
+
+        # ---- ROUTE B — the L2 step-key deletion ---------------------------------------------------
+        # A valid two-step chain: HEAD -> SINK, both on the shared processor, one assignment each.
+        # SINK is the NON-ENTRY step whose L2 key the route would delete.
+        $sink = Invoke-ProbeApi -Method 'POST' -Path '/api/v1/steps' -Body ([pscustomobject]@{
+            name = "phase88-probe-sink-$([guid]::NewGuid().ToString('N'))"; version = '1.0.0'
+            description = 'phase-88 wave-0 probe PQ-05 route B sink'; processorId = $procId
+            nextStepIds = $null; entryCondition = 4
+        } | ConvertTo-Json -Depth 10)
+        if ($sink.Status -lt 200 -or $sink.Status -ge 300 -or $null -eq $sink.Json) {
+            throw "could not create the probe sink step (status $($sink.Status))"
+        }
+        $sinkId = "$($sink.Json.id)"
+        $probeStepIds += [pscustomobject]@{ Id = $sinkId; Name = "$($sink.Json.name)"; ProcessorId = $procId }
+
+        $head = Invoke-ProbeApi -Method 'POST' -Path '/api/v1/steps' -Body ([pscustomobject]@{
+            name = "phase88-probe-head-$([guid]::NewGuid().ToString('N'))"; version = '1.0.0'
+            description = 'phase-88 wave-0 probe PQ-05 route B head'; processorId = $procId
+            nextStepIds = @($sinkId); entryCondition = 4
+        } | ConvertTo-Json -Depth 10)
+        if ($head.Status -lt 200 -or $head.Status -ge 300 -or $null -eq $head.Json) {
+            throw "could not create the probe head step (status $($head.Status))"
+        }
+        $headId = "$($head.Json.id)"
+        # Head FIRST in the teardown list — it is the one carrying the outgoing edge.
+        $probeStepIds = @([pscustomobject]@{ Id = $headId; Name = "$($head.Json.name)"; ProcessorId = $procId }) + $probeStepIds
+
+        foreach ($sid in @($headId, $sinkId)) {
+            $asg = Invoke-ProbeApi -Method 'POST' -Path '/api/v1/assignments' -Body ([pscustomobject]@{
+                name = "phase88-probe-asg-$([guid]::NewGuid().ToString('N'))"; version = '1.0.0'
+                description = $null; stepId = $sid; payload = '{"number":1,"label":"Step_A"}'
+            } | ConvertTo-Json -Depth 10)
+            if ($asg.Status -lt 200 -or $asg.Status -ge 300 -or $null -eq $asg.Json) {
+                throw "could not create a probe assignment (status $($asg.Status))"
+            }
+            $probeAssignmentIds += "$($asg.Json.id)"
+        }
+
+        $wfB = Invoke-ProbeApi -Method 'POST' -Path '/api/v1/workflows' -Body ([pscustomobject]@{
+            name = "phase88-probe-l2-$([guid]::NewGuid().ToString('N'))"; version = '1.0.0'
+            description = 'phase-88 wave-0 probe PQ-05 route B'; entryStepIds = @($headId)
+            assignmentIds = @($probeAssignmentIds); cronExpression = $probeCron
+        } | ConvertTo-Json -Depth 10)
+        if ($wfB.Status -lt 200 -or $wfB.Status -ge 300 -or $null -eq $wfB.Json) {
+            throw "could not create the probe workflow (status $($wfB.Status))"
+        }
+        $probeWorkflowId = "$($wfB.Json.id)"
+        Write-Phase "  probe workflow $probeWorkflowId created (head $headId -> sink $sinkId)" 'Gray'
+
+        $startB = Invoke-ProbeApi -Method 'POST' -Path '/api/v1/orchestration/start' -Body (ConvertTo-Json @($probeWorkflowId))
+        Write-Phase "  route B: POST /orchestration/start -> $($startB.Status)" 'Gray'
+        if ($startB.Status -ne 204) {
+            throw "the probe workflow did not activate (status $($startB.Status)): $($startB.Body)"
+        }
+
+        if ($probeWorkflowId -notmatch $guidPattern -or $sinkId -notmatch $guidPattern) {
+            throw "refusing to build an L2 key from a value that is not a GUID"
+        }
+        $sinkKey = "skp:${probeWorkflowId}:${sinkId}"
+
+        $read1 = Invoke-Phase88Ctl -Arguments @('exec', 'statefulset/redis', '--', 'redis-cli', 'GET', $sinkKey)
+        $present1 = ($read1.Ok -and -not [string]::IsNullOrWhiteSpace(("$($read1.Output)").Trim()))
+        Write-Phase "  L2 key $sinkKey present after activation = $present1" 'Gray'
+        if (-not $present1) {
+            throw "the non-entry step's L2 key was absent immediately after a successful activation"
+        }
+
+        $null = Invoke-Phase88Ctl -Arguments @('exec', 'statefulset/redis', '--', 'redis-cli', 'DEL', $sinkKey)
+        $read2 = Invoke-Phase88Ctl -Arguments @('exec', 'statefulset/redis', '--', 'redis-cli', 'GET', $sinkKey)
+        $present2 = ($read2.Ok -and -not [string]::IsNullOrWhiteSpace(("$($read2.Output)").Trim()))
+        Write-Phase "  L2 key present after DEL = $present2" 'Gray'
+
+        # The decisive cycle: does a stop/start rewrite the hole shut?
+        $null = Invoke-ProbeApi -Method 'POST' -Path '/api/v1/orchestration/stop' -Body (ConvertTo-Json @($probeWorkflowId))
+        $restart = Invoke-ProbeApi -Method 'POST' -Path '/api/v1/orchestration/start' -Body (ConvertTo-Json @($probeWorkflowId))
+        Write-Phase "  route B: stop/start cycle -> restart $($restart.Status)" 'Gray'
+        $read3 = Invoke-Phase88Ctl -Arguments @('exec', 'statefulset/redis', '--', 'redis-cli', 'GET', $sinkKey)
+        $present3 = ($read3.Ok -and -not [string]::IsNullOrWhiteSpace(("$($read3.Output)").Trim()))
+        Write-Phase "  L2 key present after the stop/start cycle = $present3" 'Gray'
+
+        # Viable ONLY if the deletion survives the cycle. A rewritten key means the hole closes before
+        # the orchestrator's hydration BFS could ever miss the step.
+        $UnresolvedRouteL2StepKeyViable = ((-not $present2) -and (-not $present3))
+    }
+    catch {
+        $UnevaluableQuestions += "PQ-05 UnresolvedRouteChosen ($($_.Exception.Message))"
+        Write-Phase "  PQ-05 could not be evaluated end to end: $($_.Exception.Message)" 'Yellow'
+    }
+    finally {
+        $ProbeWorkflowCleanedUp = Remove-ProbeArtifacts -WorkflowId $probeWorkflowId -AssignmentIds $probeAssignmentIds -StepIds $probeStepIds
+        if (-not [string]::IsNullOrWhiteSpace($probeWorkflowId)) {
+            # Belt and braces: the API's own stop cleanup BFS-collects step keys from the root, so a
+            # step key this probe deliberately deleted could leave its siblings behind.
+            $null = Invoke-Phase88Ctl -Arguments @('exec', 'statefulset/redis', '--', 'redis-cli', 'DEL', "skp:$probeWorkflowId")
+        }
+        $ProbeWorkflowIdRecorded = $probeWorkflowId
+        $probeWorkflowId = ''
+        $probeAssignmentIds = @()
+        $probeStepIds = @()
+        Write-Phase "  probe artifacts removed (clean=$ProbeWorkflowCleanedUp)" 'Gray'
+    }
+
+    # The chosen route, mechanically. `none` is a legitimate measured answer: it means panel 6 joins
+    # the accepted-unproven register rather than being driven by an improvisation.
+    if ($UnresolvedRouteApiDanglingEdgeStatus -ge 200 -and $UnresolvedRouteApiDanglingEdgeStatus -lt 300) {
+        $UnresolvedRouteChosen = 'api-dangling-edge'
+    } elseif ($UnresolvedRouteL2StepKeyViable -eq $true) {
+        $UnresolvedRouteChosen = 'l2-step-key'
+    } elseif ($null -eq $UnresolvedRouteApiDanglingEdgeStatus -and $null -eq $UnresolvedRouteL2StepKeyViable) {
+        $UnresolvedRouteChosen = $null
+    } else {
+        $UnresolvedRouteChosen = 'none'
+    }
+    Write-Phase "  PQ-05: danglingEdgeStatus=$UnresolvedRouteApiDanglingEdgeStatus ($UnresolvedRouteApiDanglingEdgeStage) l2StepKeyViable=$UnresolvedRouteL2StepKeyViable -> $UnresolvedRouteChosen" 'Gray'
+
+    # ---- re-evaluate PQ-03 across EVERY status observed, including route A's -----------------------
+    $Safe5xxFound = $false
+    $Safe5xxRoute = $null
+    foreach ($e in @($ProbedEndpoints)) {
+        if ([int]$e.Status -ge 500 -and [int]$e.Status -le 599) {
+            $Safe5xxFound = $true
+            $Safe5xxRoute = "$($e.Method) $($e.Path)"
+            break
+        }
+    }
+    Write-Phase "  PQ-03: Safe5xxFound=$Safe5xxFound route=$Safe5xxRoute over $(@($ProbedEndpoints).Count) probed endpoints" 'Gray'
+
+    # =========================================================================================
+    # STEP G — PQ-01: DOES A PLAIN PROCESSOR CRASH PRODUCE KEEPER RECOVERY TRAFFIC HERE?
+    #
+    # keeper_messages_consumed_total / _sent_total increment ONLY inside a recovery event, and at
+    # Phase-87 measurement time neither name was in the entire __name__ index — not merely at zero,
+    # never emitted inside the retention window. Prior sweeps that certainly did drive recoveries are
+    # outside that window, so whether a whole-tier processor crash reaches the keeper in THIS cluster
+    # is genuinely unknown and has to be measured.
+    #
+    # The answer is taken TWO independent ways and both are recorded: a diagnostic proxy query for
+    # the counter's existence, and a rendered read of panel 2 whose legend NAME is itself a signal —
+    # while the counter does not exist the `or vector(0)` guard supplies a label-less series that
+    # renders as the literal `consumed ` with a trailing space, and the moment the counter exists the
+    # same row reads `consumed keeper`. The names are recorded verbatim and are never trimmed.
+    # =========================================================================================
+    Write-Phase "STEP G: PQ-01 — drive traffic, crash the processor tier, then look for keeper recovery traffic"
+
+    $wfIdRaw = ''
+    $wfIdExit = 1
+    try {
+        $wfIdRaw = kubectl -n skp exec statefulset/postgres -- psql -U postgres -d stepsdb -tA -c "SELECT id FROM workflows WHERE name = 'v8-fanout-proof'"
+        $wfIdExit = $LASTEXITCODE
+    } catch { $wfIdExit = 1 }
+    $wfId = ''
+    foreach ($line in @(("$wfIdRaw") -split "`r?`n")) {
+        $t = ("$line").Trim()
+        if ($t -match $guidPattern) { $wfId = $t; break }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($wfId)) {
+        # The seeder EXISTS to create this workflow. It is idempotent and GET-matches the sentinel
+        # name, so running it when the row is already present is a multi-minute no-op — hence it is
+        # invoked only when the lookup actually came back empty.
+        Write-Phase "  the fan-out workflow is absent — running the idempotent seeder." 'Yellow'
+        dotnet test tests/BaseApi.Tests/BaseApi.Tests.csproj -c Release -- --filter-method "*FanOutSeeder_SeedsAndSelfVerifies*" 2>&1 | Out-String | Write-Host
+        if ($LASTEXITCODE -ne 0) { Write-Phase "seeder failed (exit $LASTEXITCODE). Aborting." 'Red'; exit 50 }
+        try {
+            $wfIdRaw = kubectl -n skp exec statefulset/postgres -- psql -U postgres -d stepsdb -tA -c "SELECT id FROM workflows WHERE name = 'v8-fanout-proof'"
+            $wfIdExit = $LASTEXITCODE
+        } catch { $wfIdExit = 1 }
+        foreach ($line in @(("$wfIdRaw") -split "`r?`n")) {
+            $t = ("$line").Trim()
+            if ($t -match $guidPattern) { $wfId = $t; break }
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($wfId)) {
+        Write-Phase "could not resolve the fan-out workflow id (psql exit $wfIdExit). Aborting." 'Red'; exit 50
+    }
+    Write-Phase "  resolved traffic workflow id = $wfId" 'Gray'
+
+    $startResp = Invoke-ProbeApi -Method 'POST' -Path '/api/v1/orchestration/start' -Body (ConvertTo-Json @($wfId))
+    if ($startResp.Status -ne 204) {
+        Write-Phase "activation gate failed — expected 204, got $($startResp.Status). Aborting." 'Red'; exit 50
+    }
+    Write-Phase "  activation accepted (204) — holding 120s so work is genuinely in flight..." 'Gray'
+    Start-Sleep -Seconds 120
+
+    $scale = Invoke-TierScaleFault -Tier 'processor-sample' -DwellSeconds 90
+    $ScaleFaultDetail = "$($scale.Detail)"
+    Write-Phase "  scale fault: Ok=$($scale.Ok) code=$($scale.FailureCode) before=$($scale.ReplicasBefore) after=$($scale.ReplicasAfter) restored=$($scale.ReplicasRestored)" 'Gray'
+    if (-not $scale.Ok) {
+        # An INFRA ABORT with its own code. The library already issued a best-effort restore and the
+        # outer finally still runs, but nothing about PQ-01 was measured, so this is not a verdict.
+        if ($scale.FailureCode -eq 62) {
+            Write-Phase "could not read the live replica count / pod set for processor-sample: $($scale.Detail). Aborting." 'Red'; exit 62
+        }
+        Write-Phase "the processor-sample scale fault failed as infrastructure: $($scale.Detail). Aborting." 'Red'; exit 60
+    }
+
+    # >= 3 export cadences after the restore so any keeper recovery counter has actually reached
+    # Prometheus before it is looked for. Looking too early would answer "no" for the wrong reason.
+    Write-Phase "  settling 180s (3 export cadences) before looking for keeper recovery traffic..." 'Gray'
+    Start-Sleep -Seconds 180
+
+    $nowUnix2 = ([DateTimeOffset]::UtcNow).ToUnixTimeSeconds()
+    try {
+        $kq = Invoke-ProxyRangeQuery -Query 'keeper_messages_consumed_total' -StartUnix ($nowUnix2 - 1800) -EndUnix $nowUnix2 -StepSeconds 60
+        $n = 0
+        foreach ($s in @($kq.data.result)) {
+            $sn = @(Get-PropertyNames $s)
+            if ($sn -contains 'values' -and @($s.values).Count -gt 0) { $n++ }
+        }
+        $KeeperConsumedSeriesCount = $n
+        $KeeperRecoveryTrafficObserved = ($n -gt 0)
+        Write-Phase "  keeper_messages_consumed_total: $n non-empty series in the last 30 min" 'Gray'
+    } catch {
+        $UnevaluableQuestions += "PQ-01 KeeperRecoveryTrafficObserved (diagnostic query failed: $($_.Exception.Message))"
+        Write-Phase "  the keeper counter query failed: $($_.Exception.Message)" 'Yellow'
+    }
+
+    $p2Wins = @(Get-PinnedWindowSeries -EndUtc ([datetime]::UtcNow.AddSeconds(-120)) -SubWindowSeconds 60 -Count 10)
+    $p2Mode = if ($null -ne $LocatorModeChosen) { $LocatorModeChosen } else { 'viewpanel' }
+    $p2Batch = Invoke-PanelReadBatch -PanelIds @($Panel2Id) -Windows $p2Wins -ScreenshotDir $screenshotDir `
+                 -LocatorMode $p2Mode -PanelTitles @('Keeper consumed vs sent (conservation)') `
+                 -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight -BasicAuthBase64 $adminB64
+    if ($p2Batch.State -eq 'ReaderMissing') {
+        Write-Phase "the panel reader became unavailable before the panel-2 read: $($p2Batch.Error). Aborting." 'Red'; exit 63
+    }
+    $Panel2LegendNamesAfter = @(Get-LegendNames $p2Batch.Readings $Panel2Id)
+    $ScreenshotPaths        = @($ScreenshotPaths + @(Get-ScreenshotPaths $p2Batch.Readings) | Select-Object -Unique)
+    Write-Phase "  panel 2 legend names (verbatim): [$($Panel2LegendNamesAfter -join '|')]" 'Gray'
+
+    # =========================================================================================
+    # STEP H — PQ-06: DOES THE SEAM MECHANISM LAND AND CLEAR ON A LIVE POD?
+    #
+    # This proves the MECHANISM only. It does NOT prove that the deployed keeper:tags-const-1544
+    # image HONOURS KEEPER_DEFEAT_REINJECT — only a real recovery event can show that, and plan
+    # 88-07 owns it. A green here is a green for "set env lands and clears", nothing more.
+    # =========================================================================================
+    Write-Phase "STEP H: PQ-06 — seam arm / assert / disarm smoke on the keeper"
+
+    $arm = Set-Phase88Seam -Tier 'keeper' -Name 'KEEPER_DEFEAT_REINJECT'
+    if ($arm.Armed) { $seamArmed = $true }
+    $SeamRolloutOldPods = @($arm.PodNamesBefore)
+    $SeamRolloutNewPods = @($arm.PodNamesAfter)
+    $armEnv = Invoke-Phase88Ctl -Arguments @('get', 'deploy', 'keeper', '-o', 'jsonpath={.spec.template.spec.containers[0].env}')
+    $SeamArmLanded = ([bool]$arm.Ok -and $armEnv.Ok -and (("$($armEnv.Output)") -match 'KEEPER_DEFEAT_REINJECT'))
+    Write-Phase "  arm: Ok=$($arm.Ok) code=$($arm.FailureCode) landed=$SeamArmLanded" 'Gray'
+    Write-Phase "  rollout pods: [$($SeamRolloutOldPods -join ', ')] -> [$($SeamRolloutNewPods -join ', ')]" 'Gray'
+
+    $clear = Clear-Phase88Seam -Tier 'keeper' -Name 'KEEPER_DEFEAT_REINJECT'
+    if ($clear.Ok) { $seamArmed = $false }
+    $clearEnv = Invoke-Phase88Ctl -Arguments @('get', 'deploy', 'keeper', '-o', 'jsonpath={.spec.template.spec.containers[0].env}')
+    $SeamDisarmClean = ([bool]$clear.Ok -and $clearEnv.Ok -and -not (("$($clearEnv.Output)") -match 'DEFEAT|REINJECT_DELAY'))
+    Write-Phase "  disarm: Ok=$($clear.Ok) code=$($clear.FailureCode) clean=$SeamDisarmClean" 'Gray'
+
+    # =========================================================================================
+    # STEP J — ARTIFACT AND VERDICT.
+    # The artifact is written FIRST and the exit code is resolved from the SAME in-memory object,
+    # so an artifact can never disagree with the code the process returned.
+    # =========================================================================================
+    Write-Phase "STEP J: restore assertion, artifact, verdict"
+
+    $restore = Assert-StackRestored -Tiers $Tiers -ExpectedReplicas $preReplicas -ExpectedImages $preImages
+    Write-Phase "  restore: SeamVarsClean=$($restore.SeamVarsClean) ReplicasRestored=$($restore.ReplicasRestored) ImagesUnchanged=$($restore.ImagesUnchanged)" 'Gray'
+
+    # Any of the seven still unanswered and not already named is named now — an unanswered question
+    # must never be able to hide behind a Pass.
+    $sevenAnswers = [ordered]@{
+        'PQ-01 KeeperRecoveryTrafficObserved' = $KeeperRecoveryTrafficObserved
+        'PQ-02 ViewPanelUrlWorks'             = $ViewPanelUrlWorks
+        'PQ-03 Safe5xxFound'                  = $Safe5xxFound
+        'PQ-04 RateIntervalPinned'            = $RateIntervalPinned
+        'PQ-05 UnresolvedRouteChosen'         = $UnresolvedRouteChosen
+        'PQ-06 SeamArmLanded'                 = $SeamArmLanded
+        'PQ-07 OldestSampleUtc'               = $OldestSampleUtc
+    }
+    foreach ($k in $sevenAnswers.Keys) {
+        if ($null -ne $sevenAnswers[$k]) { continue }
+        if (@($UnevaluableQuestions | Where-Object { "$_" -like "$k*" }).Count -gt 0) { continue }
+        $UnevaluableQuestions += "$k (no answer was produced)"
+    }
+
+    # PRECEDENCE: Fail BEATS Inconclusive. A dirty stack is a claim that was EVALUATED and came back
+    # false — positive evidence of a defect — and no quantity of other unevaluated claims makes it
+    # less true. Inconclusive means only "nothing failed, but something could not be checked".
+    $verdict = 'Pass'
+    if (-not $restore.Ok) { $verdict = 'Fail' }
+    elseif (@($UnevaluableQuestions).Count -gt 0) { $verdict = 'Inconclusive' }
+
+    $rateIntervalSeconds = if ($RateIntervalPinned -eq $true) { $RateIntervalNarrowSeconds } else { $null }
+
+    $human = "phase-88-wave0-probe verdict=${verdict}: " +
+             "PQ-01 keeperRecoveryTraffic=$KeeperRecoveryTrafficObserved (series=$KeeperConsumedSeriesCount) | " +
+             "PQ-02 viewPanel=$ViewPanelUrlWorks stat=$StatPanelParsed legend=$TimeseriesLegendParsed namesBound=$TimeseriesLegendNamesBound mode=$LocatorModeChosen | " +
+             "PQ-03 safe5xx=$Safe5xxFound ($Safe5xxRoute) | " +
+             "PQ-04 rateIntervalPinned=$RateIntervalPinned ($RateIntervalNarrowSeconds/$RateIntervalWideSeconds s) | " +
+             "PQ-05 route=$UnresolvedRouteChosen (danglingEdge=$UnresolvedRouteApiDanglingEdgeStatus@$UnresolvedRouteApiDanglingEdgeStage, l2Viable=$UnresolvedRouteL2StepKeyViable, cleanedUp=$ProbeWorkflowCleanedUp) | " +
+             "PQ-06 seamArmLanded=$SeamArmLanded seamDisarmClean=$SeamDisarmClean | " +
+             "PQ-07 oldestSample=$OldestSampleUtc ($RetentionHoursObserved h, horizonLimited=$RetentionHorizonLimited) | " +
+             "stack clean: seamVars=$($restore.SeamVarsClean) replicas=$($restore.ReplicasRestored) images=$($restore.ImagesUnchanged) | " +
+             "unevaluable=$(@($UnevaluableQuestions).Count)"
+
+    $report = [ordered]@{
+        ScenarioId                           = 'phase-88-wave0-probe'
+        Verdict                              = $verdict
+
+        KeeperRecoveryTrafficObserved        = $KeeperRecoveryTrafficObserved
+        KeeperConsumedSeriesCount            = $KeeperConsumedSeriesCount
+        Panel2LegendNamesAfter               = @($Panel2LegendNamesAfter)
+
+        ViewPanelUrlWorks                    = $ViewPanelUrlWorks
+        StatPanelParsed                      = $StatPanelParsed
+        TimeseriesLegendParsed               = $TimeseriesLegendParsed
+        TimeseriesLegendNamesBound           = $TimeseriesLegendNamesBound
+        Panel9LegendNames                    = @($Panel9LegendNames)
+        LocatorModeChosen                    = $LocatorModeChosen
+        Panel8RawText                        = $Panel8RawText
+        Panel9RawText                        = $Panel9RawText
+
+        Safe5xxFound                         = $Safe5xxFound
+        Safe5xxRoute                         = $Safe5xxRoute
+        ProbedEndpoints                      = @($ProbedEndpoints)
+
+        DatasourceTimeIntervalSeconds        = $DatasourceTimeIntervalSeconds
+        RateIntervalNarrowSeconds            = $RateIntervalNarrowSeconds
+        RateIntervalWideSeconds              = $RateIntervalWideSeconds
+        RateIntervalPinned                   = $RateIntervalPinned
+
+        UnresolvedRouteApiDanglingEdgeStatus = $UnresolvedRouteApiDanglingEdgeStatus
+        UnresolvedRouteApiDanglingEdgeStage  = $UnresolvedRouteApiDanglingEdgeStage
+        UnresolvedRouteL2StepKeyViable       = $UnresolvedRouteL2StepKeyViable
+        UnresolvedRouteChosen                = $UnresolvedRouteChosen
+        ProbeWorkflowId                      = $ProbeWorkflowIdRecorded
+        ProbeWorkflowCleanedUp               = $ProbeWorkflowCleanedUp
+
+        SeamArmLanded                        = $SeamArmLanded
+        SeamDisarmClean                      = $SeamDisarmClean
+        SeamRolloutOldPods                   = @($SeamRolloutOldPods)
+        SeamRolloutNewPods                   = @($SeamRolloutNewPods)
+
+        OldestSampleUtc                      = $OldestSampleUtc
+        RetentionHoursObserved               = $RetentionHoursObserved
+        RetentionHorizonHours                = $RetentionHorizonHours
+        RetentionHorizonLimited              = $RetentionHorizonLimited
+
+        SeamVarsClean                        = $restore.SeamVarsClean
+        ReplicasRestored                     = $restore.ReplicasRestored
+        ImagesUnchanged                      = $restore.ImagesUnchanged
+        SeamVarsFound                        = @($restore.SeamVarsFound)
+        ReplicaMismatches                    = @($restore.ReplicaMismatches)
+        ImageMismatches                      = @($restore.ImageMismatches)
+        UnknownTiers                         = @($restore.UnknownTiers)
+
+        UnevaluableQuestions                 = @($UnevaluableQuestions)
+
+        ViewportWidth                        = $ViewportWidth
+        ViewportHeight                       = $ViewportHeight
+        RateIntervalSeconds                  = $rateIntervalSeconds
+        ScreenshotPaths                      = @($ScreenshotPaths)
+
+        ReplicasBefore                       = $preReplicas
+        ImagesBefore                         = $preImages
+        ScaleFaultDetail                     = $ScaleFaultDetail
+        CompletedUtc                         = ([DateTimeOffset]::UtcNow).ToString('o')
+
+        HumanSummary                         = $human
+    }
+
+    New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
+    # -Depth 10, not the repo's usual shallower depth: ProbedEndpoints and the pod/name arrays are
+    # nested one level further than any earlier artifact and would otherwise serialise as type names.
+    ([pscustomobject]$report) | ConvertTo-Json -Depth 10 | Set-Content -Path $reportPath -Encoding utf8
+    Write-Phase "verdict artifact: $reportPath" 'Green'
+    Write-Phase $human $(if ($verdict -eq 'Pass') { 'Green' } elseif ($verdict -eq 'Fail') { 'Red' } else { 'Yellow' })
+
+    # Resolve the exit code from the SAME in-memory object the artifact was written from. 65 is a
+    # strictly MORE SPECIFIC rendering of the same Fail — the artifact's Verdict stays authoritative,
+    # and a dirty stack keeps its own distinct code so it can never be mistaken for an ordinary
+    # assertion failure by a caller reading only the exit status.
+    $exitCode = Resolve-AnalyzerExitCode ([pscustomobject]$report)
+    if (-not $restore.Ok) { $exitCode = 65 }
+    $resolved = Resolve-SweepClass $exitCode
+    Write-Phase "class=$($resolved.Class) exit=$exitCode" 'Gray'
+    exit $exitCode
 }
 finally {
     # ---- STEP Z — TEARDOWN ----------------------------------------------------------------------
+    # Everything here runs on EVERY path, including an interrupted run. The two hazards it closes are
+    # the phase's standing ones: a seam left armed silently poisons every later scenario AND every
+    # later resilience sweep (and the failure presents as an inexplicable conservation violation with
+    # no pointer back to its cause), and a probe workflow left behind keeps an orphaned Quartz cron
+    # firing forever.
+
+    # DISARM UNCONDITIONALLY. Clear-Phase88Seam is idempotent by design — removing an absent variable
+    # is a no-op rollout — so it is safe to issue even when the seam was never armed. The $seamArmed
+    # guard exists only to avoid a needless 180 s rollout wait on the common clean path.
+    if ($seamArmed) {
+        if (Get-Command Clear-Phase88Seam -ErrorAction SilentlyContinue) {
+            Write-Host "[phase-88-wave0-probe] TEARDOWN: the keeper seam is still armed — disarming." -ForegroundColor Yellow
+            $null = Clear-Phase88Seam -Tier 'keeper' -Name 'KEEPER_DEFEAT_REINJECT'
+        }
+    }
+
+    # A probe workflow that survived to here was never stopped or deleted on the happy path.
+    if (-not [string]::IsNullOrWhiteSpace($probeWorkflowId)) {
+        if (Get-Command Remove-ProbeArtifacts -ErrorAction SilentlyContinue) {
+            Write-Host "[phase-88-wave0-probe] TEARDOWN: removing the leftover probe workflow $probeWorkflowId." -ForegroundColor Yellow
+            $null = Remove-ProbeArtifacts -WorkflowId $probeWorkflowId -AssignmentIds $probeAssignmentIds -StepIds $probeStepIds
+        }
+    }
+
     # Stop ONLY a forward this script actually started, behind the recycled-PID guard. A forward this
     # script found already running belongs to someone else and is left exactly as it was found.
     if ($gfForwardOwned -and $gfForwardPid -gt 0) {
