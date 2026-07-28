@@ -156,6 +156,7 @@ $seamVar         = ''
 $scaledTier      = ''
 $replicasBefore  = -1
 $probeWorkflowId = ''
+$trafficJob      = $null
 
 Push-Location $repoRoot
 try {
@@ -714,8 +715,621 @@ try {
         exit 64
     }
 
-    Write-Phase "BASELINE MODE IS AUTHORED IN TASK 2 OF PLAN 88-04." 'Yellow'
-    exit 64
+    # =========================================================================================
+    # BASELINE ANSWER FIELDS — initialised up front so the artifact writer can read any of them on
+    # any path under StrictMode, and so an unmeasured quantity is $null rather than absent.
+    # =========================================================================================
+    $BaselineBands              = @()
+    $UnevaluablePanels          = @()
+    $RegimeBNonZeroBands        = @()
+    $DiagnosticQueryValues      = @()
+    $DiagnosticDisagreements    = @()
+    $DiagnosticAgreesWithPanel  = $null
+    $ScreenshotPaths            = @()
+    $RateIntervalSeconds        = $null
+    $DatasourceTimeInterval     = $null
+    $OldestSampleUtc            = $null
+    $RangeCumulativeLevelBaseline = $null
+    $RangeCumulativeWindowSeconds = 3600
+    $TrafficWorkflowId          = ''
+    $TrafficActivationStatus    = $null
+    $HostLoadRequests           = 0
+    $AllPanelsRead              = $false
+    $AllBandsComputed           = $false
+    $BatchState                 = 'NotRun'
+    $Panel9FloorApplied         = $null
+    $LegendNamesBound           = $null
+    $ReaderUnavailable          = $false
+
+    $SubWindowSeconds = 60
+    $SubWindowCount   = 10
+
+    # =========================================================================================
+    # STEP B — REST STATE. The PRE gate already refused to continue unless all four tiers were fully
+    # Ready at their live-read counts with zero seam residue, so StackCleanAtStart is a RECORD of an
+    # already-enforced precondition rather than a claim taken on trust.
+    # =========================================================================================
+    Write-Phase "STEP B: rest state recorded — StackCleanAtStart=$StackCleanAtStart"
+    foreach ($t in $Tiers) { Write-Phase "  $t : $($preReplicas[$t]) replicas, $($preImages[$t])" 'Gray' }
+
+    # =========================================================================================
+    # STEP C — TRAFFIC. A band captured against an IDLE stack is not a null hypothesis for a running
+    # one: every Class-A panel would band at zero and "it moved" would be trivially true afterwards.
+    # Two independent drives run for the WHOLE capture:
+    #   1. the fan-out workflow, which produces the orchestrator/processor/keeper pipeline signal
+    #      (panels 1-9);
+    #   2. a light, steady host HTTP load against non-health WebApi routes, so panels 10-14 band
+    #      against a real idle-plus-traffic level rather than an empty one.
+    #
+    # The host load deliberately drives only READ-ONLY 2xx routes. The two CONFIRMED inert non-2xx
+    # drivers (a 404 on an unmatched path, a 400 on an empty activation array) are left to WEB-01, so
+    # that scenario's status-mix movement is an unambiguous new signal rather than an increase in a
+    # rate this baseline already contained.
+    # =========================================================================================
+    if ($SkipTraffic) {
+        Write-Phase "STEP C: -SkipTraffic was given." 'Yellow'
+        Write-Phase "  The Class-A panels cannot be banded honestly against an idle stack, so this run" 'Yellow'
+        Write-Phase "  produces NO baseline and degrades to Inconclusive by construction." 'Yellow'
+        Write-Phase "  -SkipTraffic exists for reader debugging, never for capturing a band." 'Yellow'
+        exit 2
+    }
+
+    Write-Phase "STEP C: drive the fan-out workflow and a steady host HTTP load"
+
+    $guidPattern = '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$'
+    $wfIdRaw  = ''
+    $wfIdExit = 1
+    try {
+        $wfIdRaw = kubectl -n skp exec statefulset/postgres -- psql -U postgres -d stepsdb -tA -c "SELECT id FROM workflows WHERE name = 'v8-fanout-proof'"
+        $wfIdExit = $LASTEXITCODE
+    } catch { $wfIdExit = 1 }
+    $wfId = ''
+    foreach ($line in @(("$wfIdRaw") -split "`r?`n")) {
+        $t = ("$line").Trim()
+        if ($t -match $guidPattern) { $wfId = $t; break }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($wfId)) {
+        # The seeder EXISTS to create this workflow. It is idempotent and GET-matches its sentinel
+        # name, so running it when the row is already present is a multi-minute no-op — hence it is
+        # invoked only when the lookup actually came back empty.
+        Write-Phase "  the fan-out workflow is absent — running the idempotent seeder." 'Yellow'
+        dotnet test tests/BaseApi.Tests/BaseApi.Tests.csproj -c Release -- --filter-method "*FanOutSeeder_SeedsAndSelfVerifies*" 2>&1 | Out-String | Write-Host
+        if ($LASTEXITCODE -ne 0) { Write-Phase "seeder failed (exit $LASTEXITCODE). Aborting." 'Red'; exit 50 }
+        try {
+            $wfIdRaw = kubectl -n skp exec statefulset/postgres -- psql -U postgres -d stepsdb -tA -c "SELECT id FROM workflows WHERE name = 'v8-fanout-proof'"
+            $wfIdExit = $LASTEXITCODE
+        } catch { $wfIdExit = 1 }
+        foreach ($line in @(("$wfIdRaw") -split "`r?`n")) {
+            $t = ("$line").Trim()
+            if ($t -match $guidPattern) { $wfId = $t; break }
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($wfId)) {
+        Write-Phase "could not resolve the fan-out workflow id (psql exit $wfIdExit). Aborting." 'Red'; exit 50
+    }
+    $TrafficWorkflowId = $wfId
+    Write-Phase "  traffic workflow id = $wfId" 'Gray'
+
+    $startResp = Invoke-DriverApi -Method 'POST' -Path '/api/v1/orchestration/start' -Body (ConvertTo-Json @($wfId))
+    $TrafficActivationStatus = [int]$startResp.Status
+    if ($startResp.Status -ne 204) {
+        Write-Phase "activation gate failed — expected 204, got $($startResp.Status). Aborting." 'Red'; exit 50
+    }
+    Write-Phase "  activation accepted (204)." 'Gray'
+
+    # Settle two export cadences before the capture window opens, then hold for the whole window plus
+    # two more cadences so the LAST sub-window is over fully exported data rather than over the gap
+    # between the current moment and the next 60 s export tick.
+    $settleSeconds   = 150
+    $captureSeconds  = $SubWindowSeconds * $SubWindowCount
+    $trailSeconds    = 120
+    $trafficSeconds  = $settleSeconds + $captureSeconds + $trailSeconds + 60
+
+    $trafficStartUtc = [datetime]::UtcNow
+    $trafficJob = Start-Job -ScriptBlock {
+        param($BaseUri, $DurationSeconds)
+        # READ-ONLY routes only. Nothing here creates, mutates or deletes a row, so the load cannot
+        # perturb the pipeline signal the other panels are banding.
+        $routes = @('/api/v1/workflows', '/api/v1/processors', '/api/v1/schemas', '/api/v1/steps', '/api/v1/assignments')
+        $deadline = (Get-Date).AddSeconds($DurationSeconds)
+        $n = 0
+        while ((Get-Date) -lt $deadline) {
+            foreach ($r in $routes) {
+                try {
+                    $null = Invoke-WebRequest -Uri "$BaseUri$r" -UseBasicParsing -TimeoutSec 10 `
+                                -SkipHttpErrorCheck -ErrorAction Stop
+                    $n++
+                } catch { }
+                Start-Sleep -Milliseconds 400
+                if ((Get-Date) -ge $deadline) { break }
+            }
+        }
+        return $n
+    } -ArgumentList $api, $trafficSeconds
+
+    Write-Phase "  host HTTP load started (read-only routes, ~2.5 req/s, ${trafficSeconds}s budget)." 'Gray'
+    Write-Phase "  settling ${settleSeconds}s (2 export cadences) before the capture window opens..." 'Gray'
+    Start-Sleep -Seconds $settleSeconds
+
+    # ABSOLUTE window bounds, minted ONCE and reused by every read below. The capture window opens
+    # only after the settle, so it contains no warm-up transient.
+    $BaselineWindowStartUtc = [datetime]::UtcNow
+    $BaselineWindowEndUtc   = $BaselineWindowStartUtc.AddSeconds($captureSeconds)
+    Write-Phase "  capture window $($BaselineWindowStartUtc.ToString('o')) -> $($BaselineWindowEndUtc.ToString('o'))" 'Gray'
+    Write-Phase "  holding ${captureSeconds}s of traffic across the window, then ${trailSeconds}s so the last sub-window is fully exported..." 'Gray'
+    Start-Sleep -Seconds ($captureSeconds + $trailSeconds)
+
+    # =========================================================================================
+    # STEP D — $__rate_interval, DERIVED from the live datasource timeInterval. 240 is never
+    # hardcoded: PQ-04 measured the same value for a 10-minute and a 2-hour window at this viewport,
+    # but whatever is DERIVED here is what the artifact records. The evidentiary horizon is recorded
+    # beside it so the artifact states its own limits.
+    # =========================================================================================
+    Write-Phase "STEP D: derive `$__rate_interval from the live datasource timeInterval"
+    try {
+        $ds = Invoke-RestMethod -Uri "$gf/api/datasources/uid/skp-prometheus" -Headers $auth -TimeoutSec 20 -ErrorAction Stop
+        $tiText  = ''
+        $dsNames = @(Get-PropertyNames $ds)
+        if ($dsNames -contains 'jsonData') {
+            $jdNames = @(Get-PropertyNames $ds.jsonData)
+            if ($jdNames -contains 'timeInterval') { $tiText = "$($ds.jsonData.timeInterval)" }
+        }
+        $ti = ConvertFrom-GrafanaDuration $tiText
+        if ($ti -le 0) {
+            Write-Phase "  datasource timeInterval is '$tiText' — the rate interval cannot be derived." 'Yellow'
+        } else {
+            $DatasourceTimeInterval = $tiText
+            $step = Get-QueryStepSeconds -RangeSeconds $captureSeconds -TimeIntervalSeconds $ti -MaxDataPoints $ViewportWidth
+            $RateIntervalSeconds = Get-RateIntervalSeconds $ti $step
+            Write-Phase "  timeInterval='$tiText' (${ti}s) step=${step}s -> rate_interval=${RateIntervalSeconds}s" 'Gray'
+        }
+    } catch {
+        Write-Phase "  the datasource read failed: $($_.Exception.Message)" 'Yellow'
+    }
+
+    $nowUnix = ([DateTimeOffset]::UtcNow).ToUnixTimeSeconds()
+    try {
+        $oldestQ = Invoke-ProxyRangeQuery -Query 'up' -StartUnix ($nowUnix - (336 * 3600)) -EndUnix $nowUnix -StepSeconds 3600
+        $oldestUnix = $null
+        foreach ($s in @($oldestQ.data.result)) {
+            $sn = @(Get-PropertyNames $s)
+            if ($sn -notcontains 'values') { continue }
+            $vals = @($s.values)
+            if ($vals.Count -eq 0) { continue }
+            $ts = [double]($vals[0][0])
+            if ($null -eq $oldestUnix -or $ts -lt $oldestUnix) { $oldestUnix = $ts }
+        }
+        if ($null -ne $oldestUnix) {
+            $OldestSampleUtc = ([System.DateTimeOffset]::FromUnixTimeSeconds([long]$oldestUnix)).UtcDateTime.ToString('o')
+            Write-Phase "  evidentiary horizon: oldest sample $OldestSampleUtc" 'Gray'
+        }
+    } catch {
+        Write-Phase "  the horizon query failed: $($_.Exception.Message)" 'Yellow'
+    }
+
+    # =========================================================================================
+    # STEP E — THE PINNED CAPTURE. ONE batch, all fourteen panels x ten abutting 60 s absolute
+    # windows, in a single browser session.
+    #
+    # EVERY SUB-WINDOW IS THE SAME WIDTH. This is the phase's first pitfall and it is not a tidiness
+    # rule: a timeseries legend Mean is computed over the VISIBLE range, so a sliding or unequal-width
+    # window would make the baseline and every later after-capture incomparable — and the reader
+    # refuses such a batch outright rather than emitting numbers that look comparable and are not.
+    # =========================================================================================
+    Write-Phase "STEP E: batch read — 14 panels x $SubWindowCount abutting ${SubWindowSeconds}s windows at ${ViewportWidth}x${ViewportHeight}"
+    $shotDir = Join-Path $screenshotRoot 'BASE-01'
+    New-Item -ItemType Directory -Force -Path $shotDir | Out-Null
+
+    # The width and the count are LITERALS at the call site, not variables, so the shape of the
+    # capture is legible where it happens. The assertion below then ties the values the ARTIFACT
+    # records to the windows this call actually minted — a later edit that changes one without the
+    # other aborts here instead of writing an artifact whose stated shape is not the shape it used.
+    $wins = @(Get-PinnedWindowSeries -EndUtc $BaselineWindowEndUtc -SubWindowSeconds 60 -Count 10)
+    $mintedWidth = [int](($wins[0].ToMs - $wins[0].FromMs) / 1000)
+    if ($mintedWidth -ne $SubWindowSeconds -or @($wins).Count -ne $SubWindowCount) {
+        Write-Phase "the minted windows ($(@($wins).Count) x ${mintedWidth}s) do not match the values this run would record ($SubWindowCount x ${SubWindowSeconds}s)." 'Red'
+        exit 64
+    }
+    Write-Phase "  windows $($wins[0].FromUtc) -> $($wins[-1].ToUtc)" 'Gray'
+
+    $panelIdList = @($Panels.Keys)
+    $batch = Invoke-PanelReadBatch -PanelIds $panelIdList -Windows $wins -ScreenshotDir $shotDir `
+               -LocatorMode $LocatorMode -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight `
+               -BasicAuthBase64 $adminB64
+    $BatchState = "$($batch.State)"
+    Write-Phase "  batch: State=$BatchState requested=$($batch.Requested) emitted=$($batch.Emitted)" 'Gray'
+
+    if ($batch.State -eq 'ReaderMissing') {
+        # An INFRA ABORT, never a verdict: node, the playwright skill, or the reader script is absent,
+        # so nothing about the panels was measured at all.
+        Write-Phase "the panel reader is unavailable: $($batch.Error). Aborting." 'Red'
+        Write-Phase "REMEDIATION: install node and the playwright skill, or point PHASE88_PLAYWRIGHT_SKILL_DIR at it." 'Yellow'
+        exit 63
+    }
+    if ($batch.State -ne 'Ok') {
+        # Truncated / Unreadable. Do NOT band on a partial set — a band computed from an unknown
+        # subset of the intended windows is not the band the artifact would claim it is.
+        Write-Phase "  the batch did not complete cleanly ($BatchState): $($batch.Error)" 'Yellow'
+        Write-Phase "  bands will be computed only where a full sample set exists; the rest are declared unevaluable." 'Yellow'
+        $ReaderUnavailable = $true
+    }
+    $ScreenshotPaths = @(Get-ScreenshotPaths $batch.Readings)
+
+    # =========================================================================================
+    # STEP F — PER-REGIME BANDING.
+    #
+    # A stat panel contributes ONE band from its big number. A timeseries contributes one band PER
+    # LEGEND SERIES, selected POSITIONALLY (the Record-3 amendment) with the series NAME recorded
+    # beside it — so a later capture can match by name where names are stable and fall back to the
+    # row index where a new series has appeared.
+    #
+    # Two outcomes are FINDINGS rather than bands, and both are recorded as such:
+    #   * a Class-A panel that bands at exactly zero across all ten sub-windows has no live signal to
+    #     move away from, so its scenario cannot discriminate. That is not a valid null hypothesis and
+    #     it must not be treated as one.
+    #   * a Regime-B panel that bands NON-zero contradicts the guarded-zero assumption its whole
+    #     discrimination rule rests on.
+    # =========================================================================================
+    Write-Phase "STEP F: banding"
+    foreach ($pid_ in $panelIdList) {
+        $panel  = $Panels[$pid_]
+        $states = @(Get-PanelStates -Readings @($batch.Readings) -PanelId $pid_)
+        $stateSummary = if (@($states).Count -gt 0) { (@($states | Select-Object -Unique) -join '|') } else { 'NoReading' }
+
+        if (@($states).Count -eq 0) {
+            $UnevaluablePanels += "panel ${pid_} ($($panel.Title)): the reader returned NO reading at all for this panel"
+            Write-Phase "  panel $pid_ : NO READING" 'Red'
+            $ReaderUnavailable = $true
+            continue
+        }
+
+        $entries = @()
+        if ("$($panel.Type)" -eq 'stat') {
+            $vals = @(Get-PanelSamples -Readings @($batch.Readings) -PanelId $pid_)
+            $entries += @{ Index = -1; Name = "$($panel.SeriesName)"; NameStable = $true; NameSource = 'staticLegend'; Values = $vals }
+        }
+        else {
+            $seriesCount = Get-PanelSeriesCount -Readings @($batch.Readings) -PanelId $pid_
+            if ($seriesCount -eq 0) {
+                $UnevaluablePanels += "panel ${pid_} ($($panel.Title)): rendered $stateSummary with ZERO legend series across all $SubWindowCount sub-windows — nothing to band"
+                Write-Phase "  panel $pid_ : zero legend series ($stateSummary)" 'Yellow'
+                continue
+            }
+            for ($i = 0; $i -lt $seriesCount; $i++) {
+                $nm   = Get-PanelSeriesNameAt -Readings @($batch.Readings) -PanelId $pid_ -SeriesIndex $i
+                $vals = @(Get-PanelSamples -Readings @($batch.Readings) -PanelId $pid_ -SeriesIndex $i)
+                $entries += @{ Index = $i; Name = "$($nm.Name)"; NameStable = [bool]$nm.Stable; NameSource = "$($nm.Source)"; Values = $vals }
+                if (-not [string]::IsNullOrWhiteSpace("$($nm.Name)")) { $LegendNamesBound = $true }
+            }
+        }
+
+        foreach ($e in $entries) {
+            $vals = @($e.Values)
+            if ($vals.Count -eq 0) {
+                $UnevaluablePanels += "panel ${pid_} ($($panel.Title)) series '$($e.Name)': rendered $stateSummary but produced NO numeric sample"
+                Write-Phase "  panel $pid_ series '$($e.Name)': no numeric sample ($stateSummary)" 'Yellow'
+                continue
+            }
+            if ($vals.Count -ne $SubWindowCount) {
+                # A short sample set is recorded, not silently banded as if it were whole: the band's
+                # own SampleCount states what it was computed from.
+                Write-Phase "  panel $pid_ series '$($e.Name)': $($vals.Count)/$SubWindowCount samples" 'Yellow'
+            }
+
+            $band = Get-PanelBand -Values ([double[]]$vals)
+            $allZero = $true
+            foreach ($v in $vals) { if ([double]$v -ne 0.0) { $allZero = $false; break } }
+
+            if ("$($panel.Regime)" -eq 'A' -and $allZero) {
+                $UnevaluablePanels += "panel ${pid_} ($($panel.Title)) series '$($e.Name)': Class-A panel banded at EXACTLY zero across all $SubWindowCount sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register)."
+                Write-Phase "  panel $pid_ series '$($e.Name)': Class-A ALL-ZERO — recorded as a finding, not a band" 'Red'
+            }
+            if ("$($panel.Regime)" -eq 'B' -and -not $allZero) {
+                $RegimeBNonZeroBands += "panel ${pid_} ($($panel.Title)) series '$($e.Name)': Regime-B panel did NOT band at zero (values $(@($vals) -join ', ')) — the guarded-zero null hypothesis its discrimination rule rests on does not hold on this stack"
+                Write-Phase "  panel $pid_ series '$($e.Name)': Regime-B NON-ZERO baseline — recorded as a finding" 'Red'
+            }
+            if ($pid_ -eq '9') { $Panel9FloorApplied = [bool]$band.FloorApplied }
+
+            $BaselineBands += [pscustomobject]@{
+                PanelId      = [int]$pid_
+                PanelTitle   = "$($panel.Title)"
+                PanelType    = "$($panel.Type)"
+                Regime       = "$($panel.Regime)"
+                Guarded      = [bool]$panel.Guarded
+                SeriesIndex  = [int]$e.Index
+                SeriesName   = "$($e.Name)"
+                SeriesNameStable = [bool]$e.NameStable
+                SeriesNameSource = "$($e.NameSource)"
+                Values       = [double[]]$vals
+                States       = [string[]]$states
+                BandLow      = [double]$band.Low
+                BandHigh     = [double]$band.High
+                BandMean     = [double]$band.Mean
+                BandSigma    = [double]$band.Sigma
+                BandHalfWidth = [double]$band.HalfWidth
+                FloorApplied = [bool]$band.FloorApplied
+                SampleCount  = [int]$band.SampleCount
+                PanelState   = $stateSummary
+            }
+            Write-Phase ("  panel {0} [{1}] '{2}': band {3:N4}..{4:N4} mean {5:N4} floor={6} n={7} ({8})" -f `
+                $pid_, $panel.Regime, $e.Name, $band.Low, $band.High, $band.Mean, $band.FloorApplied, $band.SampleCount, $stateSummary) 'Gray'
+        }
+    }
+
+    # =========================================================================================
+    # STEP G — THE PANEL-4 WIDE-WINDOW LEVEL (Regime C, recorded but NEVER scored).
+    #
+    # Panel 4's expression is `increase(...[$__range])`, so its value depends on the VISIBLE window
+    # width. Its banded value above is a PER-MINUTE increase over the 60 s sub-window. THIS capture is
+    # the number an operator actually sees on the shipped dashboard at its default range — it grows on
+    # a healthy stack too, which is exactly why it is recorded for the HAND-02 misleading-by-default
+    # list and never compared against a band. Applying a Regime-A band to it would be a guaranteed
+    # false positive.
+    # =========================================================================================
+    Write-Phase "STEP G: panel 4 wide-window range-cumulative level (${RangeCumulativeWindowSeconds}s, recorded NOT scored)"
+    $wideWins = @(Get-PinnedWindowSeries -EndUtc $BaselineWindowEndUtc -SubWindowSeconds $RangeCumulativeWindowSeconds -Count 1)
+    $wideBatch = Invoke-PanelReadBatch -PanelIds @('4') -Windows $wideWins -ScreenshotDir $shotDir `
+                   -LocatorMode $LocatorMode -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight `
+                   -BasicAuthBase64 $adminB64
+    if ($wideBatch.State -eq 'ReaderMissing') {
+        Write-Phase "the panel reader became unavailable before the wide capture: $($wideBatch.Error). Aborting." 'Red'; exit 63
+    }
+    $wideVals = @(Get-PanelSamples -Readings @($wideBatch.Readings) -PanelId '4')
+    if (@($wideVals).Count -gt 0) {
+        $RangeCumulativeLevelBaseline = [double]$wideVals[0]
+        Write-Phase "  panel 4 wide level = $RangeCumulativeLevelBaseline over $($wideWins[0].FromUtc) -> $($wideWins[0].ToUtc)" 'Gray'
+    } else {
+        Write-Phase "  panel 4 wide capture produced no numeric value." 'Yellow'
+    }
+    $ScreenshotPaths = @(@($ScreenshotPaths) + @(Get-ScreenshotPaths $wideBatch.Readings) | Select-Object -Unique)
+
+    # =========================================================================================
+    # STEP H — DIAGNOSTIC PROXY CROSS-CHECK. DIAGNOSIS ONLY, NEVER THE VERDICT.
+    #
+    # Each panel's own target expression is read from k8s/dashboards/business.json (so it tracks the
+    # dashboard rather than drifting from a copy), its Grafana macros are substituted with the values
+    # this run derived, and the aggregate is queried through Grafana's own datasource proxy over the
+    # SAME absolute window. It is recorded beside the rendered value with an agreement flag.
+    #
+    # This is the direct control against the Phase-87 defect where 30/30 Class-A checks reported green
+    # against three panels that were rendering "No data": the query was right and the panel was blank,
+    # and nothing in the artifact could show it. Here a disagreement is a FINDING to record loudly,
+    # not an error to reconcile away — the RENDERED panel remains the verdict either way.
+    # =========================================================================================
+    Write-Phase "STEP H: diagnostic proxy cross-check (diagnosis only — the rendered panel is the verdict)"
+
+    function Get-ProxyAggregateMean([string]$Query, [long]$S, [long]$E, [int]$Step) {
+        $res = Invoke-ProxyRangeQuery -Query $Query -StartUnix $S -EndUnix $E -StepSeconds $Step
+        $byTs = @{}
+        foreach ($s in @($res.data.result)) {
+            $sn = @(Get-PropertyNames $s)
+            if ($sn -notcontains 'values') { continue }
+            foreach ($v in @($s.values)) {
+                $ts = "$($v[0])"
+                $raw = "$($v[1])"
+                $val = 0.0
+                if (-not [double]::TryParse($raw, [ref]$val)) { continue }
+                if (-not [double]::IsFinite($val)) { continue }   # histogram_quantile yields NaN on empty buckets
+                if ($byTs.ContainsKey($ts)) { $byTs[$ts] += $val } else { $byTs[$ts] = $val }
+            }
+        }
+        if ($byTs.Count -eq 0) { return $null }
+        $sum = 0.0
+        foreach ($k in $byTs.Keys) { $sum += $byTs[$k] }
+        return ($sum / $byTs.Count)
+    }
+
+    $winStartUnix = ([System.DateTimeOffset]::new($BaselineWindowStartUtc, [TimeSpan]::Zero)).ToUnixTimeSeconds()
+    $winEndUnix   = ([System.DateTimeOffset]::new($BaselineWindowEndUtc, [TimeSpan]::Zero)).ToUnixTimeSeconds()
+    $riForQuery   = if ($null -ne $RateIntervalSeconds) { [int]$RateIntervalSeconds } else { 240 }
+
+    try {
+        $dashJson = Get-Content (Join-Path $repoRoot 'k8s/dashboards/business.json') -Raw | ConvertFrom-Json
+        foreach ($dp in @($dashJson.panels)) {
+            $dpNames = @(Get-PropertyNames $dp)
+            if ($dpNames -notcontains 'id' -or $dpNames -notcontains 'targets') { continue }
+            $dpId = "$($dp.id)"
+            if (-not $Panels.Contains($dpId)) { continue }
+            $tgts = @($dp.targets)
+            if ($tgts.Count -eq 0) { continue }
+
+            $expr = "$($tgts[0].expr)"
+            # Substitute Grafana's macros with what THIS run derived. $__range becomes the sub-window
+            # width, because that is the range the banded reading was taken over.
+            $q = $expr.Replace('$__rate_interval', "${riForQuery}s").Replace('$__range', "${SubWindowSeconds}s")
+            $q = $q.Replace('$source', '.*').Replace('$pod', '.*')
+
+            $comparable = ($expr -notmatch 'histogram_quantile')
+            $reason = if ($comparable) { '' } else { 'histogram_quantile is a per-series quantile; summing across series is not a meaningful aggregate, so no agreement is asserted' }
+
+            $proxyMean = $null
+            try { $proxyMean = Get-ProxyAggregateMean $q $winStartUnix $winEndUnix $SubWindowSeconds }
+            catch { $reason = "proxy query failed: $($_.Exception.Message)"; $comparable = $false }
+
+            # The panel side of the comparison: the SUM of the first target's banded series means.
+            # (The proxy query above is the FIRST target only, so only the series it produces are
+            #  summed — a two-target panel is compared on its first target, and that is stated here
+            #  rather than left for a reader to infer.)
+            $panelSum = $null
+            $mine = @($BaselineBands | Where-Object { $_.PanelId -eq [int]$dpId })
+            if (@($mine).Count -gt 0) {
+                $panelSum = 0.0
+                foreach ($m in $mine) { $panelSum += [double]$m.BandMean }
+                if (@($tgts).Count -gt 1) {
+                    $reason = (("$reason " + "panel has $(@($tgts).Count) targets; the proxy query covers the FIRST only, so the sums are not expected to match exactly").Trim())
+                    $comparable = $false
+                }
+            }
+
+            $agrees = $null
+            if ($comparable -and $null -ne $proxyMean -and $null -ne $panelSum) {
+                $tol = [Math]::Max(0.10 * [Math]::Abs([double]$panelSum), 0.01)
+                $agrees = ([Math]::Abs([double]$proxyMean - [double]$panelSum) -le $tol)
+                if (-not $agrees) {
+                    $DiagnosticDisagreements += "panel ${dpId}: rendered band-mean sum $panelSum vs proxy aggregate mean $proxyMean (tolerance $tol)"
+                }
+            }
+
+            $DiagnosticQueryValues += [pscustomobject]@{
+                PanelId      = [int]$dpId
+                Query        = $q
+                ProxyMean    = $proxyMean
+                PanelMeanSum = $panelSum
+                Comparable   = [bool]$comparable
+                Agrees       = $agrees
+                Reason       = "$reason"
+            }
+            Write-Phase ("  panel {0}: proxy={1} panel={2} comparable={3} agrees={4}" -f $dpId, $proxyMean, $panelSum, $comparable, $agrees) 'Gray'
+        }
+    } catch {
+        Write-Phase "  the diagnostic cross-check could not be built: $($_.Exception.Message)" 'Yellow'
+    }
+
+    $comparableEntries = @($DiagnosticQueryValues | Where-Object { $_.Comparable -and $null -ne $_.Agrees })
+    if (@($comparableEntries).Count -gt 0) {
+        $DiagnosticAgreesWithPanel = (@($comparableEntries | Where-Object { -not $_.Agrees }).Count -eq 0)
+    }
+
+    # =========================================================================================
+    # STEP J — RESTORE ASSERTION, ARTIFACT, VERDICT.
+    # The artifact is written FIRST and the exit code is resolved from the SAME in-memory object, so
+    # an artifact can never disagree with the code the process returned.
+    # =========================================================================================
+    Write-Phase "STEP J: restore assertion, artifact, verdict"
+
+    if ($null -ne $trafficJob) {
+        try {
+            $null = Wait-Job -Job $trafficJob -Timeout 30
+            $HostLoadRequests = [int](@(Receive-Job -Job $trafficJob -ErrorAction SilentlyContinue) | Select-Object -Last 1)
+        } catch { }
+        try { Remove-Job -Job $trafficJob -Force -ErrorAction SilentlyContinue } catch { }
+        $trafficJob = $null
+        Write-Phase "  host HTTP load issued ~$HostLoadRequests requests." 'Gray'
+    }
+
+    $restore = Assert-StackRestored -Tiers $Tiers -ExpectedReplicas $preReplicas -ExpectedImages $preImages
+    Write-Phase "  restore: SeamVarsClean=$($restore.SeamVarsClean) ReplicasRestored=$($restore.ReplicasRestored) ImagesUnchanged=$($restore.ImagesUnchanged)" 'Gray'
+
+    # Every panel must be either BANDED or explicitly declared unevaluable. A panel that is neither is
+    # a silent gap, which is the one outcome this artifact must never contain.
+    $bandedIds = @($BaselineBands | ForEach-Object { "$($_.PanelId)" } | Select-Object -Unique)
+    $missing = @()
+    foreach ($pid_ in $panelIdList) {
+        if ($bandedIds -contains "$pid_") { continue }
+        if (@($UnevaluablePanels | Where-Object { "$_" -match "^panel $pid_[ :(]" }).Count -gt 0) { continue }
+        $missing += "panel ${pid_} ($($Panels[$pid_].Title)): neither banded nor declared unevaluable"
+    }
+    foreach ($m in $missing) { $UnevaluablePanels += $m }
+
+    $AllPanelsRead     = (($BatchState -eq 'Ok') -and -not $ReaderUnavailable)
+    $AllBandsComputed  = (@($UnevaluablePanels).Count -eq 0)
+
+    # PRECEDENCE: Fail BEATS Inconclusive (the Phase-87 verdict-precedence fix). A dirty stack is a
+    # claim that was EVALUATED and came back false — positive evidence of a defect — and no quantity of
+    # other UNEVALUATED claims makes it less true. A panel that could not be READ is an unevaluated
+    # assertion, not a defect, so it is Inconclusive material and never a Fail.
+    $verdict = 'Pass'
+    if (-not $restore.Ok) { $verdict = 'Fail' }
+    elseif (-not $AllBandsComputed -or -not $AllPanelsRead) { $verdict = 'Inconclusive' }
+
+    $human = "phase-88 BASE-01 verdict=${verdict}: " +
+             "$(@($BaselineBands).Count) band(s) across $(@($bandedIds).Count)/14 panels over $SubWindowCount x ${SubWindowSeconds}s pinned windows " +
+             "($($BaselineWindowStartUtc.ToString('o')) -> $($BaselineWindowEndUtc.ToString('o'))) at ${ViewportWidth}x${ViewportHeight}, " +
+             "rate_interval=${RateIntervalSeconds}s (timeInterval=$DatasourceTimeInterval) | " +
+             "batch=$BatchState allPanelsRead=$AllPanelsRead allBandsComputed=$AllBandsComputed | " +
+             "panel4 wide level=$RangeCumulativeLevelBaseline (RECORDED, never scored) | " +
+             "panel9 floorApplied=$Panel9FloorApplied | legendNamesBound=$LegendNamesBound | " +
+             "regimeB non-zero=$(@($RegimeBNonZeroBands).Count) | diagnosticAgrees=$DiagnosticAgreesWithPanel " +
+             "(disagreements=$(@($DiagnosticDisagreements).Count)) | unevaluable=$(@($UnevaluablePanels).Count) | " +
+             "stack clean: seamVars=$($restore.SeamVarsClean) replicas=$($restore.ReplicasRestored) images=$($restore.ImagesUnchanged)"
+
+    $report = [ordered]@{
+        ScenarioId                   = 'BASE-01'
+        Verdict                      = $verdict
+
+        AllPanelsRead                = $AllPanelsRead
+        AllBandsComputed             = $AllBandsComputed
+        StackCleanAtStart            = $StackCleanAtStart
+
+        BaselineWindowStart          = $BaselineWindowStartUtc.ToString('o')
+        BaselineWindowEnd            = $BaselineWindowEndUtc.ToString('o')
+        SubWindowSeconds             = $SubWindowSeconds
+        SubWindowCount               = $SubWindowCount
+        ViewportWidth                = $ViewportWidth
+        ViewportHeight               = $ViewportHeight
+        LocatorMode                  = $LocatorMode
+        RateIntervalSeconds          = $RateIntervalSeconds
+        DatasourceTimeInterval       = $DatasourceTimeInterval
+        OldestSampleUtc              = $OldestSampleUtc
+        BatchState                   = $BatchState
+        BatchRequested               = [int]$batch.Requested
+        BatchEmitted                 = [int]$batch.Emitted
+
+        BaselineBands                = @($BaselineBands)
+
+        RangeCumulativeLevelBaseline = $RangeCumulativeLevelBaseline
+        RangeCumulativeWindowSeconds = $RangeCumulativeWindowSeconds
+        RangeCumulativeNote          = 'Panel 4 renders increase(...[$__range]), so its value depends on the VISIBLE window width. This wide-window level is what an operator sees on the shipped dashboard; it grows on a HEALTHY stack too. It is recorded for the HAND-02 misleading-by-default list and is NEVER scored as movement — panel 4 is scored on its banded per-minute value instead.'
+
+        DiagnosticQueryValues        = @($DiagnosticQueryValues)
+        DiagnosticAgreesWithPanel    = $DiagnosticAgreesWithPanel
+        DiagnosticDisagreements      = @($DiagnosticDisagreements)
+        DiagnosticNote               = 'The RENDERED panel is the verdict. These proxy query_range values are DIAGNOSIS only; a disagreement is a finding to record, never an error to reconcile away.'
+
+        RegimeBNonZeroBands          = @($RegimeBNonZeroBands)
+        Panel9FloorApplied           = $Panel9FloorApplied
+        LegendNamesBound             = $LegendNamesBound
+        UnevaluablePanels            = @($UnevaluablePanels)
+        ScreenshotPaths              = @($ScreenshotPaths)
+
+        TrafficWorkflowId            = $TrafficWorkflowId
+        TrafficActivationStatus      = $TrafficActivationStatus
+        TrafficStartUtc              = $trafficStartUtc.ToString('o')
+        TrafficLeftActive            = $true
+        HostLoadRequests             = $HostLoadRequests
+
+        SeamVarsClean                = $restore.SeamVarsClean
+        ReplicasRestored             = $restore.ReplicasRestored
+        ImagesUnchanged              = $restore.ImagesUnchanged
+        SeamVarsFound                = @($restore.SeamVarsFound)
+        ReplicaMismatches            = @($restore.ReplicaMismatches)
+        ImageMismatches              = @($restore.ImageMismatches)
+        UnknownTiers                 = @($restore.UnknownTiers)
+        ReplicasBefore               = $preReplicas
+        ImagesBefore                 = $preImages
+
+        ReaderAmendmentApplied       = 'legend name-line pairing (88-PROBE-DECISIONS.md Record 3); re-provable with PANEL_READ_SELFTEST=1 node scripts/phase-88-panel-read.js'
+        CompletedUtc                 = ([DateTimeOffset]::UtcNow).ToString('o')
+
+        HumanSummary                 = $human
+    }
+
+    New-Item -ItemType Directory -Force -Path $reportDir | Out-Null
+    $reportPath = Join-Path $reportDir 'phase-88-BASE-01.json'
+    # -Depth 10, NOT the repo's usual shallower depth: BaselineBands[] carries nested Values[] and
+    # States[] arrays that a shallower serialisation would silently write as the literal
+    # 'System.Object[]', destroying the very evidence that makes the band recomputable (T-88-18).
+    ([pscustomobject]$report) | ConvertTo-Json -Depth 10 | Set-Content -Path $reportPath -Encoding utf8
+
+    $written = Get-Content $reportPath -Raw
+    if ($written -match 'System\.Object\[\]') {
+        Write-Phase "the written artifact contains a literal System.Object[] — the serialisation depth is too shallow." 'Red'
+        exit 66
+    }
+    Write-Phase "verdict artifact: $reportPath" 'Green'
+    Write-Phase $human $(if ($verdict -eq 'Pass') { 'Green' } elseif ($verdict -eq 'Fail') { 'Red' } else { 'Yellow' })
+
+    # Resolve the exit code from the SAME in-memory object the artifact was written from. 65 and 66
+    # are strictly MORE SPECIFIC renderings of the same finding — the artifact's Verdict stays
+    # authoritative, and a dirty stack or an unread panel keeps its own distinct code so it can never
+    # be mistaken for an ordinary assertion failure by a caller reading only the exit status.
+    $exitCode = Resolve-AnalyzerExitCode ([pscustomobject]$report)
+    if ($ReaderUnavailable) { $exitCode = 66 }
+    if (-not $restore.Ok) { $exitCode = 65 }
+    $resolved = Resolve-SweepClass $exitCode
+    Write-Phase "class=$($resolved.Class) exit=$exitCode" 'Gray'
+    exit $exitCode
 }
 finally {
     # ---- STEP Z — TEARDOWN ----------------------------------------------------------------------
@@ -741,6 +1355,14 @@ finally {
             Write-Host "[phase-88-panel-discriminate] TEARDOWN: restoring '$scaledTier' to its pre-read $replicasBefore replicas." -ForegroundColor Yellow
             $null = Invoke-Phase88Ctl -Arguments @('scale', "deployment/$scaledTier", "--replicas=$replicasBefore")
         }
+    }
+
+    # A background load job that outlived the run would keep hitting the WebApi after this process
+    # returned, polluting the very panels a LATER capture bands.
+    if ($null -ne $trafficJob) {
+        Write-Host "[phase-88-panel-discriminate] TEARDOWN: stopping the host HTTP load job." -ForegroundColor Yellow
+        try { Stop-Job -Job $trafficJob -ErrorAction SilentlyContinue } catch { }
+        try { Remove-Job -Job $trafficJob -Force -ErrorAction SilentlyContinue } catch { }
     }
 
     # Stop ONLY a forward this script actually started, behind the recycled-PID guard. A forward this
