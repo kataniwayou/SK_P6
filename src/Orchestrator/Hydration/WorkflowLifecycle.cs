@@ -10,9 +10,10 @@ using StackExchange.Redis;
 namespace Orchestrator.Hydration;
 
 /// <summary>
-/// Shared hydrate-one + teardown-one unit (D-15) reused by the startup
-/// <see cref="HydrationBackgroundService"/> AND both consumers (Start = teardown+hydrate+schedule,
-/// Stop = teardown-only). All L2 access is READ-ONLY — this type never issues any string-set /
+/// Shared per-workflow lifecycle unit (D-15) reused by the startup
+/// <see cref="HydrationBackgroundService"/> AND both consumers (Start = the build-then-commit reload
+/// <see cref="HydrateAndScheduleAsync"/>, Stop = <see cref="UnscheduleOnlyAsync"/>, the keep-L1
+/// drain). All L2 access is READ-ONLY — this type never issues any string-set /
 /// set-add / key-delete mutation against any <c>skp:</c> key (ORCH-STOP-01 / T-23-11).
 /// <para>
 /// <b>Business vs infra split (ORCH-ACK-01):</b> absent root, malformed JSON, and missing/corrupt
@@ -33,8 +34,34 @@ public sealed class WorkflowLifecycle(
     /// Hydrate one workflow from L2 into L1 (root + step entries only — NO processor key, NO
     /// parent-index key) and schedule its one-shot Quartz job. Infra faults propagate; business
     /// outcomes (absent root, malformed step) log + skip.
+    /// <para>
+    /// <b>BUILD-then-COMMIT, never destroy-then-rebuild.</b> <see cref="BuildAsync"/> completes EVERY
+    /// Redis read into a local <see cref="WorkflowL1"/> before <see cref="CommitAsync"/> performs the
+    /// first mutation. Two consequences a reload depends on: (1) L1 is never ABSENT — the commit
+    /// <c>Upsert</c>s old->new in place, so a concurrent <c>ExecutionResult</c> handled by this pod
+    /// mid-reload still resolves (an L1 miss in <c>OrchestratorPrePipeline</c>/<c>WorkflowFireJob</c> is
+    /// a silently-acked lost continuation, not an error); (2) an infra fault in the read half leaves the
+    /// PRIOR entry and the PRIOR Quartz job untouched, so redelivery retries from a clean state.
+    /// </para>
     /// </summary>
     public async Task HydrateAndScheduleAsync(Guid workflowId, CancellationToken ct)
+    {
+        var entry = await BuildAsync(workflowId, ct);
+        if (entry is null)
+        {
+            return; // BUSINESS skip — read-only so far, so NOTHING has been mutated.
+        }
+
+        await CommitAsync(workflowId, entry, ct);
+    }
+
+    /// <summary>
+    /// READ half — pure. Reads the L2 root plus the full reachable step graph and returns the L1 entry
+    /// to commit, or <c>null</c> for a business skip (absent root, malformed root, no cron). Contains
+    /// NO <c>store.</c> and NO <c>scheduler.</c> call by design: nothing it can throw is able to leave
+    /// L1 or the scheduler partially mutated.
+    /// </summary>
+    private async Task<WorkflowL1?> BuildAsync(Guid workflowId, CancellationToken ct)
     {
         var db = redis.GetDatabase(); // infra fault THROWS -> propagates (D-02 / ORCH-ACK-01)
 
@@ -43,7 +70,7 @@ public sealed class WorkflowLifecycle(
         {
             // BUSINESS — workflow absent from L2 root; log + return (NEVER throw).
             logger.LogWarning("Workflow {WorkflowId} absent from L2 root — skipping hydration (business)", workflowId);
-            return;
+            return null;
         }
 
         WorkflowRootProjection root;
@@ -55,14 +82,14 @@ public sealed class WorkflowLifecycle(
         catch (Exception ex) when (IsBusiness(ex))
         {
             logger.LogWarning(ex, "Workflow {WorkflowId} root is malformed — skipping hydration (business)", workflowId);
-            return;
+            return null;
         }
 
         if (string.IsNullOrWhiteSpace(root.Cron))
         {
             // BUSINESS — a workflow with no cron cannot be scheduled (D-09 business skip).
             logger.LogWarning("Workflow {WorkflowId} has no cron — skipping hydration (business)", workflowId);
-            return;
+            return null;
         }
 
         // Follow the FULL reachable step graph into L1 (read-only), BFS from the entry steps along
@@ -109,43 +136,47 @@ public sealed class WorkflowLifecycle(
             ? l with { Interval = interval }
             : new LivenessProjection(nowUtc, interval, "active");
 
-        var entry = new WorkflowL1(root.EntryStepIds, root.Cron, root.JobId, steps)
+        return new WorkflowL1(root.EntryStepIds, root.Cron, root.JobId, steps)
         {
             Liveness = liveness,
         };
-
-        store.Upsert(workflowId, entry);
-        await scheduler.ScheduleAsync(workflowId, root.JobId, root.Cron, ct);
     }
 
     /// <summary>
-    /// Tear down one workflow: resolve its jobId from L1, <c>DeleteJob(JobKey(jobId))</c>, and clear
-    /// the L1 entry — ZERO L2 writes (ORCH-STOP-01). Absent-from-L1 is a business no-op (D-16).
+    /// COMMIT half — mutate only, no I/O between the three statements. Swaps L1 and the Quartz job to
+    /// the freshly-built <paramref name="entry"/>.
     /// <para>
-    /// Used by the conditionless Start reload pre-clean ONLY (Pitfall 4): Start must unschedule the
-    /// old Quartz job before re-scheduling, and the immediate re-hydrate re-Upserts L1 so the transient
-    /// <c>store.Remove</c> is harmless. Stop must NOT use this — it would drop L1 and break drain;
-    /// Stop uses <see cref="UnscheduleOnlyAsync"/> instead (D-07).
+    /// <b>Why unschedule first, and why it is TryGet-guarded:</b> <c>RedisProjectionWriter</c> mints a
+    /// FRESH JobId into the L2 root on every Upsert, so the new root's JobId cannot address the OLD
+    /// Quartz job — only the L1 entry still knows the old JobId, and without this delete the
+    /// fresh-JobId-per-Upsert root would accumulate orphan jobs. It must also run BEFORE
+    /// <c>ScheduleAsync</c>, which is a bare ScheduleJob ADD (<c>WorkflowScheduler</c>) that throws
+    /// <c>ObjectAlreadyExistsException</c> on a live JobKey — the collision case when the JobId is
+    /// unchanged. Doing it before (not after) the <c>Upsert</c> keeps the unscheduled window to two
+    /// adjacent in-memory Quartz calls. On boot L1 is empty, so the guard skips it and startup
+    /// hydration behaves exactly as before. NOTE: this replaces L1 wholesale — it never REMOVES the
+    /// entry, so readers never see a hole (that hole was the lost-continuation defect).
     /// </para>
     /// </summary>
-    public async Task TeardownAsync(Guid workflowId, CancellationToken ct)
+    private async Task CommitAsync(Guid workflowId, WorkflowL1 entry, CancellationToken ct)
     {
-        if (!store.TryGet(workflowId, out var wf))
+        if (store.TryGet(workflowId, out var old))
         {
-            // BUSINESS no-op — nothing to tear down (D-16).
-            return;
+            await scheduler.UnscheduleAsync(old.JobId, ct); // jobId-addressed DeleteJob (Pitfall 4c)
         }
 
-        await scheduler.UnscheduleAsync(wf.JobId, ct); // jobId-addressed DeleteJob (Pitfall 4c)
-        store.Remove(workflowId);                      // NO L2 mutation
+        store.Upsert(workflowId, entry); // atomic old->new swap; NEVER a Remove
+        await scheduler.ScheduleAsync(workflowId, entry.JobId, entry.Cron, ct);
     }
 
     /// <summary>
     /// Stop path (D-07 — ORCH-STOP-DRAIN-01): resolve the jobId from L1 and
     /// <c>DeleteJob(JobKey(jobId))</c>, but KEEP the L1 entry so late
     /// <c>ExecutionResult</c> messages for the stopped workflow still
-    /// resolve in L1 and drain (dispatch their next steps). Unlike <see cref="TeardownAsync"/> this
-    /// does NOT call <c>store.Remove</c>. Absent-from-L1 is a business no-op; ZERO L2 writes.
+    /// resolve in L1 and drain (dispatch their next steps). Unlike the Start reload's commit half
+    /// (<see cref="HydrateAndScheduleAsync"/>), which replaces the L1 entry wholesale, Stop leaves L1
+    /// exactly as it found it — it never calls <c>store.Upsert</c> or <c>store.Remove</c>. That
+    /// distinction IS the drain contract. Absent-from-L1 is a business no-op; ZERO L2 writes.
     /// </summary>
     public async Task UnscheduleOnlyAsync(Guid workflowId, CancellationToken ct)
     {

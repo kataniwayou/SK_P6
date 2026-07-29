@@ -20,6 +20,8 @@ namespace BaseApi.Tests.Orchestrator;
 ///   <item><see cref="AbsentL2"/> — every <c>StringGetAsync</c> returns <see cref="RedisValue.Null"/>.</item>
 ///   <item><see cref="PresentL2"/> — registered keys resolve to their serialized projection value.</item>
 ///   <item><see cref="InfraFaultL2"/> — <c>StringGetAsync</c> throws a <see cref="RedisConnectionException"/>.</item>
+///   <item><see cref="FaultAfterNReadsL2"/> — the first N <c>StringGetAsync</c> reads resolve like
+///   <see cref="PresentL2"/>, the NEXT one throws a <see cref="RedisConnectionException"/> (mid-build fault).</item>
 ///   <item><see cref="ParentIndexL2"/> — <c>SetMembersAsync(ParentIndex())</c> returns members +
 ///   registered <c>StringGetAsync</c> values (startup-hydration shape).</item>
 /// </list>
@@ -70,6 +72,38 @@ internal static class OrchestratorTestStubs
         db = Substitute.For<IDatabase>();
         db.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns<Task<RedisValue>>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "stub: Redis unreachable"));
+        return WrapMux(db);
+    }
+
+    /// <summary>
+    /// The first <paramref name="okReads"/> StringGetAsync calls resolve exactly like
+    /// <see cref="PresentL2"/>; the call AFTER that budget is exhausted throws a
+    /// <see cref="RedisConnectionException"/> (same type as <see cref="InfraFaultL2"/>, so
+    /// <c>WorkflowLifecycle.IsInfra</c> classifies it INFRA and it propagates). Lets a test place a
+    /// Redis fault at an exact point of the hydration read sequence — <c>okReads: 0</c> faults the ROOT
+    /// read, <c>okReads: 1</c> faults the first STEP read (mid-BFS).
+    /// </summary>
+    public static IConnectionMultiplexer FaultAfterNReadsL2(
+        IReadOnlyDictionary<string, string> values, int okReads, out IDatabase db)
+    {
+        db = Substitute.For<IDatabase>();
+
+        // Plain captured int — the substitute callback runs synchronously on the calling thread and
+        // these tests are single-threaded, so no Interlocked is required.
+        var reads = 0;
+        db.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns<Task<RedisValue>>(ci =>
+            {
+                reads++;
+                if (reads > okReads)
+                {
+                    throw new RedisConnectionException(
+                        ConnectionFailureType.UnableToConnect, "stub: Redis unreachable mid-build");
+                }
+
+                var key = ((RedisKey)ci[0]).ToString();
+                return Task.FromResult(values.TryGetValue(key, out var v) ? (RedisValue)v : RedisValue.Null);
+            });
         return WrapMux(db);
     }
 

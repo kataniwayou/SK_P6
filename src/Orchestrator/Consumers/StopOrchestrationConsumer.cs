@@ -29,7 +29,7 @@ public sealed class StopOrchestrationConsumer(
         foreach (var workflowId in context.Message.WorkflowIds)
         {
             // Conditionless keep-L1 (D-05/D-07): unschedule the Quartz job but KEEP the L1 entry so a
-            // late result still drains. Do NOT call TeardownAsync (it would remove L1). No stripe.
+            // late result still drains. Do NOT use the Start reload's commit half (it replaces L1). No stripe.
             logger.LogInformation("Stop drain for WorkflowId={WorkflowId}", workflowId);
             await lifecycle.UnscheduleOnlyAsync(workflowId, context.CancellationToken);
         }

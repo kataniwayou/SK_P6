@@ -113,8 +113,11 @@ public sealed class StartConsumerLifecycleTests
             var jobKey = new JobKey(jobId.ToString("D"));
             Assert.True(await scheduler.CheckExists(jobKey, ct));
 
-            // Second Start with the SAME workflow already in L1 re-runs the lifecycle (no skip):
-            // teardown unschedules the old job, then hydrate+schedule re-applies + reschedules it.
+            // Second Start with the SAME workflow already in L1 re-runs the lifecycle (no skip): the
+            // build-then-commit reload re-reads the L2 definition, then commits — unschedule the OLD
+            // JobId read from L1, Upsert the fresh entry (never Remove), reschedule. The stub's jobId is
+            // FIXED, so old and new collide on one JobKey: if the old job were not deleted first, the
+            // bare ScheduleJob ADD below would throw ObjectAlreadyExistsException.
             await consumer.Consume(OrchestratorTestStubs.Context(new StartOrchestration([workflowId]), ct));
 
             // Still exactly one entry + exactly one live job (re-hydrated, not skipped, not duplicated).
