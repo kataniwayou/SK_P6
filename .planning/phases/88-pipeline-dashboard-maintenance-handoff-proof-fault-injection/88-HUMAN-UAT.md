@@ -3,12 +3,17 @@ status: partial
 phase: 88-pipeline-dashboard-maintenance-handoff-proof-fault-injection
 source: [88-VERIFICATION.md]
 started: 2026-07-29T00:00:00Z
-updated: 2026-07-29T00:00:00Z
+updated: 2026-07-29T04:45:00Z
 ---
 
 ## Current Test
 
-[awaiting human testing]
+number: 5
+name: Handover conversation — condition 5
+expected: |
+  A named receiver acknowledges, unprompted, the five points in section 7 of
+  docs/runbooks/business-dashboard-handover-briefing.md.
+awaiting: a handover conversation with a named receiver
 
 ## Tests
 
@@ -18,7 +23,8 @@ Read the operator runbook (`docs/runbooks/business-dashboard-runbook.md`) as a m
 
 expected: A stranger can operate from the header without needing to read the phase's internal artifacts.
 why_human: Plan 88-11's own sign-off marks this check (#3) NOT PERFORMED — an agent cannot stand in for a reader who did not build the system.
-result: [pending]
+result: pass
+performed_by: user, 2026-07-29 (UAT session)
 
 ### 2. Blocking gaps stated plainly, not softened
 
@@ -26,7 +32,8 @@ Read section (a) of `88-HANDOFF-VERDICT.md` and judge whether the reachability g
 
 expected: The blocking gaps read as blocking, not as caveats.
 why_human: Sign-off check #4 NOT PERFORMED — the chain that wrote the section cannot independently grade its own tone.
-result: [pending]
+result: pass
+performed_by: user, 2026-07-29 (UAT session)
 
 ### 3. PARTIAL/FAIL success criteria named, not rounded up
 
@@ -34,7 +41,8 @@ For each PARTIAL/FAIL roadmap success criterion (SC1 PARTIAL, SC4 FAIL) confirm 
 
 expected: Both are named honestly (BASE-01 Inconclusive / `AllBandsComputed:false` for SC1; the `CountSent`-on-both-branches by-design telemetry-invisibility for SC4).
 why_human: Sign-off check #6 NOT PERFORMED — this is the check most likely to catch a self-serving grade, and the verification pass only mechanically confirmed the language was present, not that it was honest.
-result: [pending]
+result: pass
+performed_by: user, 2026-07-29 (UAT session)
 
 ### 4. Live Grafana spot-check
 
@@ -79,13 +87,20 @@ Conduct the handover conversation and confirm the receiver understands that a gr
 expected: Explicit acknowledgement, not just a document read.
 why_human: No conversation occurred; 88-11 explicitly records condition 5 as not satisfied by the sign-off it produced.
 result: [pending]
+note: |
+  Still pending — no handover conversation has taken place and no receiver is named.
+  Supporting material was prepared on 2026-07-29:
+  `docs/runbooks/business-dashboard-handover-briefing.md`, a two-minute briefing whose
+  section 7 is the five-point acknowledgement checklist a receiver must be able to say
+  back unprompted. The briefing is material FOR the conversation, not evidence that it
+  happened. This item closes only when a named receiver acknowledges those five points.
 
 ## Summary
 
 total: 5
-passed: 0
+passed: 3
 issues: 1
-pending: 4
+pending: 1
 skipped: 0
 blocked: 0
 
