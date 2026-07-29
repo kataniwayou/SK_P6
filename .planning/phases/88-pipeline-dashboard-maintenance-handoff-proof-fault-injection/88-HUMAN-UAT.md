@@ -50,7 +50,8 @@ Open Grafana live and walk 2-3 panels (e.g. panel 9, panel 14) against the runbo
 
 expected: The rendered panel matches what the runbook and artifacts claim.
 why_human: Sign-off check #7 NOT PERFORMED — 88-11 was a documentation-only plan instructed not to drive the live cluster, and the verification pass also stayed read-only to avoid mutating a healthy stack. Values were cross-checked against JSON artifacts only, never a fresh live render.
-result: issue
+result: resolved
+resolved: 2026-07-29 — runbook corrected (see Gaps)
 performed_by: automated live render, 2026-07-29T04:31:34Z (read-only; no fault driven, no cluster mutation)
 method: |
   `scripts/lib/phase-88-panel-read.ps1` -> `Invoke-PanelReadBatch` against the live
@@ -99,7 +100,8 @@ note: |
 
 total: 5
 passed: 3
-issues: 1
+resolved: 1
+issues: 0
 pending: 1
 skipped: 0
 blocked: 0
@@ -107,7 +109,14 @@ blocked: 0
 ## Gaps
 
 - truth: "The rendered panel matches what the runbook and artifacts claim (panel 14)."
-  status: failed
+  status: resolved
+  resolution: |
+    Fixed 2026-07-29 in docs/runbooks/business-dashboard-runbook.md: the panel-14 healthy
+    detail value now reads "kestrel active exactly 0 on a genuinely idle stack", with a dated
+    inline amendment explaining that BASE-01's 0.5 was residual load from the phase driving its
+    own traffic. The symptom column was reworded from "climbs above its usual half-connection"
+    to "rises off zero and stays there", and the action column now says explicitly that a reading
+    of 0 is not a fault. The handover briefing's open-item note was updated to match.
   reason: |
     Live render 2026-07-29T04:31:34Z: `kestrel active` reads exactly 0.0000 across six
     pinned 60 s sub-windows on an idle stack, but docs/runbooks/business-dashboard-runbook.md

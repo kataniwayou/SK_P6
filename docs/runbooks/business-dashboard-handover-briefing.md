@@ -112,10 +112,11 @@ read **exactly 0 at every export tick under 2456 requests** — it is a dead ins
 as a *connection* count, which is not the quantity its title claims, and cross-check panel 10 for
 the actual request rate.
 
-> **Open item (UAT 2026-07-29):** a live render on an idle stack showed `kestrel active` resting at
-> exactly `0`, not the `0.5` the runbook states as its healthy value. The stated envelope still
-> holds and a real climb (measured 2.5–5) clears either threshold, but treat "usual half-connection"
-> in the runbook as unconfirmed.
+> **Resolved (UAT 2026-07-29):** a live render on an idle stack showed `kestrel active` resting at
+> exactly `0`, not the `0.5` BASE-01 recorded — that capture ran while the phase was driving its own
+> traffic, so 0.5 was residual load. The runbook has been corrected: **0 is the healthy resting
+> value, and a reading of 0 on `kestrel active` is not a fault.** The abnormal signal is a rise off
+> zero that persists (a real climb measured 2.5–5 under load).
 
 ---
 
