@@ -4,13 +4,13 @@ milestone: v13.0.0
 milestone_name: Observability Dashboards
 status: executing
 stopped_at: Completed 88-08-PLAN.md
-last_updated: "2026-07-29T02:53:23.601Z"
+last_updated: "2026-07-29T03:15:33.310Z"
 last_activity: 2026-07-29
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 26
-  completed_plans: 23
+  completed_plans: 24
   percent: 67
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Phase: 88 (pipeline-dashboard-maintenance-handoff-proof-fault-injection) — EXECUTING
-Plan: 9 of 11
+Plan: 10 of 11
 Status: Ready to execute
 Last activity: 2026-07-29
 Current focus: Phase 87 — awaiting `/gsd-plan-phase 87`
@@ -721,7 +721,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [█████████░] 88%
+Progress: [█████████░] 92%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1128,6 +1128,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 88 P06 | 125min | 3 tasks | 6 files |
 | Phase 88 P07 | 235min | 3 tasks | 10 files |
 | Phase 88 P08 | 180min | 3 tasks | 5 files |
+| Phase 88 P09 | 45min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -1722,6 +1723,9 @@ Recent decisions affecting current work:
 - [Phase ?]: 88-07: rate() is BLIND to a keeper recovery burst confined to one 60 s export interval (the counter series is born at its final value) while increase() sees it — panel 2's green 0 cannot distinguish 'no recovery ever' from 'a recovery completed within a minute'
 - [Phase ?]: 88-08: DISC-07 measured — 240 s for counter-backed panels (research predicted 120 s: FALSIFIED — a queued pipeline hides a short outage because the broker buffers and the tier drains the backlog inside the same 240 s rate window) and 120 s for gauge-backed panels (predicted 120 s: CONFIRMED, measured consecutive samples equalled floor(D/60) at every rung). Regime B stated separately: a zero-floor guarded counter is detectable at ANY duration.
 - [Phase ?]: 88-08: analyzer-reports/phase-88-discrimination.json is the fourteen-row panel-keyed matrix — 10/14 Proven, 4/14 AcceptedUnproven (6 ZERO-01 dropped, 7 USER DECISION, 8 measured-unreachable, 13 WEB-02 dropped), 13/14 misleading-by-default. scripts/phase-88-rollup.ps1 reads and tabulates only, never re-scores; all three discarded runs, six measured-unsatisfiable criteria and the DISC-04 escalation are carried ON the rows.
+- [Phase ?]: 88-09: DISC-04 recorded Partial and BLOCKED, not Complete and not silently Pending — panel 8 is measured-unreachable because the Phase-79 seam calls CountSent on both branches by design; roadmap SC-5 met, SC-4 not met
+- [Phase ?]: 88-09: the HAND-04 register is DERIVED from phase-88-discrimination.json and asserted mechanically to equal the matrix AcceptedUnproven set (panels 6,7,8,13), so the two partitions cannot drift apart
+- [Phase ?]: 88-09: the HAND-03 rubric is 14x6=84 cells with NO weights and NO aggregate; Q5 non-yes on 13 panels, Q6 no dashboard-wide and stated as a blocking gap rather than softened
 
 ### Roadmap Milestone Log
 
@@ -1823,6 +1827,7 @@ None yet.
 - D-04 live gate (78-04) FAILED-FINDING: reworked live analyzer flips all scenarios PASS->FAIL incl the no-fault baseline (Duplicates==StartedRuns, 100% effect-once violations, Missing=0). Root cause: Phase-77 uniform execution-scope logging emits multiple StepId-scoped framework records per hop; the reworked structural step query counts each as a distinct step execution. Value axis was dark. NOT re-baselined. Needs a follow-up fix plan (collapse multi-record hops per {executionId,stepId} in BuildStepSearchBody/cohort). D-04 remains OPEN.
 - Phase 81 capstone gate NOT met (5 PASS / 2 FAIL / TEST-07 not-run). TEST-04 (keeper) + TEST-06 (rabbitmq) = VERDICT_FAIL (exit 1) SOLELY on MG-1 conservation (orch_consumed@end << proc_sent@end); structural recovery PERFECT for both (Missing=0, all runs complete, zero dup). ROOT CAUSE: D-03 shared-stack sweep rollout-restarts ONLY the orchestrator per scenario (STEP B1, resets orchestrator_consumed) but NEVER the processor (processor_sent accumulates across all scenarios), so MG-1 absolute-AtEnd conservation is baseline-confounded for mg1Binding=true crash scenarios past position 1 (TEST-01 binding passes at pos 1 with no drift; TEST-04 pos4 gap=322; TEST-06 pos6 gap=928). NOT a recovery-architecture defect. RECOMMENDED FIX (in Phase-81 harness scope, analyzer untouched per SPEC-5): rollout-restart the processor-sample tier per scenario too (STEP B/B1) so both conservation-counter-owning tiers share a per-scenario baseline like the compose whole-stack recreate. Requires human/gap-closure decision (methodology change).
 - DISC-04 cannot be fully satisfied as written: panel 8 non-zero with the reinject suppressed requires either a src/ change or KEEPER_REINJECT_DELAY_MS (forbidden by T-88-15), because the suppression seam increments keeper_messages_sent_total on the suppressed branch BY DESIGN. 88-09 must record DISC-04 as HALF met with the measured reason (ZERO-03) and carry panel 8 in the HAND-04 register.
+- DISC-04 (Phase 88) cannot be satisfied as written: panel 8 is measured-unreachable — ReinjectConsumer calls CountSent on BOTH branches by design. Closing it needs a src/ change or allow-listing KEEPER_REINJECT_DELAY_MS + a shortened EXECUTION_DATA_TTL (the FALSIFY-02 combination). Recorded Partial; roadmap SC-4 not met, SC-5 met.
 
 ## Deferred Items
 
@@ -1834,7 +1839,7 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-29T02:53:23.580Z
+Last session: 2026-07-29T03:14:39.455Z
 Stopped at: Completed 88-08-PLAN.md
 Resume file: None
 
