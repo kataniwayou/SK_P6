@@ -8,7 +8,8 @@ created: 2026-07-28
 updated: 2026-07-29
 audited: 2026-07-29
 automated_gaps: 0
-manual_only_outstanding: 1  # the handover conversation only; the live-render issue was resolved 2026-07-29
+manual_only_outstanding: 1
+manual_only_note: "the handover conversation only; the live-render issue was resolved 2026-07-29"
 ---
 
 # Phase 88 — Validation Strategy

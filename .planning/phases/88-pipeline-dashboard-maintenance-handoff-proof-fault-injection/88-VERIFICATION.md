@@ -1,28 +1,39 @@
 ---
 phase: 88-pipeline-dashboard-maintenance-handoff-proof-fault-injection
 verified: 2026-07-29T00:00:00Z
+updated: 2026-07-29T05:30:00Z
+human_verification_resolved: 4
+human_verification_outstanding: 1
 status: human_needed
 score: 9/9 must-haves verified
 overrides_applied: 0
 human_verification:
-  - test: "Read the operator runbook (docs/runbooks/business-dashboard-runbook.md) as a maintenance engineer who did not build the system: can you reach the dashboard, know the retention horizon, and know what outage length it cannot show, from the header alone?"
-    expected: "A stranger can operate from the header without needing to read the phase's internal artifacts."
-    why_human: "Plan 88-11's own sign-off marks this check (#3) NOT PERFORMED — an agent cannot stand in for a reader who did not build the system."
-  - test: "Read section (a) of 88-HANDOFF-VERDICT.md and judge whether the reachability gap (B1) and the other seven blocking gaps are stated plainly or softened into an accepted posture."
-    expected: "The blocking gaps read as blocking, not as caveats."
-    why_human: "Sign-off check #4 NOT PERFORMED — the chain that wrote the section cannot independently grade its own tone."
-  - test: "For each PARTIAL/FAIL roadmap success criterion (SC1 PARTIAL, SC4 FAIL) confirm the shortfall is named rather than rounded up."
-    expected: "Both are named honestly (BASE-01 Inconclusive/AllBandsComputed:false for SC1; the CountSent-both-branches by-design telemetry-invisibility for SC4)."
-    why_human: "Sign-off check #6 NOT PERFORMED — this is the check most likely to catch a self-serving grade, and the verifier's own re-read (see below) only mechanically confirmed presence of the language, not a human judgement of honesty."
-  - test: "Open Grafana live and walk 2-3 panels (e.g. panel 9, panel 14) against the runbook's stated healthy bands and the scenario artifacts' recorded values."
-    expected: "The rendered panel matches what the runbook and artifacts claim."
-    why_human: "Sign-off check #7 NOT PERFORMED — documentation-only plan 88-11 was instructed not to drive the live cluster. This verification pass also did not drive the cluster to avoid live mutation; the values were cross-checked against the JSON artifacts only, not against a fresh live render."
   - test: "Conduct the handover conversation and confirm the receiver understands that a green 0 on panels 6/7/8/13 means 'no evidence', not 'healthy' (verdict condition 5)."
-    expected: "Explicit acknowledgement, not just a document read."
+    expected: "Explicit acknowledgement from a named receiver, not just a document read."
     why_human: "No conversation occurred; 88-11 explicitly records condition 5 as not satisfied by the sign-off it produced."
+    blocker: "No named receiver. Briefing material prepared at docs/runbooks/business-dashboard-handover-briefing.md section 7; a briefing is not a handover. This is the phase's ONLY outstanding verification."
 ---
 
 # Phase 88: Pipeline Dashboard Maintenance Handoff Proof (Fault Injection) — Verification Report
+
+## Human Verification — 4 of 5 resolved 2026-07-29
+
+The `human_verification` frontmatter block lists only what still needs a person, because
+`gsd-sdk query audit-uat` reports **every** entry in that block as outstanding regardless of any
+per-item `result:` field — it keys solely off the file's `status:`. Leaving resolved items in the
+block made the audit over-report by four; removing the block entirely would have hidden the one item
+that is genuinely open. The resolved four are therefore recorded here instead of being deleted.
+
+| # | Item | Resolved by | Outcome |
+|---|---|---|---|
+| 1 | Runbook readable by a stranger (sign-off check #3) | **user**, UAT session 2026-07-29 | PASS — header conveys reachability, retention horizon and the invisible-outage floor without needing the phase's internal artifacts |
+| 2 | Blocking gaps stated plainly, not softened (check #4) | **user**, UAT session 2026-07-29 | PASS — the eight blocking gaps, including B1 reachability, read as blocking rather than as accepted caveats |
+| 3 | SC1 PARTIAL / SC4 FAIL named, not rounded up (check #6) | **user**, UAT session 2026-07-29 | PASS — BASE-01 `Inconclusive`/`AllBandsComputed:false` and the `CountSent`-on-both-branches telemetry-invisibility are both named |
+| 4 | Live Grafana render vs stated bands (check #7) | automated live render 2026-07-29 (read-only, 12/12 reads `Rendered`) | **Found a real defect and fixed it.** Panel 9 matched exactly (0.2000 ×6 on both keeper pods). Panel 14's `kestrel active` read `0.0000` ×6 against a stated healthy mean of 0.5 — BASE-01 was captured under the phase's own drive traffic, so 0.5 was residual, not resting. Runbook corrected; symptom reworded from "climbs above its usual half-connection" to "rises off zero and stays there" |
+
+Full records in `88-HUMAN-UAT.md`. Item 5 (the handover conversation) remains open and is the sole
+reason this file's status is still `human_needed`.
+
 
 **Phase Goal:** Prove every business-dashboard panel *discriminates*: drive each fault the panel exists to reveal, and assert through the rendered Grafana panel (Playwright) that it moves — and that the panels it should not affect stay put. Ends in a handoff readiness verdict for the maintenance department.
 
