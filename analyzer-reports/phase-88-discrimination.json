@@ -1,0 +1,3124 @@
+[
+  {
+    "panelId": 1,
+    "panelTitle": "Orchestrator consumed vs sent (conservation)",
+    "panelType": "timeseries",
+    "regime": "A",
+    "guarded": false,
+    "thresholds": [],
+    "queries": [
+      "sum by (source) (rate(orchestrator_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))",
+      "sum by (source) (rate(orchestrator_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": 0,
+        "seriesName": "consumed orchestrator",
+        "bandLow": 0.6451199999999999,
+        "bandHigh": 0.7884799999999998,
+        "bandMean": 0.7167999999999999,
+        "bandSigma": 0.02385511824885104,
+        "floorApplied": true,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.733,
+          0.708,
+          0.678,
+          0.675,
+          0.706,
+          0.733,
+          0.733,
+          0.734,
+          0.734,
+          0.734
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 1,
+        "seriesName": "sent orchestrator",
+        "bandLow": 1.1951454651067281,
+        "bandHigh": 1.4768545348932725,
+        "bandMean": 1.3360000000000003,
+        "bandSigma": 0.04695151163109073,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          1.37,
+          1.31,
+          1.26,
+          1.26,
+          1.31,
+          1.37,
+          1.37,
+          1.37,
+          1.37,
+          1.37
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": 0.6451199999999999,
+      "high": 1.4768545348932725,
+      "floorApplied": true,
+      "seriesCount": 2,
+      "collapsedFrom": [
+        "consumed orchestrator",
+        "sent orchestrator"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [],
+    "observedStates": [
+      "steady",
+      "depressed"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "steady",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is 0.64512..1.47685453489327 over 2 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "WEB-01",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 1.19514546510673..1.47685453489327"
+      },
+      {
+        "state": "depressed",
+        "scenarioId": "SCALE-02",
+        "role": "asserted subject",
+        "evidence": "Moved=true over 3 consecutive sub-window(s) against a band of 0.632229895240814..0.776370104759186 — copied, not recomputed"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "SCALE-03",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 1.07054388940095..1.57745611059905"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": "SCALE-02",
+    "alsoProvenBy": [],
+    "status": "Proven",
+    "reason": "",
+    "reasonSource": "",
+    "assertedIn": [
+      "SCALE-02"
+    ],
+    "observedIn": [],
+    "crossTalkAppearances": [
+      "WEB-01",
+      "WEB-02",
+      "SCALE-03"
+    ],
+    "ladderRungs": [],
+    "misleadingByDefault": {
+      "flag": false,
+      "note": "NOT misleading by default, and it is the only one of the fourteen that is not. Its series are unguarded, they carry a live non-zero level on a healthy stack, and under a real orchestrator outage SCALE-02 measured both legend Means FALLING visibly (consumed 0.734 -> 0.139, sent 1.370 -> 0.257) rather than emptying or holding a comfortable value. The one caveat worth stating is that a 240 s outage did NOT reach \"No data\": what an operator actually sees is a fall, not a blank."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [],
+    "escalations": [],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | provenBy/observedStates(moved) <- analyzer-reports/phase-88-SCALE-02.json | status=Proven <- the PanelResults[] entry in analyzer-reports/phase-88-SCALE-02.json",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-WEB-01.json",
+      "analyzer-reports/phase-88-WEB-02.json",
+      "analyzer-reports/phase-88-SCALE-02.json",
+      "analyzer-reports/phase-88-SCALE-03.json"
+    ]
+  },
+  {
+    "panelId": 2,
+    "panelTitle": "Keeper consumed vs sent (conservation)",
+    "panelType": "timeseries",
+    "regime": "B",
+    "guarded": true,
+    "thresholds": [],
+    "queries": [
+      "sum by (source) (rate(keeper_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval])) or vector(0)",
+      "sum by (source) (rate(keeper_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval])) or vector(0)"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": 0,
+        "seriesName": "consumed",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 1,
+        "seriesName": "sent",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": 0.0,
+      "high": 0.0,
+      "floorApplied": false,
+      "seriesCount": 2,
+      "collapsedFrom": [
+        "consumed",
+        "sent"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [],
+    "observedStates": [
+      "zero",
+      "nonzero"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "zero",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is 0..0 over 2 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "SCALE-03",
+        "role": "observed only",
+        "evidence": "values 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 — recorded by the scenario, never scored"
+      },
+      {
+        "state": "nonzero",
+        "scenarioId": "ZERO-02",
+        "role": "asserted subject",
+        "evidence": "Moved=true over 4 consecutive sub-window(s) against a band of 0..0 — copied, not recomputed"
+      },
+      {
+        "state": "nonzero",
+        "scenarioId": "ZERO-03",
+        "role": "observed only",
+        "evidence": "values 0,0,0,0,0,0,0,0,0,0.00288,0.00566,0.00556,0,0,0,0,0,0.00288,0.00566,0.00556 — recorded by the scenario, never scored"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": "ZERO-02",
+    "alsoProvenBy": [],
+    "status": "Proven",
+    "reason": "",
+    "reasonSource": "",
+    "assertedIn": [
+      "ZERO-02"
+    ],
+    "observedIn": [
+      "SCALE-03",
+      "ZERO-03"
+    ],
+    "crossTalkAppearances": [],
+    "ladderRungs": [],
+    "misleadingByDefault": {
+      "flag": true,
+      "note": "TWO independent ways. (1) The `or vector(0)` guard makes a green 0 indistinguishable from \"keeper_messages_consumed_total has never been emitted at all\" — which was literally true of this cluster at Phase-87 measurement time. (2) MEASURED IN 88-07: the rate() form is BLIND to a recovery burst confined to a single 60 s export interval. ZERO-02 run 1 drove a genuine event — both replicas claimed, three KeeperReinjects flowed, the keeper consumed and sent all three — and the panel rendered an UNBROKEN 0, because the counter series is born carrying its final value and rate() differences consecutive samples. A real recovery event may therefore leave this panel at zero. A further artifact of the guard, measured in ZERO-02 run 2: when the real series arrives the guard row does NOT disappear, so the panel renders a permanent phantom `consumed` at 0 beside the real `consumed keeper`, with nothing on the panel to say which is which."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      },
+      {
+        "file": "analyzer-reports/phase-88-ZERO-02-run1-discarded.json",
+        "scenarioId": "ZERO-02",
+        "defect": "run 1 drove a GENUINE recovery event that panel 2 rendered as an unbroken 0, because the whole burst finished inside one 60 s export interval and rate() differences consecutive samples. It also recorded the DRIVER's own activation POST as the fault's blast radius on panels 10 and 12. Discarded for DEFECTS in the drive code — and it remains a BETTER measurement of what an operator will actually see than run 2 is. Both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [],
+    "escalations": [],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | provenBy/observedStates(moved) <- analyzer-reports/phase-88-ZERO-02.json | status=Proven <- the PanelResults[] entry in analyzer-reports/phase-88-ZERO-02.json",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-SCALE-03.json",
+      "analyzer-reports/phase-88-ZERO-02.json",
+      "analyzer-reports/phase-88-ZERO-03.json"
+    ]
+  },
+  {
+    "panelId": 3,
+    "panelTitle": "Processor consumed vs sent by image (conservation)",
+    "panelType": "timeseries",
+    "regime": "A",
+    "guarded": false,
+    "thresholds": [],
+    "queries": [
+      "sum by (identityName) (rate(processor_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))",
+      "sum by (identityName) (rate(processor_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": 0,
+        "seriesName": "consumed sample-proc-ea1076bdc5da4490b35428f485135f9b_1.0.0",
+        "bandLow": 0.6751800000000001,
+        "bandHigh": 0.8252200000000003,
+        "bandMean": 0.7502000000000002,
+        "bandSigma": 0.02361167319592392,
+        "floorApplied": true,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.767,
+          0.739,
+          0.711,
+          0.711,
+          0.739,
+          0.767,
+          0.767,
+          0.767,
+          0.767,
+          0.767
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 1,
+        "seriesName": "sent sample-proc-ea1076bdc5da4490b35428f485135f9b_1.0.0",
+        "bandLow": 0.6453,
+        "bandHigh": 0.7887,
+        "bandMean": 0.717,
+        "bandSigma": 0.023456816114345552,
+        "floorApplied": true,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.733,
+          0.706,
+          0.678,
+          0.678,
+          0.706,
+          0.733,
+          0.734,
+          0.734,
+          0.734,
+          0.734
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": 0.6453,
+      "high": 0.8252200000000003,
+      "floorApplied": true,
+      "seriesCount": 2,
+      "collapsedFrom": [
+        "consumed sample-proc-ea1076bdc5da4490b35428f485135f9b_1.0.0",
+        "sent sample-proc-ea1076bdc5da4490b35428f485135f9b_1.0.0"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [],
+    "observedStates": [
+      "steady",
+      "depressed",
+      "NoData"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "steady",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is 0.6453..0.82522 over 2 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "WEB-01",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0.6453..0.7887"
+      },
+      {
+        "state": "depressed",
+        "scenarioId": "SCALE-01",
+        "role": "asserted subject",
+        "evidence": "Moved=true over 4 consecutive sub-window(s) against a band of 0.67509..0.82511 — copied, not recomputed"
+      },
+      {
+        "state": "NoData",
+        "scenarioId": "SCALE-01",
+        "role": "asserted subject",
+        "evidence": "AfterStates Rendered,Rendered,Rendered,Rendered,Rendered,NoData,NoData"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "SCALE-03",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0.588057994150332..0.833542005849668"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "LADDER-01",
+        "role": "counter rung 30s",
+        "evidence": "Moved=False movedBy=none consecutive=0"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "LADDER-01",
+        "role": "counter rung 60s",
+        "evidence": "Moved=False movedBy=none consecutive=1"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "LADDER-01",
+        "role": "counter rung 120s",
+        "evidence": "Moved=False movedBy=none consecutive=1"
+      },
+      {
+        "state": "depressed",
+        "scenarioId": "LADDER-01",
+        "role": "counter rung 240s",
+        "evidence": "Moved=True movedBy=value consecutive=2"
+      },
+      {
+        "state": "depressed",
+        "scenarioId": "LADDER-01",
+        "role": "counter rung 480s",
+        "evidence": "Moved=True movedBy=value consecutive=3"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": "SCALE-01",
+    "alsoProvenBy": [
+      "LADDER-01"
+    ],
+    "status": "Proven",
+    "reason": "",
+    "reasonSource": "",
+    "assertedIn": [
+      "SCALE-01"
+    ],
+    "observedIn": [],
+    "crossTalkAppearances": [
+      "WEB-01",
+      "WEB-02",
+      "SCALE-03"
+    ],
+    "ladderRungs": [
+      {
+        "regime": "counter",
+        "faultSeconds": 30,
+        "moved": false,
+        "movedBy": "none",
+        "consecutiveSamplesOutside": 0,
+        "dipFraction": 0.0005622715771718681,
+        "theoreticalDipFraction": 0.125
+      },
+      {
+        "regime": "counter",
+        "faultSeconds": 60,
+        "moved": false,
+        "movedBy": "none",
+        "consecutiveSamplesOutside": 1,
+        "dipFraction": 0.10039113428943959,
+        "theoreticalDipFraction": 0.25
+      },
+      {
+        "regime": "counter",
+        "faultSeconds": 120,
+        "moved": false,
+        "movedBy": "none",
+        "consecutiveSamplesOutside": 1,
+        "dipFraction": 0.32885906040268476,
+        "theoreticalDipFraction": 0.5
+      },
+      {
+        "regime": "counter",
+        "faultSeconds": 240,
+        "moved": true,
+        "movedBy": "value",
+        "consecutiveSamplesOutside": 2,
+        "dipFraction": 0.4990312759479658,
+        "theoreticalDipFraction": 1.0
+      },
+      {
+        "regime": "counter",
+        "faultSeconds": 480,
+        "moved": true,
+        "movedBy": "value",
+        "consecutiveSamplesOutside": 3,
+        "dipFraction": 0.7436974789915967,
+        "theoreticalDipFraction": 1.0
+      }
+    ],
+    "misleadingByDefault": {
+      "flag": true,
+      "note": "The fall is a four-minute SLOPE, not a cliff, and its first in-fault sample still reads inside the healthy band. SCALE-01 measured 0.737 -> 0.632 -> 0.447 -> 0.169 -> 0 across five minutes of a TOTAL processor-tier outage, because the 240 s rate lookback smears the fault across four windows. An operator watching for a cliff will miss the outage; the signal is the slope over several minutes. LADDER-01 sharpens this into a duration: see this row's ladderRungs."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      },
+      {
+        "file": "analyzer-reports/phase-88-SCALE-01-run1-discarded.json",
+        "scenarioId": "SCALE-01",
+        "defect": "run 1 stated a spike its own recorded values contradict (the segment behaviour was INFERRED from \"some series moved\" while that series had been scored by the NoData half of its compound token), an alt-direction match APPENDED a duplicate series entry so the diagnostic aggregate double-counted panel 4, and PanelStateNoDataRun was left unmeasured for panels whose prediction did not admit NoData. Discarded for DEFECTS; both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [],
+    "escalations": [],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | provenBy/observedStates(moved) <- analyzer-reports/phase-88-SCALE-01.json | status=Proven <- the PanelResults[] entry in analyzer-reports/phase-88-SCALE-01.json",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-WEB-01.json",
+      "analyzer-reports/phase-88-WEB-02.json",
+      "analyzer-reports/phase-88-SCALE-01.json",
+      "analyzer-reports/phase-88-SCALE-03.json",
+      "analyzer-reports/phase-88-LADDER-01.json"
+    ]
+  },
+  {
+    "panelId": 4,
+    "panelTitle": "Orchestrator sends minus processor pickups (structural - read the trend)",
+    "panelType": "stat",
+    "regime": "C",
+    "guarded": false,
+    "thresholds": [
+      "text@base"
+    ],
+    "queries": [
+      "sum(increase(orchestrator_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) - sum(increase(processor_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range]))"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": -1,
+        "seriesName": "gap",
+        "bandLow": 37.4058829184433,
+        "bandHigh": 98.5941170815567,
+        "bandMean": 68.0,
+        "bandSigma": 10.198039027185569,
+        "floorApplied": false,
+        "sampleCount": 5,
+        "subWindowSeconds": 120,
+        "values": [
+          50.0,
+          74.0,
+          72.0,
+          70.0,
+          74.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": 37.4058829184433,
+      "high": 98.5941170815567,
+      "floorApplied": false,
+      "seriesCount": 1,
+      "collapsedFrom": [
+        "gap"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [],
+    "observedStates": [
+      "steady",
+      "NoData",
+      "depressed"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "steady",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is 37.4058829184433..98.5941170815567 over 1 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "NoData",
+        "scenarioId": "SCALE-01",
+        "role": "asserted subject",
+        "evidence": "Moved=true over 2 consecutive sub-window(s) against a band of .. — copied, not recomputed"
+      },
+      {
+        "state": "NoData",
+        "scenarioId": "SCALE-01",
+        "role": "asserted subject",
+        "evidence": "AfterStates Rendered,NoData,NoData"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "LADDER-01",
+        "role": "counter rung 30s",
+        "evidence": "Moved=False movedBy=none consecutive=0"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "LADDER-01",
+        "role": "counter rung 60s",
+        "evidence": "Moved=False movedBy=none consecutive=1"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "LADDER-01",
+        "role": "counter rung 120s",
+        "evidence": "Moved=False movedBy=none consecutive=0"
+      },
+      {
+        "state": "depressed",
+        "scenarioId": "LADDER-01",
+        "role": "counter rung 240s",
+        "evidence": "Moved=True movedBy=value consecutive=2"
+      },
+      {
+        "state": "depressed",
+        "scenarioId": "LADDER-01",
+        "role": "counter rung 480s",
+        "evidence": "Moved=True movedBy=value consecutive=2"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": "SCALE-01",
+    "alsoProvenBy": [
+      "LADDER-01"
+    ],
+    "status": "Proven",
+    "reason": "",
+    "reasonSource": "",
+    "assertedIn": [
+      "SCALE-01"
+    ],
+    "observedIn": [],
+    "crossTalkAppearances": [],
+    "ladderRungs": [
+      {
+        "regime": "counter",
+        "faultSeconds": 30,
+        "moved": false,
+        "movedBy": "none",
+        "consecutiveSamplesOutside": 0,
+        "dipFraction": 0.3441599000624609,
+        "theoreticalDipFraction": 0.125
+      },
+      {
+        "regime": "counter",
+        "faultSeconds": 60,
+        "moved": false,
+        "movedBy": "none",
+        "consecutiveSamplesOutside": 1,
+        "dipFraction": 0.2775771047513197,
+        "theoreticalDipFraction": 0.25
+      },
+      {
+        "regime": "counter",
+        "faultSeconds": 120,
+        "moved": false,
+        "movedBy": "none",
+        "consecutiveSamplesOutside": 0,
+        "dipFraction": 0.1252572772713909,
+        "theoreticalDipFraction": 0.5
+      },
+      {
+        "regime": "counter",
+        "faultSeconds": 240,
+        "moved": true,
+        "movedBy": "value",
+        "consecutiveSamplesOutside": 2,
+        "dipFraction": 0.154636313159356,
+        "theoreticalDipFraction": 1.0
+      },
+      {
+        "regime": "counter",
+        "faultSeconds": 480,
+        "moved": true,
+        "movedBy": "value",
+        "consecutiveSamplesOutside": 2,
+        "dipFraction": 0.4708333333333333,
+        "theoreticalDipFraction": 1.0
+      }
+    ],
+    "misleadingByDefault": {
+      "flag": true,
+      "note": "TWO ways, both measured. (1) STRUCTURAL OFFSET THAT CAN NEVER READ 0: BASE-01 recorded a wide-window level of 2.11 on a demonstrably healthy stack, so the number an operator sees is always non-zero and growing — applying a \"should be zero\" reading to it is a guaranteed false positive, which is why the wide level is RECORDED AND NEVER SCORED. (2) IT GOES BLANK UNDER THE FAULT IT EXISTS TO REVEAL: sum(increase(proc_consumed[$__range])) over a window with no real samples is an EMPTY vector and `A - empty` is empty, so SCALE-01 measured the stat whose own title says \"read the trend\" rendering \"No data\" rather than sloping up. It also cannot be read at all at a 60 s range (increase() needs two samples and the stored resolution is 60 s)."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      },
+      {
+        "file": "analyzer-reports/phase-88-SCALE-01-run1-discarded.json",
+        "scenarioId": "SCALE-01",
+        "defect": "run 1 stated a spike its own recorded values contradict (the segment behaviour was INFERRED from \"some series moved\" while that series had been scored by the NoData half of its compound token), an alt-direction match APPENDED a duplicate series entry so the diagnostic aggregate double-counted panel 4, and PanelStateNoDataRun was left unmeasured for panels whose prediction did not admit NoData. Discarded for DEFECTS; both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [
+      {
+        "criterion": "88-04 must_have: \"panel 4 is banded on its per-minute increase at the fixed 60 s sub-window\"",
+        "measured": "panel 4 renders \"No data\" at a 60 s sub-window. increase() needs at least TWO samples inside its range and the stored resolution on this stack is 60 s (the SDK export cadence, not the 15 s scrape), so a 60 s window contains exactly one. Panel 4 is banded at 120 s instead and every band entry states its own SubWindowSeconds, so widths can never be silently cross-compared.",
+        "correctedIn": "88-04"
+      },
+      {
+        "criterion": "88-06 prediction: panel 4 slopes UP under a processor outage",
+        "measured": "PREDICTION CORRECTED BY MEASUREMENT: sum(increase(proc_consumed[120s])) over a window with no real samples is an EMPTY vector and `A - empty` is empty, so the stat whose own title says \"read the trend\" goes BLANK under exactly the fault it exists to reveal. SCALE-01's verdict is Inconclusive because of it — a wrong model is never absorbed into a Pass.",
+        "correctedIn": "88-06"
+      }
+    ],
+    "escalations": [],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | provenBy/observedStates(moved) <- analyzer-reports/phase-88-SCALE-01.json | status=Proven <- the PanelResults[] entry in analyzer-reports/phase-88-SCALE-01.json",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-SCALE-01.json",
+      "analyzer-reports/phase-88-LADDER-01.json"
+    ]
+  },
+  {
+    "panelId": 5,
+    "panelTitle": "Per-processor dispatch gap",
+    "panelType": "timeseries",
+    "regime": "A",
+    "guarded": false,
+    "thresholds": [],
+    "queries": [
+      "sum by (processorId) (rate(orchestrator_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval])) - sum by (processorId) (rate(processor_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": 0,
+        "seriesName": "c3242cd2-4122-491a-8b31-43cf2ee048f7",
+        "bandLow": 0.5123649804122283,
+        "bandHigh": 0.6540350195877715,
+        "bandMean": 0.5831999999999999,
+        "bandSigma": 0.02361167319592388,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.6,
+          0.572,
+          0.544,
+          0.544,
+          0.572,
+          0.6,
+          0.6,
+          0.6,
+          0.6,
+          0.6
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": 0.5123649804122283,
+      "high": 0.6540350195877715,
+      "floorApplied": false,
+      "seriesCount": 1,
+      "collapsedFrom": [
+        "c3242cd2-4122-491a-8b31-43cf2ee048f7"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [],
+    "observedStates": [
+      "steady",
+      "NoData"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "steady",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is 0.512364980412228..0.654035019587772 over 1 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "NoData",
+        "scenarioId": "SCALE-01",
+        "role": "asserted subject",
+        "evidence": "Moved=true over 2 consecutive sub-window(s) against a band of 0.508026498686457..0.658573501313543 — copied, not recomputed"
+      },
+      {
+        "state": "NoData",
+        "scenarioId": "SCALE-01",
+        "role": "asserted subject",
+        "evidence": "AfterStates Rendered,Rendered,Rendered,Rendered,Rendered,NoData,NoData"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": "SCALE-01",
+    "alsoProvenBy": [],
+    "status": "Proven",
+    "reason": "",
+    "reasonSource": "",
+    "assertedIn": [
+      "SCALE-01"
+    ],
+    "observedIn": [],
+    "crossTalkAppearances": [],
+    "ladderRungs": [],
+    "misleadingByDefault": {
+      "flag": true,
+      "note": "TWO ways, both measured. (1) STRUCTURAL OFFSET: the gap between orchestrator sends and processor pickups carries a permanent non-zero level on a healthy stack. (2) IT DECAYS AND EMPTIES RATHER THAN SPIKING: SCALE-01 measured 0.63 -> 0.588 -> 0.4 -> 0.234 -> 0.183 and then \"No data\" under a total processor outage. The research model (the orchestrator keeps sending while pickups stop, so the gap spikes to the full send rate) assumes an INDEPENDENT producer; this pipeline is request/response, so the orchestrator's own send rate falls with the processors and the gap shrinks before the panel goes blank."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      },
+      {
+        "file": "analyzer-reports/phase-88-SCALE-01-run1-discarded.json",
+        "scenarioId": "SCALE-01",
+        "defect": "run 1 stated a spike its own recorded values contradict (the segment behaviour was INFERRED from \"some series moved\" while that series had been scored by the NoData half of its compound token), an alt-direction match APPENDED a duplicate series entry so the diagnostic aggregate double-counted panel 4, and PanelStateNoDataRun was left unmeasured for panels whose prediction did not admit NoData. Discarded for DEFECTS; both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [
+      {
+        "criterion": "88-06 prediction: the per-processor dispatch gap SPIKES before it empties",
+        "measured": "HALF HELD. Panel 5 emptied WITHOUT EVER SPIKING (0.63 -> 0.588 -> 0.4 -> 0.234 -> 0.183 is a decay). The research model assumes an independent producer; this pipeline is request/response, so with the processors gone the orchestrator receives no completions and its own send rate falls too.",
+        "correctedIn": "88-06"
+      }
+    ],
+    "escalations": [],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | provenBy/observedStates(moved) <- analyzer-reports/phase-88-SCALE-01.json | status=Proven <- the PanelResults[] entry in analyzer-reports/phase-88-SCALE-01.json",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-SCALE-01.json"
+    ]
+  },
+  {
+    "panelId": 6,
+    "panelTitle": "Orchestrator unresolved steps in range",
+    "panelType": "stat",
+    "regime": "B",
+    "guarded": true,
+    "thresholds": [
+      "green@base",
+      "red@1"
+    ],
+    "queries": [
+      "sum(increase(orchestrator_step_unresolved_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) or vector(0)"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": -1,
+        "seriesName": "unresolved",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": 0.0,
+      "high": 0.0,
+      "floorApplied": false,
+      "seriesCount": 1,
+      "collapsedFrom": [
+        "unresolved"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [],
+    "observedStates": [
+      "zero"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "zero",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is 0..0 over 1 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "ZERO-01",
+        "role": "asserted subject",
+        "evidence": "Moved=false against a band of 0..0; AfterValues 0,0,0,0,0,0"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "ZERO-03",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": null,
+    "alsoProvenBy": [],
+    "status": "AcceptedUnproven",
+    "reason": "neither route reaches an orchestrator_step_unresolved increment: the API dangling edge is refused 422 at step-create, and the L2 step key is rewritten from Postgres by any stop/start cycle. ROUTE A — API dangling edge: MEASURED 422 at stage `step-create`. POST /api/v1/steps refuses a nextStepIds entry naming a non-existent step outright, EARLIER than the planning analysis predicted (CycleDetector's D-08 missing-step gate was expected to reject it at activation instead). The graph can therefore never be brought into the state this route needs. ROUTE B — L2 step-key deletion: NOT VIABLE. On a validly created and activated two-step probe workflow the non-entry step's key skp:{workflowId}:{stepId} was present after activation, absent after a DEL, and PRESENT AGAIN after one stop/start cycle, because OrchestrationService.StartAsync ends in IRedisProjectionWriter.UpsertAsync, which rewrites the whole snapshot from Postgres — so the hole closes before the orchestrator's hydration BFS could ever miss the step. Reaching the counter would require a src/ change, which this phase's locked constraint forbids, and no substitute fault was invented. LOG-CORROBORATION ROUTE FOR MAINTENANCE: a non-zero panel 6 corresponds one-for-one with the orchestrator emitting `Dangling next-step id {NextStepId} — skipping (business)` (src/Orchestrator/Dispatch/OrchestratorPrePipeline.cs:184) in the same window — one log line per increment, since stage-3 increments orchestrator_step_unresolved once per entry in selection.UnresolvedIds. Search the orchestrator logs for that string over the panel's range before trusting a non-zero reading, and treat a green 0 as \"either no dangling edge occurred OR the counter has never been emitted at all\" — this phase could not tell those apart. The increment site is graceful (never throws, always acks), so a non-zero reading is credible when it does appear.",
+    "reasonSource": "ZERO-01",
+    "assertedIn": [
+      "ZERO-01"
+    ],
+    "observedIn": [],
+    "crossTalkAppearances": [
+      "ZERO-03"
+    ],
+    "ladderRungs": [],
+    "misleadingByDefault": {
+      "flag": true,
+      "note": "A guarded green `0` is indistinguishable from \"orchestrator_step_unresolved_total has never been emitted\". ZERO-01 established that the counter is unreachable from outside src/ — the API dangling-edge route is refused 422 at step-create and the L2 step key is rewritten from Postgres by any stop/start cycle — so this phase never observed the panel non-zero and could not. Maintenance must corroborate a non-zero reading against the orchestrator log line `Dangling next-step id {NextStepId} - skipping (business)` (one line per increment) and must read a green 0 as \"either no dangling edge occurred OR the counter has never been emitted at all\"."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [],
+    "escalations": [],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | status=AcceptedUnproven, reason <- analyzer-reports/phase-88-ZERO-01.json",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-ZERO-01.json",
+      "analyzer-reports/phase-88-ZERO-03.json"
+    ]
+  },
+  {
+    "panelId": 7,
+    "panelTitle": "Processor dropped spawns in range",
+    "panelType": "stat",
+    "regime": "B",
+    "guarded": true,
+    "thresholds": [
+      "green@base",
+      "red@1"
+    ],
+    "queries": [
+      "sum(increase(processor_spawn_dropped_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) or vector(0)"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": -1,
+        "seriesName": "dropped spawns",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": 0.0,
+      "high": 0.0,
+      "floorApplied": false,
+      "seriesCount": 1,
+      "collapsedFrom": [
+        "dropped spawns"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [],
+    "observedStates": [
+      "zero"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "zero",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is 0..0 over 1 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "ZERO-03",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": null,
+    "alsoProvenBy": [],
+    "status": "AcceptedUnproven",
+    "reason": "ACCEPTED-UNPROVEN BY USER DECISION, NOT BY MEASUREMENT. No broker-fault scenario was designed for `processor_spawn_dropped_total` — deliberately, and that is the decision itself rather than a gap in the evidence. Reaching the counter needs a spawn to be DROPPED, which on this stack means a broker or dispatch fault this phase chose not to drive. Panel 7 is therefore proven to render `0` (it was read as an exactly-zero cross-talk control during ZERO-03, at exactly 0 across every sub-window, while a real fault was firing elsewhere) and has NEVER been proven to render non-zero. Because its expression is `sum(increase(processor_spawn_dropped_total[$__range])) or vector(0)`, its guarded green `0` is INDISTINGUISHABLE from \"the counter has never been emitted at all\" — the same defect the phase measured on panels 6, 8 and 13. Maintenance must treat a green panel 7 as \"no evidence\" rather than as \"no dropped spawns\".",
+    "reasonSource": "user decision (locked at phase level, recorded in 88-PROBE-DECISIONS.md and every plan since)",
+    "assertedIn": [],
+    "observedIn": [],
+    "crossTalkAppearances": [
+      "ZERO-03"
+    ],
+    "ladderRungs": [],
+    "misleadingByDefault": {
+      "flag": true,
+      "note": "A guarded green `0` is indistinguishable from \"processor_spawn_dropped_total has never been emitted\". Panel 7 was read at exactly 0 across every sub-window of ZERO-03 while a real fault fired elsewhere, so the zero is genuine — but no scenario has ever driven it non-zero, by user decision, so nothing on this dashboard distinguishes \"no dropped spawns\" from \"this counter has never existed\"."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [],
+    "escalations": [],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | status=AcceptedUnproven, reason <- user decision; the exactly-zero reading <- analyzer-reports/phase-88-ZERO-03.json (cross-talk control)",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-ZERO-03.json"
+    ]
+  },
+  {
+    "panelId": 8,
+    "panelTitle": "Keeper consumed - sent gap in range",
+    "panelType": "stat",
+    "regime": "B",
+    "guarded": true,
+    "thresholds": [
+      "green@base",
+      "red@1"
+    ],
+    "queries": [
+      "sum(increase(keeper_messages_consumed_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) - sum(increase(keeper_messages_sent_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__range])) or vector(0)"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": -1,
+        "seriesName": "gap",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": 0.0,
+      "high": 0.0,
+      "floorApplied": false,
+      "seriesCount": 1,
+      "collapsedFrom": [
+        "gap"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [],
+    "observedStates": [
+      "zero"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "zero",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is 0..0 over 1 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "SCALE-03",
+        "role": "observed only",
+        "evidence": "values 0,0,0,0,0,0,0,0 — recorded by the scenario, never scored"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "ZERO-02",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "ZERO-03",
+        "role": "asserted subject",
+        "evidence": "Moved=false against a band of 0..0; AfterValues 0,0,0,0,0,0"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": null,
+    "alsoProvenBy": [],
+    "status": "AcceptedUnproven",
+    "reason": "PANEL 8 IS MEASURED-UNREACHABLE. The fault fired exactly as designed and the gap still could not open. Three INDEPENDENT reasons, each measured in this run rather than reasoned about:  ROUTE 1 — the seam is telemetry-byte-identical BY DESIGN, so it cannot open a conservation gap. src/Keeper/Recovery/ReinjectConsumer.cs:106-116 runs `if (!defeatReinject) { Send } else { log }` and then calls CountSent(...) UNCONDITIONALLY on both branches. Its own comment states the intent: \"SUPPRESS the redispatch ... but STILL CountSent + log \\\"reinject\\\" (unchanged) so the ES telemetry is byte-identical to a genuine keeper-logged-reinject-lost-in-transit strand\". The seam was built for the Phase-79 FALSIFY-01 negative control precisely so that the metrics do NOT reveal the loss. keeper_messages_sent_total therefore increments on the very redispatch that was suppressed, and consumed - sent stays 0. MEASURED THIS RUN: the decomposition recorded consumed increase [120s] = 0, 2.0001, 0, 0, 2.0024 and sent increase [120s] = 0, 2.0001, 0, 0, 2.0024 — byte-identical term for term — with the unguarded gap computing an actual 0 (not an empty vector) at 120 s and 600 s.  ROUTE 2 — no allow-listed lever reaches the branch that DOES open a gap. The gap requires a keeper consume with no send, which happens on exactly one path: the ReinjectConsumer drop branch (L2 ExecutionData absent at keeper read time, STRLEN == 0 -> \"REINJECT drop\" -> early return BEFORE CountSent). Reaching it needs either KEEPER_REINJECT_DELAY_MS — refused by T-88-15, uncommitted working-tree-only, and not in the seam allow-list — or a shortened EXECUTION_DATA_TTL, which is not an allow-listed seam either. The two delete-class consumers (DeleteConsumer, OrchestratorDeleteConsumer) never call CountSent at all, so they DO open the gap, but they only ever receive a message when a processor or orchestrator Redis DELETE exhausts, which is an infrastructure fault this phase does not drive. No substitute fault was invented, on the WEB-02 and ZERO-01 precedent.  ROUTE 3 — at the phase's 60 s sub-window the panel cannot carry ANY value, guarded or not. Panel 8 is sum(increase(A[$__range])) - sum(increase(B[$__range])) or vector(0). 88-04 measured that increase() needs at least TWO samples inside its range and the stored resolution here is 60 s. MEASURED THIS RUN: at a 60 s range BOTH terms and the unguarded gap returned ZERO POINTS — the expression is empty at every step — while the guarded form returned seven points of 0. So at 60 s the green 0 an operator reads on panel 8 is supplied entirely by the `or vector(0)` guard and is not a measurement of anything. This is the panel-4 finding (88-06) in its GUARDED form, and it is worse: panel 4 at least renders \"No data\" and says so.  WHAT THIS RUN DID PROVE. Roadmap Success Criterion 5 is satisfied end to end: both seams were armed at runtime on the live Deployments, the arm rollout was recorded as a disjoint pod-identity pair, the authoritative band was re-captured after it, the fault was driven, and both seams were disarmed from the OUTER finally with the stack then asserted byte-identical by an independent read. Research assumption A6 is RETIRED: the deployed keeper:tags-const-1544 image DOES honour KEEPER_DEFEAT_REINJECT. DIRECT LOG EVIDENCE (recovered from Elasticsearch, because the disarm rollout destroys the pods' own kubectl logs): 07/28/2026 23:27:00 keeper-75dcb7cb47-bkcsm: REINJECT DEFEATED (TEST-ONLY seam) 01000000-a30d-de7f-24d9-08deecffb925 â€” redispatch suppressed for the FALSIFY-01 negative control; keeper still logs \"reinject\". || 07/28/2026 23:27:30 keeper-75dcb7cb47-rxnl7: REINJECT DEFEATED (TEST-ONLY seam) 01000000-a30d-de7f-8e21-08deecffcb0c â€” redispatch suppressed for the FALSIFY-01 negative control; keeper still logs \"reinject\". — one defeat per keeper pod, as the per-process one-shot latch dictates, each followed within a millisecond by \"REINJECT sent <the same MessageId> reinject\". That pairing IS route 1: the keeper logged and counted a send it did not make. CONSEQUENCE FOR MAINTENANCE. Panel 8's title promises a conservation gap; its arithmetic delivers one only for delete-class recovery traffic and for a keeper drop, and never at a short window. Its green 0 is indistinguishable from \"no keeper recovery traffic has ever occurred\", \"recovery occurred and conserved\", and \"the window is too narrow for increase() to evaluate at all\". This phase observed the second and third of those and could not produce the first failure mode it exists to reveal.",
+    "reasonSource": "ZERO-03",
+    "assertedIn": [
+      "ZERO-03"
+    ],
+    "observedIn": [
+      "SCALE-03"
+    ],
+    "crossTalkAppearances": [
+      "ZERO-02"
+    ],
+    "ladderRungs": [],
+    "misleadingByDefault": {
+      "flag": true,
+      "note": "THE WORST OF THE FOURTEEN, measured three ways in ZERO-03. (1) At a 60 s range BOTH increase() terms return ZERO POINTS and the guarded expression returns seven points of 0 — the green an operator reads at a short range is supplied ENTIRELY by `or vector(0)` and nothing measured it. This is panel 4's emptiness in its GUARDED form, and it is worse, because panel 4 at least renders \"No data\" and says so. (2) The gap arithmetic cannot show a suppressed redispatch AT ALL: the Phase-79 seam calls CountSent(...) on BOTH branches by design, so consumed and sent increase term-for-term identically while a message is being dropped. (3) The only branch that does open a gap (the ReinjectConsumer drop path) is unreachable by any lever this phase is allowed to pull."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      },
+      {
+        "file": "analyzer-reports/phase-88-ZERO-02-run1-discarded.json",
+        "scenarioId": "ZERO-02",
+        "defect": "run 1 drove a GENUINE recovery event that panel 2 rendered as an unbroken 0, because the whole burst finished inside one 60 s export interval and rate() differences consecutive samples. It also recorded the DRIVER's own activation POST as the fault's blast radius on panels 10 and 12. Discarded for DEFECTS in the drive code — and it remains a BETTER measurement of what an operator will actually see than run 2 is. Both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [
+      {
+        "criterion": "DISC-04 (as written): panel 8 must be observed NON-ZERO with the keeper reinject suppressed",
+        "measured": "MEASURED-UNSATISFIABLE UNDER THIS PHASE'S LOCKED CONSTRAINTS. ReinjectConsumer.cs:106-116 runs `if (!defeatReinject) { Send } else { log }` and then calls CountSent(...) UNCONDITIONALLY — the Phase-79 control was built so the metrics do not reveal the loss, and its own comment says so. The requirement therefore asks for something the product deliberately prevents. Measured three independent ways: identical consumed/sent increase terms, no allow-listed lever reaching the drop branch, and both increase() terms returning ZERO POINTS at 60 s so the green 0 is supplied entirely by `or vector(0)`.",
+        "correctedIn": "88-07"
+      }
+    ],
+    "escalations": [
+      {
+        "requirement": "DISC-04",
+        "text": "DISC-04 is HALF MET and its other half is MEASURED-UNREACHABLE. Panel 2 is proven non-zero in a real keeper recovery event with the gap held at exactly 0 (ZERO-02); panel 8 is proven undrivable off its guarded zero by any lever this phase is allowed to pull (ZERO-03). Satisfying the requirement as written would need either a src/ change (forbidden by the phase's locked constraint) or KEEPER_REINJECT_DELAY_MS (refused by T-88-15). 88-09 must record DISC-04 as half met WITH the measured reason rather than leaving it Pending in silence."
+      }
+    ],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | status=AcceptedUnproven, reason <- analyzer-reports/phase-88-ZERO-03.json",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-SCALE-03.json",
+      "analyzer-reports/phase-88-ZERO-02.json",
+      "analyzer-reports/phase-88-ZERO-03.json"
+    ]
+  },
+  {
+    "panelId": 9,
+    "panelTitle": "Keeper L2 probe heartbeat",
+    "panelType": "timeseries",
+    "regime": "A",
+    "guarded": false,
+    "thresholds": [],
+    "queries": [
+      "sum by (service_instance_id) (rate(keeper_l2_probe_total{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": 0,
+        "seriesName": "keeper-99b8c574b-fj2cw",
+        "bandLow": 0.18,
+        "bandHigh": 0.21999999999999997,
+        "bandMean": 0.19999999999999998,
+        "bandSigma": 2.925694557147251E-17,
+        "floorApplied": true,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 1,
+        "seriesName": "keeper-99b8c574b-hndxz",
+        "bandLow": 0.18,
+        "bandHigh": 0.21999999999999997,
+        "bandMean": 0.19999999999999998,
+        "bandSigma": 2.925694557147251E-17,
+        "floorApplied": true,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2,
+          0.2
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": 0.18,
+      "high": 0.21999999999999997,
+      "floorApplied": true,
+      "seriesCount": 2,
+      "collapsedFrom": [
+        "keeper-99b8c574b-fj2cw",
+        "keeper-99b8c574b-hndxz"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [],
+    "observedStates": [
+      "steady",
+      "NoData"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "steady",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is 0.18..0.22 over 2 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "WEB-01",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0.18..0.22"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "SCALE-01",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0.18..0.22"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "SCALE-02",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0.18..0.22"
+      },
+      {
+        "state": "NoData",
+        "scenarioId": "SCALE-03",
+        "role": "asserted subject",
+        "evidence": "Moved=true over 3 consecutive sub-window(s) against a band of 0.18..0.22 — copied, not recomputed"
+      },
+      {
+        "state": "NoData",
+        "scenarioId": "SCALE-03",
+        "role": "asserted subject",
+        "evidence": "AfterStates Rendered,Rendered,Rendered,Rendered,Rendered,NoData,NoData,NoData"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "ZERO-02",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0.18..0.22"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "LADDER-01",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against .."
+      },
+      {
+        "state": "steady",
+        "scenarioId": "LADDER-01",
+        "role": "cross-talk control (counter rung 480s)",
+        "evidence": "StayedPut=True, MaxExcursion=0"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "LADDER-01",
+        "role": "cross-talk control (gauge rung 120s)",
+        "evidence": "StayedPut=True, MaxExcursion=0"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": "SCALE-03",
+    "alsoProvenBy": [],
+    "status": "Proven",
+    "reason": "",
+    "reasonSource": "",
+    "assertedIn": [
+      "SCALE-03"
+    ],
+    "observedIn": [],
+    "crossTalkAppearances": [
+      "WEB-01",
+      "WEB-02",
+      "SCALE-01",
+      "SCALE-02",
+      "ZERO-01",
+      "ZERO-02",
+      "LADDER-01"
+    ],
+    "ladderRungs": [],
+    "misleadingByDefault": {
+      "flag": true,
+      "note": "THE AXIS LIES ABOUT THE VARIANCE. The L2 probe heartbeat is a metronome: BASE-01 measured a mean of 0.2000 with a sample sigma so small that its unfloored 3-sigma band would have been roughly 0.0006 wide — which is why FloorApplied is true and the recorded band is the +/-10 % floor 0.1800..0.2200. Grafana auto-scales the y-axis to the data, so a band roughly 0.0004 wide is magnified to fill the panel and a metronome renders as apparent volatility. Second measured property: under a dead keeper the panel does NOT go blank immediately — SCALE-03 measured it FADING through 0.197, 0.203, 0.168, 0.129, 0.0644 for roughly three minutes before \"No data\", because rate(counter[240s]) keeps producing a shrinking value until fewer than two samples remain inside the lookback."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      },
+      {
+        "file": "analyzer-reports/phase-88-SCALE-01-run1-discarded.json",
+        "scenarioId": "SCALE-01",
+        "defect": "run 1 stated a spike its own recorded values contradict (the segment behaviour was INFERRED from \"some series moved\" while that series had been scored by the NoData half of its compound token), an alt-direction match APPENDED a duplicate series entry so the diagnostic aggregate double-counted panel 4, and PanelStateNoDataRun was left unmeasured for panels whose prediction did not admit NoData. Discarded for DEFECTS; both artifacts are committed."
+      },
+      {
+        "file": "analyzer-reports/phase-88-ZERO-02-run1-discarded.json",
+        "scenarioId": "ZERO-02",
+        "defect": "run 1 drove a GENUINE recovery event that panel 2 rendered as an unbroken 0, because the whole burst finished inside one 60 s export interval and rate() differences consecutive samples. It also recorded the DRIVER's own activation POST as the fault's blast radius on panels 10 and 12. Discarded for DEFECTS in the drive code — and it remains a BETTER measurement of what an operator will actually see than run 2 is. Both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [
+      {
+        "criterion": "88-06 table: SCALE-03 dwell 240 s",
+        "measured": "CORRECTED BEFORE THE RUN, on a read-only measurement rather than a hunch: rate(counter[240s]) for a dead pod keeps producing a DECAYING value for roughly 180 s past its last real sample, so at a 240 s dwell the panel would still have been rendering and the plan's own two-consecutive-NoData criterion would have been unreachable by construction. The dwell was raised to 480 s.",
+        "correctedIn": "88-06"
+      }
+    ],
+    "escalations": [],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | provenBy/observedStates(moved) <- analyzer-reports/phase-88-SCALE-03.json | status=Proven <- the PanelResults[] entry in analyzer-reports/phase-88-SCALE-03.json",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-WEB-01.json",
+      "analyzer-reports/phase-88-WEB-02.json",
+      "analyzer-reports/phase-88-SCALE-01.json",
+      "analyzer-reports/phase-88-SCALE-02.json",
+      "analyzer-reports/phase-88-SCALE-03.json",
+      "analyzer-reports/phase-88-ZERO-01.json",
+      "analyzer-reports/phase-88-ZERO-02.json",
+      "analyzer-reports/phase-88-LADDER-01.json"
+    ]
+  },
+  {
+    "panelId": 10,
+    "panelTitle": "WebApi request rate by route",
+    "panelType": "timeseries",
+    "regime": "A",
+    "guarded": false,
+    "thresholds": [],
+    "queries": [
+      "sum by (http_route) (rate(http_server_request_duration_seconds_count{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": 0,
+        "seriesName": "Value",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 1,
+        "seriesName": "api/v{version:apiVersion}/Assignments",
+        "bandLow": 0.037588424156722214,
+        "bandHigh": 0.11469157584327781,
+        "bandMean": 0.07614000000000001,
+        "bandSigma": 0.012850525281092599,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0417,
+          0.0694,
+          0.0833,
+          0.0806,
+          0.0778,
+          0.0778,
+          0.0806,
+          0.0834,
+          0.0834,
+          0.0834
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 2,
+        "seriesName": "api/v{version:apiVersion}/Assignments/{id:guid}",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 3,
+        "seriesName": "api/v{version:apiVersion}/Orchestration/start",
+        "bandLow": -0.004795070971306011,
+        "bandHigh": 0.00646307097130601,
+        "bandMean": 0.000834,
+        "bandSigma": 0.0018763569904353369,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.00556,
+          0.00278,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 4,
+        "seriesName": "api/v{version:apiVersion}/Orchestration/stop",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 5,
+        "seriesName": "api/v{version:apiVersion}/Processors",
+        "bandLow": 0.0375420080023866,
+        "bandHigh": 0.1180179919976134,
+        "bandMean": 0.07778,
+        "bandSigma": 0.013412663999204467,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0417,
+          0.0694,
+          0.0833,
+          0.0833,
+          0.0833,
+          0.0833,
+          0.0833,
+          0.0834,
+          0.0834,
+          0.0834
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 6,
+        "seriesName": "api/v{version:apiVersion}/Processors/by-source-hash/{sourceHash}",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 7,
+        "seriesName": "api/v{version:apiVersion}/Schemas",
+        "bandLow": 0.037483390921165045,
+        "bandHigh": 0.11639660907883495,
+        "bandMean": 0.07694,
+        "bandSigma": 0.013152203026278316,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0417,
+          0.0694,
+          0.0833,
+          0.0833,
+          0.0833,
+          0.0833,
+          0.0833,
+          0.0834,
+          0.0806,
+          0.0778
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 8,
+        "seriesName": "api/v{version:apiVersion}/Schemas/{id:guid}",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 9,
+        "seriesName": "api/v{version:apiVersion}/Steps",
+        "bandLow": 0.03760589868632529,
+        "bandHigh": 0.1146341013136747,
+        "bandMean": 0.07612,
+        "bandSigma": 0.012838033771224902,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0417,
+          0.0694,
+          0.0833,
+          0.0833,
+          0.0833,
+          0.0806,
+          0.0778,
+          0.0778,
+          0.0806,
+          0.0834
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 10,
+        "seriesName": "api/v{version:apiVersion}/Steps/{id:guid}",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 11,
+        "seriesName": "api/v{version:apiVersion}/Workflows",
+        "bandLow": 0.03921898782491387,
+        "bandHigh": 0.11470101217508613,
+        "bandMean": 0.07696,
+        "bandSigma": 0.012580337391695378,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0444,
+          0.0667,
+          0.0778,
+          0.0806,
+          0.0833,
+          0.0833,
+          0.0833,
+          0.0834,
+          0.0834,
+          0.0834
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 12,
+        "seriesName": "api/v{version:apiVersion}/Workflows/{id:guid}",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": -0.004795070971306011,
+      "high": 0.1180179919976134,
+      "floorApplied": false,
+      "seriesCount": 13,
+      "collapsedFrom": [
+        "Value",
+        "api/v{version:apiVersion}/Assignments",
+        "api/v{version:apiVersion}/Assignments/{id:guid}",
+        "api/v{version:apiVersion}/Orchestration/start",
+        "api/v{version:apiVersion}/Orchestration/stop",
+        "api/v{version:apiVersion}/Processors",
+        "api/v{version:apiVersion}/Processors/by-source-hash/{sourceHash}",
+        "api/v{version:apiVersion}/Schemas",
+        "api/v{version:apiVersion}/Schemas/{id:guid}",
+        "api/v{version:apiVersion}/Steps",
+        "api/v{version:apiVersion}/Steps/{id:guid}",
+        "api/v{version:apiVersion}/Workflows",
+        "api/v{version:apiVersion}/Workflows/{id:guid}"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [
+      "panel 10 (WebApi request rate by route) series 'Value': Class-A panel banded at EXACTLY zero across all 10 sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register).",
+      "panel 10 (WebApi request rate by route) series 'api/v{version:apiVersion}/Assignments/{id:guid}': Class-A panel banded at EXACTLY zero across all 10 sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register).",
+      "panel 10 (WebApi request rate by route) series 'api/v{version:apiVersion}/Orchestration/stop': Class-A panel banded at EXACTLY zero across all 10 sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register).",
+      "panel 10 (WebApi request rate by route) series 'api/v{version:apiVersion}/Processors/by-source-hash/{sourceHash}': Class-A panel banded at EXACTLY zero across all 10 sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register).",
+      "panel 10 (WebApi request rate by route) series 'api/v{version:apiVersion}/Schemas/{id:guid}': Class-A panel banded at EXACTLY zero across all 10 sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register).",
+      "panel 10 (WebApi request rate by route) series 'api/v{version:apiVersion}/Steps/{id:guid}': Class-A panel banded at EXACTLY zero across all 10 sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register).",
+      "panel 10 (WebApi request rate by route) series 'api/v{version:apiVersion}/Workflows/{id:guid}': Class-A panel banded at EXACTLY zero across all 10 sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register)."
+    ],
+    "observedStates": [
+      "steady",
+      "elevated",
+      "zero"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "steady",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is -0.00479507097130601..0.118017991997613 over 13 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "elevated",
+        "scenarioId": "WEB-01",
+        "role": "asserted subject",
+        "evidence": "Moved=true over 6 consecutive sub-window(s) against a band of 0..0 — copied, not recomputed"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "SCALE-01",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "SCALE-02",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "SCALE-03",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "ZERO-02",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "ZERO-03",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": "WEB-01",
+    "alsoProvenBy": [],
+    "status": "Proven",
+    "reason": "",
+    "reasonSource": "",
+    "assertedIn": [
+      "WEB-01"
+    ],
+    "observedIn": [],
+    "crossTalkAppearances": [
+      "WEB-02",
+      "SCALE-01",
+      "SCALE-02",
+      "SCALE-03",
+      "ZERO-01",
+      "ZERO-02",
+      "ZERO-03"
+    ],
+    "ladderRungs": [],
+    "misleadingByDefault": {
+      "flag": true,
+      "note": "The panel renders an UNLABELLED series called `Value`. The 404 driver hits an unmatched path, which carries no http_route label, so Grafana names its row `Value` — and WEB-01 measured that this is the row that moves most cleanly, with an operator having no way to tell from the panel what it is. Separately, seven of its thirteen route series band at EXACTLY zero on a healthy stack (routes that are never called), so most of the legend is permanently flat and carries no information."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      },
+      {
+        "file": "analyzer-reports/phase-88-SCALE-01-run1-discarded.json",
+        "scenarioId": "SCALE-01",
+        "defect": "run 1 stated a spike its own recorded values contradict (the segment behaviour was INFERRED from \"some series moved\" while that series had been scored by the NoData half of its compound token), an alt-direction match APPENDED a duplicate series entry so the diagnostic aggregate double-counted panel 4, and PanelStateNoDataRun was left unmeasured for panels whose prediction did not admit NoData. Discarded for DEFECTS; both artifacts are committed."
+      },
+      {
+        "file": "analyzer-reports/phase-88-ZERO-02-run1-discarded.json",
+        "scenarioId": "ZERO-02",
+        "defect": "run 1 drove a GENUINE recovery event that panel 2 rendered as an unbroken 0, because the whole burst finished inside one 60 s export interval and rate() differences consecutive samples. It also recorded the DRIVER's own activation POST as the fault's blast radius on panels 10 and 12. Discarded for DEFECTS in the drive code — and it remains a BETTER measurement of what an operator will actually see than run 2 is. Both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [],
+    "escalations": [],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | provenBy/observedStates(moved) <- analyzer-reports/phase-88-WEB-01.json | status=Proven <- the PanelResults[] entry in analyzer-reports/phase-88-WEB-01.json",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-WEB-01.json",
+      "analyzer-reports/phase-88-WEB-02.json",
+      "analyzer-reports/phase-88-SCALE-01.json",
+      "analyzer-reports/phase-88-SCALE-02.json",
+      "analyzer-reports/phase-88-SCALE-03.json",
+      "analyzer-reports/phase-88-ZERO-01.json",
+      "analyzer-reports/phase-88-ZERO-02.json",
+      "analyzer-reports/phase-88-ZERO-03.json"
+    ]
+  },
+  {
+    "panelId": 11,
+    "panelTitle": "WebApi p95 request duration by route",
+    "panelType": "timeseries",
+    "regime": "A",
+    "guarded": false,
+    "thresholds": [],
+    "queries": [
+      "histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval])))"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": 0,
+        "seriesName": "api/v{version:apiVersion}/Assignments",
+        "bandLow": 3.212867682402706,
+        "bandHigh": 7.037132317597294,
+        "bandMean": 5.125,
+        "bandSigma": 0.6373774391990981,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          5.5,
+          6.25,
+          6.25
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 1,
+        "seriesName": "api/v{version:apiVersion}/Orchestration/start",
+        "bandLow": 0.31782353205890335,
+        "bandHigh": 12.082176467941096,
+        "bandMean": 6.2,
+        "bandSigma": 1.960725489313699,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          9.75,
+          9.75,
+          5.5,
+          6.25,
+          6.25,
+          5.5,
+          4.75,
+          4.75,
+          4.75,
+          4.75
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 2,
+        "seriesName": "api/v{version:apiVersion}/Processors",
+        "bandLow": 4.275,
+        "bandHigh": 5.225,
+        "bandMean": 4.75,
+        "bandSigma": 0.0,
+        "floorApplied": true,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 3,
+        "seriesName": "api/v{version:apiVersion}/Schemas",
+        "bandLow": 4.275,
+        "bandHigh": 5.225,
+        "bandMean": 4.75,
+        "bandSigma": 0.0,
+        "floorApplied": true,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 4,
+        "seriesName": "api/v{version:apiVersion}/Steps",
+        "bandLow": 4.275,
+        "bandHigh": 5.225,
+        "bandMean": 4.75,
+        "bandSigma": 0.0,
+        "floorApplied": true,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75,
+          4.75
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 5,
+        "seriesName": "api/v{version:apiVersion}/Workflows",
+        "bandLow": 4.275,
+        "bandHigh": 5.225,
+        "bandMean": 4.75,
+        "bandSigma": 0.0,
+        "floorApplied": true,
+        "sampleCount": 2,
+        "subWindowSeconds": 60,
+        "values": [
+          4.75,
+          4.75
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": 0.31782353205890335,
+      "high": 12.082176467941096,
+      "floorApplied": true,
+      "seriesCount": 6,
+      "collapsedFrom": [
+        "api/v{version:apiVersion}/Assignments",
+        "api/v{version:apiVersion}/Orchestration/start",
+        "api/v{version:apiVersion}/Processors",
+        "api/v{version:apiVersion}/Schemas",
+        "api/v{version:apiVersion}/Steps",
+        "api/v{version:apiVersion}/Workflows"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [],
+    "observedStates": [
+      "steady",
+      "elevated"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "steady",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is 0.317823532058903..12.0821764679411 over 6 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "elevated",
+        "scenarioId": "WEB-01",
+        "role": "asserted subject",
+        "evidence": "Moved=true over 2 consecutive sub-window(s) against a band of 0.317823532058903..12.0821764679411 — copied, not recomputed"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": "WEB-01",
+    "alsoProvenBy": [],
+    "status": "Proven",
+    "reason": "",
+    "reasonSource": "",
+    "assertedIn": [
+      "WEB-01"
+    ],
+    "observedIn": [],
+    "crossTalkAppearances": [],
+    "ladderRungs": [],
+    "misleadingByDefault": {
+      "flag": true,
+      "note": "THE SIGNAL IS THE LEADING EDGE, NOT THE LEVEL. WEB-01 measured the p95 spiking at load ONSET (22.0 ms, 19.7 ms) and DECAYING BACK INSIDE the healthy band (to 4.8 ms) within three minutes of sustained load — the API is genuinely fast once warm. A maintenance reader watching this panel for a sustained latency shift would see nothing. Its band is also very wide and partly negative (one BASE-01 series banded -5.06..21.83 around a mean of 8.38, and one yielded only 2 of 10 samples), so only a large excursion can clear it."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [],
+    "escalations": [],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | provenBy/observedStates(moved) <- analyzer-reports/phase-88-WEB-01.json | status=Proven <- the PanelResults[] entry in analyzer-reports/phase-88-WEB-01.json",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-WEB-01.json"
+    ]
+  },
+  {
+    "panelId": 12,
+    "panelTitle": "WebApi status-code mix",
+    "panelType": "timeseries",
+    "regime": "A",
+    "guarded": false,
+    "thresholds": [],
+    "queries": [
+      "sum by (http_response_status_code) (rate(http_server_request_duration_seconds_count{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval]))"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": 0,
+        "seriesName": "200",
+        "bandLow": 0.19120558449658864,
+        "bandHigh": 0.5761944155034114,
+        "bandMean": 0.38370000000000004,
+        "bandSigma": 0.0641648051678038,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.211,
+          0.344,
+          0.411,
+          0.411,
+          0.411,
+          0.408,
+          0.408,
+          0.411,
+          0.411,
+          0.411
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 1,
+        "seriesName": "201",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 2,
+        "seriesName": "204",
+        "bandLow": -0.004795070971306011,
+        "bandHigh": 0.00646307097130601,
+        "bandMean": 0.000834,
+        "bandSigma": 0.0018763569904353369,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.00556,
+          0.00278,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 3,
+        "seriesName": "400",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 4,
+        "seriesName": "404",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 5,
+        "seriesName": "422",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": -0.004795070971306011,
+      "high": 0.5761944155034114,
+      "floorApplied": false,
+      "seriesCount": 6,
+      "collapsedFrom": [
+        "200",
+        "201",
+        "204",
+        "400",
+        "404",
+        "422"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [
+      "panel 12 (WebApi status-code mix) series '201': Class-A panel banded at EXACTLY zero across all 10 sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register).",
+      "panel 12 (WebApi status-code mix) series '400': Class-A panel banded at EXACTLY zero across all 10 sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register).",
+      "panel 12 (WebApi status-code mix) series '404': Class-A panel banded at EXACTLY zero across all 10 sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register).",
+      "panel 12 (WebApi status-code mix) series '422': Class-A panel banded at EXACTLY zero across all 10 sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register)."
+    ],
+    "observedStates": [
+      "steady",
+      "elevated",
+      "zero"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "steady",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is -0.00479507097130601..0.576194415503411 over 6 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "elevated",
+        "scenarioId": "WEB-01",
+        "role": "asserted subject",
+        "evidence": "Moved=true over 6 consecutive sub-window(s) against a band of 0..0 — copied, not recomputed"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "SCALE-01",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "SCALE-02",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "SCALE-03",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "ZERO-02",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "ZERO-03",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "LADDER-01",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against .."
+      },
+      {
+        "state": "steady",
+        "scenarioId": "LADDER-01",
+        "role": "cross-talk control (counter rung 480s)",
+        "evidence": "StayedPut=True, MaxExcursion=0"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": "WEB-01",
+    "alsoProvenBy": [],
+    "status": "Proven",
+    "reason": "",
+    "reasonSource": "",
+    "assertedIn": [
+      "WEB-01"
+    ],
+    "observedIn": [],
+    "crossTalkAppearances": [
+      "SCALE-01",
+      "SCALE-02",
+      "SCALE-03",
+      "ZERO-01",
+      "ZERO-02",
+      "ZERO-03",
+      "LADDER-01"
+    ],
+    "ladderRungs": [],
+    "misleadingByDefault": {
+      "flag": true,
+      "note": "THE STATUS SERIES NEVER LEAVE THE LEGEND. All six (200/201/204/400/404/422) were present AND RENDERING ZERO before WEB-01 drove any of them and remained the same six afterwards: Prometheus retains a counter series for as long as the emitting process lives, and the WebApi pod has been up since Phase 80. A status code that has occurred ONCE therefore never disappears, so an operator cannot read \"this code is happening\" from the legend — only from the value. The discrimination is numeric (an exactly-0..0 band going non-zero), never a legend gain."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      },
+      {
+        "file": "analyzer-reports/phase-88-SCALE-01-run1-discarded.json",
+        "scenarioId": "SCALE-01",
+        "defect": "run 1 stated a spike its own recorded values contradict (the segment behaviour was INFERRED from \"some series moved\" while that series had been scored by the NoData half of its compound token), an alt-direction match APPENDED a duplicate series entry so the diagnostic aggregate double-counted panel 4, and PanelStateNoDataRun was left unmeasured for panels whose prediction did not admit NoData. Discarded for DEFECTS; both artifacts are committed."
+      },
+      {
+        "file": "analyzer-reports/phase-88-ZERO-02-run1-discarded.json",
+        "scenarioId": "ZERO-02",
+        "defect": "run 1 drove a GENUINE recovery event that panel 2 rendered as an unbroken 0, because the whole burst finished inside one 60 s export interval and rate() differences consecutive samples. It also recorded the DRIVER's own activation POST as the fault's blast radius on panels 10 and 12. Discarded for DEFECTS in the drive code — and it remains a BETTER measurement of what an operator will actually see than run 2 is. Both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [
+      {
+        "criterion": "88-05 task 2: LegendNamesAfter[] must contain a series name absent from LegendNamesBaseline[] (a legend GAIN)",
+        "measured": "MEASURED-UNSATISFIABLE on this stack: panel 12 rendered exactly 200|201|204|400|404|422 in BOTH windows. Prometheus retains a counter series for as long as the emitting process lives and the WebApi pod has been up since Phase 80, so a status code that has occurred once never disappears — the series are present AND ZERO before the drive rather than absent. The substantive claim was proven in the STRONGER numeric form instead (two exactly-0..0 bands going non-zero for six consecutive samples) and WEB-01 was NOT re-run to chase it.",
+        "correctedIn": "88-05"
+      }
+    ],
+    "escalations": [],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | provenBy/observedStates(moved) <- analyzer-reports/phase-88-WEB-01.json | status=Proven <- the PanelResults[] entry in analyzer-reports/phase-88-WEB-01.json",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-WEB-01.json",
+      "analyzer-reports/phase-88-SCALE-01.json",
+      "analyzer-reports/phase-88-SCALE-02.json",
+      "analyzer-reports/phase-88-SCALE-03.json",
+      "analyzer-reports/phase-88-ZERO-01.json",
+      "analyzer-reports/phase-88-ZERO-02.json",
+      "analyzer-reports/phase-88-ZERO-03.json",
+      "analyzer-reports/phase-88-LADDER-01.json"
+    ]
+  },
+  {
+    "panelId": 13,
+    "panelTitle": "WebApi 5xx ratio",
+    "panelType": "stat",
+    "regime": "B",
+    "guarded": true,
+    "thresholds": [
+      "green@base",
+      "red@0.0001"
+    ],
+    "queries": [
+      "sum(rate(http_server_request_duration_seconds_count{source=~\"$source\", service_instance_id=~\"$pod\", http_response_status_code=~\"5..\"}[$__rate_interval])) / sum(rate(http_server_request_duration_seconds_count{source=~\"$source\", service_instance_id=~\"$pod\"}[$__rate_interval])) or vector(0)"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": -1,
+        "seriesName": "5xx ratio",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": 0.0,
+      "high": 0.0,
+      "floorApplied": false,
+      "seriesCount": 1,
+      "collapsedFrom": [
+        "5xx ratio"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [],
+    "observedStates": [
+      "zero"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "zero",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is 0..0 over 1 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "WEB-02",
+        "role": "asserted subject",
+        "evidence": "Moved=false against a band of 0..0; AfterValues 0,0,0,0,0,0"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "ZERO-03",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": null,
+    "alsoProvenBy": [],
+    "status": "AcceptedUnproven",
+    "reason": "no endpoint returns 5xx on safe input; the dependency-outage route costs a WebApi pod restart under the Phase-86 hard readiness latch and is out of budget. Enumerated endpoint probe (PQ-03, 7 endpoints, zero 5xx on safe input): GET /api/v1/workflows/00000000-0000-0000-0000-000000000001 -> 404 | GET /api/v1/workflows/not-a-guid -> 404 | GET /api/v1/schemas/00000000-0000-0000-0000-000000000002 -> 404 | GET /api/v1/processors/by-source-hash/0000000000000000000000000000000000000000000000000000000000000000 -> 404 | GET /api/v1/__phase88_probe_unmatched -> 404 | POST /api/v1/orchestration/start -> 400 | POST /api/v1/steps -> 422. The dependency-outage route to a 5xx is NOT substituted: redis has no PVC, so scaling it wipes L2, and under the Phase-86 hard readiness latch the WebApi does not self-heal from a dependency outage — recovery costs a WebApi pod restart, which would perturb every later baseline in this phase. MAINTENANCE GUIDANCE: panel 13's guarded green 0 is indistinguishable from \"the 5xx counter has never been emitted at all\". The first non-zero reading on panel 13 should be corroborated against the WebApi logs for the same window before it is trusted, and once ONE 5xx has ever occurred the numerator series exists permanently — so a zero on panel 13 after that date means something different from today's zero.",
+    "reasonSource": "WEB-02",
+    "assertedIn": [
+      "WEB-02"
+    ],
+    "observedIn": [],
+    "crossTalkAppearances": [
+      "ZERO-01",
+      "ZERO-03"
+    ],
+    "ladderRungs": [],
+    "misleadingByDefault": {
+      "flag": true,
+      "note": "A guarded green `0` is indistinguishable from \"no 5xx counter has ever been emitted\". WEB-02 established over SEVEN enumerated endpoints that no WebApi route returns 5xx on safe input (five 404, one 400, one 422) — which is a GOOD result about the product and a blocking one for this panel — so the ratio was observed at exactly 0 under real traffic including 404s and 400s, and has never been seen non-zero. Its threshold turns red at 0.0001, so the panel is honest ONCE the counter exists; nothing tells an operator whether it does."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [],
+    "escalations": [],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | status=AcceptedUnproven, reason <- analyzer-reports/phase-88-WEB-02.json",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-WEB-02.json",
+      "analyzer-reports/phase-88-ZERO-01.json",
+      "analyzer-reports/phase-88-ZERO-03.json"
+    ]
+  },
+  {
+    "panelId": 14,
+    "panelTitle": "WebApi in-flight requests and Kestrel connections",
+    "panelType": "timeseries",
+    "regime": "A",
+    "guarded": false,
+    "thresholds": [],
+    "queries": [
+      "sum by (service_instance_id) (http_server_active_requests{source=~\"$source\", service_instance_id=~\"$pod\"})",
+      "sum by (service_instance_id) (kestrel_active_connections{source=~\"$source\", service_instance_id=~\"$pod\"})",
+      "sum by (service_instance_id) (kestrel_queued_connections{source=~\"$source\", service_instance_id=~\"$pod\"})"
+    ],
+    "baselineBandSeries": [
+      {
+        "seriesIndex": 0,
+        "seriesName": "in-flight baseapi-service-7d59dc679c-mcs29",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 1,
+        "seriesName": "kestrel active baseapi-service-7d59dc679c-mcs29",
+        "bandLow": -0.20710678118654746,
+        "bandHigh": 1.2071067811865475,
+        "bandMean": 0.5,
+        "bandSigma": 0.23570226039551584,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.5,
+          0.0,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          0.5,
+          1.0,
+          0.5,
+          0.5
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      },
+      {
+        "seriesIndex": 2,
+        "seriesName": "kestrel queued baseapi-service-7d59dc679c-mcs29",
+        "bandLow": 0.0,
+        "bandHigh": 0.0,
+        "bandMean": 0.0,
+        "bandSigma": 0.0,
+        "floorApplied": false,
+        "sampleCount": 10,
+        "subWindowSeconds": 60,
+        "values": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "states": [
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered",
+          "Rendered"
+        ]
+      }
+    ],
+    "baselineBand": {
+      "low": -0.20710678118654746,
+      "high": 1.2071067811865475,
+      "floorApplied": false,
+      "seriesCount": 3,
+      "collapsedFrom": [
+        "in-flight baseapi-service-7d59dc679c-mcs29",
+        "kestrel active baseapi-service-7d59dc679c-mcs29",
+        "kestrel queued baseapi-service-7d59dc679c-mcs29"
+      ]
+    },
+    "baselineBandNote": "baselineBandSeries[] reproduces EVERY per-series band entry from BASE-01 verbatim; baselineBand is their WIDEST ENVELOPE (min low, max high, the OR of floorApplied) and is a HUMAN SUMMARY for reading this matrix, nothing more. No scenario scores against the envelope — every movement decision was already made PER SERIES by the scenario harness against the per-series band. Choosing a \"primary\" series was explicitly rejected: it would silently discard a series whose band differs.",
+    "unevaluableSeries": [
+      "panel 14 (WebApi in-flight requests and Kestrel connections) series 'in-flight baseapi-service-7d59dc679c-mcs29': Class-A panel banded at EXACTLY zero across all 10 sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register).",
+      "panel 14 (WebApi in-flight requests and Kestrel connections) series 'kestrel queued baseapi-service-7d59dc679c-mcs29': Class-A panel banded at EXACTLY zero across all 10 sub-windows — it has no live signal to move away from, so its scenario cannot discriminate. This is a finding, not a band (carry to the HAND-04 register)."
+    ],
+    "observedStates": [
+      "steady",
+      "elevated",
+      "zero"
+    ],
+    "observedStateRecords": [
+      {
+        "state": "steady",
+        "scenarioId": "BASE-01",
+        "role": "baseline",
+        "evidence": "the DISC-01 band envelope is -0.207106781186547..1.20710678118655 over 3 legend series, 10 x 60 s sub-windows on a settled stack"
+      },
+      {
+        "state": "elevated",
+        "scenarioId": "WEB-01",
+        "role": "asserted subject",
+        "evidence": "Moved=true over 6 consecutive sub-window(s) against a band of -0.207106781186547..1.20710678118655 — copied, not recomputed"
+      },
+      {
+        "state": "zero",
+        "scenarioId": "SCALE-01",
+        "role": "cross-talk control",
+        "evidence": "StayedPut=true, MaxExcursion=0 against 0..0"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "LADDER-01",
+        "role": "gauge rung 30s",
+        "evidence": "Moved=False movedBy=none consecutive=0"
+      },
+      {
+        "state": "steady",
+        "scenarioId": "LADDER-01",
+        "role": "gauge rung 60s",
+        "evidence": "Moved=False movedBy=none consecutive=1"
+      },
+      {
+        "state": "elevated",
+        "scenarioId": "LADDER-01",
+        "role": "gauge rung 120s",
+        "evidence": "Moved=True movedBy=value consecutive=2"
+      }
+    ],
+    "observedStatesNote": "Accumulated from EVERY artifact in which the panel appears — as an asserted subject, as a cross-talk control, as an observed-only reading, or as a ladder rung. Each token is derived from a value the scenario RECORDED (Moved, ObservedDirection, StayedPut, AfterStates), never from a re-evaluation of the panel.",
+    "provenBy": "WEB-01",
+    "alsoProvenBy": [
+      "LADDER-01"
+    ],
+    "status": "Proven",
+    "reason": "",
+    "reasonSource": "",
+    "assertedIn": [
+      "WEB-01"
+    ],
+    "observedIn": [],
+    "crossTalkAppearances": [
+      "SCALE-01"
+    ],
+    "ladderRungs": [
+      {
+        "regime": "gauge",
+        "faultSeconds": 30,
+        "moved": false,
+        "movedBy": "none",
+        "consecutiveSamplesOutside": 0,
+        "dipFraction": 0.0,
+        "theoreticalDipFraction": 0.0
+      },
+      {
+        "regime": "gauge",
+        "faultSeconds": 60,
+        "moved": false,
+        "movedBy": "none",
+        "consecutiveSamplesOutside": 1,
+        "dipFraction": 0.0,
+        "theoreticalDipFraction": 0.5
+      },
+      {
+        "regime": "gauge",
+        "faultSeconds": 120,
+        "moved": true,
+        "movedBy": "value",
+        "consecutiveSamplesOutside": 2,
+        "dipFraction": 1.0,
+        "theoreticalDipFraction": 1.0
+      }
+    ],
+    "misleadingByDefault": {
+      "flag": true,
+      "note": "ONE OF ITS THREE SERIES IS A DEAD INSTRUMENT UNDER REAL LOAD. WEB-01 measured http_server_active_requests reading EXACTLY 0 at every one of six export ticks while ten parallel requesters issued 2456 requests over 480 s — each request completes in single-digit milliseconds and the gauge is instantaneous at a 60 s export cadence, so in-flight work is essentially never sampled. kestrel_queued_connections likewise banded at exactly zero. The panel's only readable series is kestrel_active_connections, which is a CONNECTION count kept alive by HTTP keep-alive and therefore a different kind of quantity from the title's \"in-flight requests\"."
+    },
+    "discardedRuns": [
+      {
+        "file": "analyzer-reports/phase-88-BASE-01-run1-discarded.json",
+        "scenarioId": "BASE-01",
+        "defect": "run 1 lost its ENTIRE diagnostic cross-check to a single-letter typed parameter (a [long]$S parameter and a foreach($s) loop variable are the same case-insensitive variable, and the type constraint threw on every call), and its depth guard then tripped on its own diagnostic text. Discarded for DEFECTS, not for a better number; both artifacts are committed."
+      },
+      {
+        "file": "analyzer-reports/phase-88-SCALE-01-run1-discarded.json",
+        "scenarioId": "SCALE-01",
+        "defect": "run 1 stated a spike its own recorded values contradict (the segment behaviour was INFERRED from \"some series moved\" while that series had been scored by the NoData half of its compound token), an alt-direction match APPENDED a duplicate series entry so the diagnostic aggregate double-counted panel 4, and PanelStateNoDataRun was left unmeasured for panels whose prediction did not admit NoData. Discarded for DEFECTS; both artifacts are committed."
+      }
+    ],
+    "measuredUnsatisfiableCriteria": [
+      {
+        "criterion": "88-05/88-08 assumption: panel 14 is ONE gauge rung",
+        "measured": "panel 14 is TWO rungs. http_server_active_requests read exactly 0 at every one of six export ticks under 2456 sustained requests from ten parallel requesters; only kestrel_active_connections moves. Two of the panel's three series cannot be moved by this class of load at all.",
+        "correctedIn": "88-05"
+      }
+    ],
+    "escalations": [],
+    "sourceArtifact": "baselineBandSeries/baselineBand/regime <- analyzer-reports/phase-88-BASE-01.json | provenBy/observedStates(moved) <- analyzer-reports/phase-88-WEB-01.json | status=Proven <- the PanelResults[] entry in analyzer-reports/phase-88-WEB-01.json",
+    "sourceArtifacts": [
+      "analyzer-reports/phase-88-BASE-01.json",
+      "analyzer-reports/phase-88-WEB-01.json",
+      "analyzer-reports/phase-88-SCALE-01.json",
+      "analyzer-reports/phase-88-LADDER-01.json"
+    ]
+  }
+]
