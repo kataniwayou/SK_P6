@@ -53,7 +53,7 @@ Roadmap Success-Criterion mapping for the whole Phase-88 family: **SC1→DISC-01
 - [ ] **DISC-04**: Panels 2 (`Keeper consumed vs sent`) and 8 (`Keeper consumed − sent gap`) have each been observed **non-zero** during a real recovery event — panel 2 with keeper reinject intact (consumed and sent both move, gap stays 0), panel 8 with the reinject suppressed (consumed moves, sent does not, gap goes red).
 - [ ] **DISC-05**: A repeatable, runtime-only mechanism exists for arming and disarming the Phase-79 fault seams on the k8s stack. It edits **no manifest**, and after every scenario the stack is asserted restored: **zero** seam env vars on `keeper` and `processor-sample`, replica counts equal to the values read from the live deployments **before** the scenario, and images unchanged.
 - [ ] **DISC-06**: Every seam-dependent or `kubectl scale`-dependent scenario **re-captures its baseline after** the resulting rollout has settled (all replicas Ready, ≥ 2 export cadences elapsed), and the rollout discontinuity — the old/new `service_instance_id` pair and its timestamp — is recorded in the scenario artifact as an **expected artifact**, never scored as movement.
-- [ ] **DISC-07**: The minimum detectable fault duration is measured by a step-ladder of controlled fault durations and recorded **per regime** — separately for counter-backed panels (where the event survives but its timing is smeared by the 240 s rate window) and gauge-backed panels (where an event between two 60 s exports is lost entirely).
+- [x] **DISC-07**: The minimum detectable fault duration is measured by a step-ladder of controlled fault durations and recorded **per regime** — separately for counter-backed panels (where the event survives but its timing is smeared by the 240 s rate window) and gauge-backed panels (where an event between two 60 s exports is lost entirely).
 
 ### HAND — Handoff Readiness — Phase 88
 
@@ -111,7 +111,7 @@ Note: DISC-02's "fourteen panels" and HAND-04's register are the same set partit
 | DISC-04 | 88 | Pending |
 | DISC-05 | 88 | Pending |
 | DISC-06 | 88 | Pending |
-| DISC-07 | 88 | Pending |
+| DISC-07 | 88 | Complete |
 | HAND-01 | 88 | Pending |
 | HAND-02 | 88 | Pending |
 | HAND-03 | 88 | Pending |
