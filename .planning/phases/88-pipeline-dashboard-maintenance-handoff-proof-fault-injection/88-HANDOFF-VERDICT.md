@@ -309,6 +309,78 @@ Concrete, in the order they bind. Each is either satisfied by this phase or name
 
 ---
 
+## Sign-off
+
+**Date:** 2026-07-29
+**Signed by:** the GSD continuous-execution chain — **an automated agent, not a person** — acting on
+the user's standing instruction that the remaining waves of Phase 88 run unattended.
+**Class of sign-off:** **machine-approved / unattended.** This is a **procedural** record that the
+checkpoint was cleared so the phase could close. **It is not a human judgement about the runbook or
+about this verdict, and it must never be quoted as one.**
+
+### What this sign-off is not
+
+Phase 87 carried forward a note that its human checkpoint was signed off by instruction rather than
+by a reviewer walking the panels. Plan 88-11 exists so Phase 88 does not repeat that silently. It is
+repeated here, and stated more plainly than Phase 87 stated it:
+
+- **No human read `docs/runbooks/business-dashboard-runbook.md` or this document before this section
+  was written.** The approval was issued by an automated continuous-execution chain, on a standing
+  instruction given before either deliverable existed. **A standing instruction to keep running is
+  not a reading of what was produced.**
+- **A human review of both deliverables remains OUTSTANDING.** This section does not supersede it —
+  this section *is* the record that it has not happened.
+- **An unattended approval is not evidence about the dashboard.** Nothing above is upgraded,
+  softened or re-graded by it. The verdict stands exactly as written: **qualified — not ready for an
+  unconditional handoff**, 8 blocking gaps, 13 of 14 panels misleading by default, 10 Proven /
+  4 AcceptedUnproven, 7 PASS / 1 PARTIAL / 1 FAIL, DISC-04 `Partial` and blocked.
+- **No requirement is marked `Complete` on the basis of this approval.** HAND-01 and HAND-02 were
+  graded `Complete` by plan 88-10, on the stated grounds that the documents exist and the verdict is
+  honest — not that the dashboard is handover-ready. `REQUIREMENTS.md` is unchanged by plan 88-11.
+- **Condition 5 in the list above is NOT satisfied by this section.** It requires that whoever
+  receives the dashboard is told *in the handover conversation* that a green `0` on panels 6, 7, 8
+  and 13 means "no evidence". No conversation took place. Four of the nine conditions for handoff
+  (1, 2, 7, 8) remain outstanding, and the two that matter most — an ingress and real
+  authentication — are out of scope for this milestone.
+
+### Which of the seven checks were actually performed
+
+Plan 88-11's checks 1–7 ask for a reviewer's judgement. This table records what was executed, by
+what, and what was not.
+
+| # | Check | Performed? | By what, with what result |
+|---|---|---|---|
+| 1 | Every runbook row's *Proving scenario* cell names a scenario id; reject any row with none | **Partially — mechanically** | All **15** runbook table rows (11 in §5.1, 4 in §5.2) carry either a scenario id matching `(BASE\|WEB\|SCALE\|ZERO\|LADDER)-\d\d` or an explicit accepted-unproven citation. **Nothing was rejected because nothing was rejectable.** Whether a cited scenario genuinely *proves* its row was **not** judged |
+| 2 | Open two rows' cited artifacts and confirm the before/after numbers match | **Yes — mechanically, two rows** | Panel 9 against `analyzer-reports/phase-88-SCALE-03.json`: baseline `0.2` ×6, after `0.197, 0.203, 0.168, 0.129, 0.0644`, band `0.18–0.22`, 3 consecutive samples outside, 3 trailing `NoData` — **matches the runbook exactly**. Panel 14 against `analyzer-reports/phase-88-WEB-01.json`: `kestrel active` `2.5, 4.5, 5, 5, 3.5, 4.5` with `in-flight` and `kestrel queued` at `0,0,0,0,0,0`, envelope `−0.207..1.207`, 6 consecutive samples outside — **matches the runbook exactly**. Caveat: the two rows were chosen by the agent, not drawn at random by a reviewer |
+| 3 | Could someone who did not build this system reach the dashboard, know the data horizon, and know what outage length it cannot show — from the header alone? | **NO — NOT PERFORMED** | A judgement that requires a reader who did not build the system. The agent that parsed the header is not that reader, and it cannot stand in for one |
+| 4 | Is section (a) plain or softened — is the reachability gap called a blocking gap rather than an accepted posture? | **NO — NOT PERFORMED** | A judgement about tone and honesty. The agent that would grade it is the same chain that wrote the section; that is not an independent read |
+| 5 | Every `AcceptedUnproven` panel names a reason, and panel 7's entry tells maintenance what to do instead | **Yes — mechanically** | All four `AcceptedUnproven` rows carry a non-empty `reason` in `analyzer-reports/phase-88-discrimination.json` (panel 6: 1893 chars, 7: 921, 8: 4538, 13: 1336); the ten `Proven` rows carry none, as designed. Panel 7's runbook row contains all four actions the check names — **processor logs**, **`SpawnSendExhaustedException`**, **nack-requeue re-fire**, **broker health**. Whether that is *actionable enough for a maintenance department* was **not** judged |
+| 6 | For each PARTIAL or FAIL criterion, is the shortfall named rather than rounded up? | **NO — NOT PERFORMED** | A judgement call, and the one most likely to catch a self-serving grade |
+| 7 | Open Grafana and walk two or three panels against the runbook's healthy bands | **NO — NOT PERFORMED** | Out of scope: plan 88-11 is documentation-only and the executing agent was instructed not to drive the live cluster |
+
+**Three of seven performed, and all three are the mechanical ones. The four not performed — 3, 4, 6
+and 7 — are precisely the judgements plan 88-11 exists to obtain.** The pre-flight gate passed
+(`checkpoint pre-flight ok`): all four reviewer inputs exist and the matrix is fourteen complete rows
+with no unexplained accepted-unproven entry.
+
+### Reservations
+
+**None were raised, because no reviewer was present to raise any.** That is not "no reservations" —
+it is **an absence of review**, and the two are not interchangeable. No finding was rejected, no
+runbook row was sent back, and no document under review was edited by this plan: the only change plan
+88-11 made to any file under review is this Sign-off section itself.
+
+### What would close this
+
+A **named human** reading `docs/runbooks/business-dashboard-runbook.md` and this document, performing
+checks 3, 4 and 6 — and ideally 7 — and appending a second, attributed sign-off **below** this one
+with their findings, including anything they reject. Until that exists, the honest state of the
+record is: **the two deliverables are complete, internally consistent and mechanically verified
+against their artifacts; nobody has yet judged whether they are usable by a team that did not build
+this system.**
+
+---
+
 *Phase: 88-pipeline-dashboard-maintenance-handoff-proof-fault-injection · Written: 2026-07-29*
 *Derived from `analyzer-reports/phase-88-discrimination.json` and `88-FINDINGS.md` §2's two derived
 lists. Phase 88 changed no `src/` file, no manifest and no dashboard JSON.*
