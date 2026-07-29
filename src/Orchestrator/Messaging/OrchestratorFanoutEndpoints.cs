@@ -1,11 +1,11 @@
 namespace Orchestrator.Messaging;
 
 /// <summary>
-/// Single source of truth (SoT) for the orchestrator's three PER-REPLICA fan-out receive-endpoint
+/// Single source of truth (SoT) for the orchestrator's two PER-REPLICA fan-out receive-endpoint
 /// queue names. Each name is <c>{base}-{instanceId}</c> so every replica declares a DISTINCT
 /// exclusive/<c>Temporary</c> (auto-delete) queue and none collide on <c>RESOURCE_LOCKED</c>.
 /// <para>
-/// <b>HA-07 root cause (fixed here):</b> the six fan-out <c>ConsumerDefinition</c>s used to pin a
+/// <b>HA-07 root cause (fixed here):</b> the four fan-out <c>ConsumerDefinition</c>s used to pin a
 /// literal <c>EndpointName</c> in their constructors while <c>Program.cs</c> asked for
 /// <c>.Endpoint(e =&gt; { e.InstanceId = …; e.Temporary = true; })</c>. In MassTransit 8.5.5 a literal
 /// <c>EndpointName</c> BYPASSES the <c>InstanceId</c>-aware name formatter, so the queues kept the
@@ -15,8 +15,8 @@ namespace Orchestrator.Messaging;
 /// <c>Program.cs</c> now sets an explicit per-instance <c>e.Name</c> via <see cref="PerInstance"/>.
 /// </para>
 /// <para>
-/// <b>Co-location contract:</b> each pair (Start+Stop, Pause+Resume, PauseAll+ResumeAll) resolves to
-/// the SAME per-instance name for a given <c>instanceId</c>, keeping the pause/resume pairs' shared
+/// <b>Co-location contract:</b> each pair (Start+Stop, PauseAll+ResumeAll) resolves to the SAME
+/// per-instance name for a given <c>instanceId</c>, keeping the global pause/resume pair's
 /// <c>ConcurrentMessageLimit = 1</c> serialization intact. The shared competing-consumer
 /// <c>orchestrator-result*</c> endpoints are NOT modeled here — they are stable, non-exclusive, and
 /// unchanged.
@@ -26,9 +26,6 @@ public static class OrchestratorFanoutEndpoints
 {
     /// <summary>Base name for the Start + Stop lifecycle fan-out pair (co-located).</summary>
     public const string LifecycleBase = "orchestrator";
-
-    /// <summary>Base name for the per-workflow Pause + Resume fan-out pair (co-located).</summary>
-    public const string PauseResumeBase = "orchestrator-pauseresume";
 
     /// <summary>Base name for the global PauseAll + ResumeAll fan-out pair (co-located).</summary>
     public const string GlobalPauseResumeBase = "orchestrator-global-pauseresume";

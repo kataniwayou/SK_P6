@@ -54,18 +54,12 @@ builder.Services.AddBaseConsoleMessaging(builder.Configuration,
             .Endpoint(e => { e.Name = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.LifecycleBase, instanceId); e.Temporary = true; });
         x.AddConsumer<StopOrchestrationConsumer, StopOrchestrationConsumerDefinition>()
             .Endpoint(e => { e.Name = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.LifecycleBase, instanceId); e.Temporary = true; });   // SAME name as Start → co-located
-        // PAUSE-02/03/04: Pause + Resume share their own dedicated per-replica fan-out endpoint
-        // "orchestrator-pauseresume-{instanceId}" (ConcurrentMessageLimit=1, single retry ownership held
-        // by the Pause definition) so they don't throttle Start/Stop/Result (RESEARCH §5b).
-        x.AddConsumer<PauseWorkflowConsumer, PauseWorkflowConsumerDefinition>()
-            .Endpoint(e => { e.Name = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.PauseResumeBase, instanceId); e.Temporary = true; });
-        x.AddConsumer<ResumeWorkflowConsumer, ResumeWorkflowConsumerDefinition>()
-            .Endpoint(e => { e.Name = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.PauseResumeBase, instanceId); e.Temporary = true; });   // SAME name as Pause → co-located
-        // ORCH-02 / D-08: global pause/resume on a NEW per-replica fan-out endpoint
+        // ORCH-02 / D-08: global pause/resume on a per-replica fan-out endpoint
         // "orchestrator-global-pauseresume-{instanceId}" (SAME instanceId → one temp fan-out queue per
-        // replica; ConcurrentMessageLimit=1, single retry ownership held by the PauseAll definition),
-        // independent from "orchestrator-pauseresume" so Phase 48 can drop the old per-workflow endpoint
-        // with zero entanglement.
+        // replica; ConcurrentMessageLimit=1, single retry ownership held by the PauseAll definition).
+        // It was deliberately kept independent from the old per-workflow pause/resume endpoint; that
+        // endpoint has since been REMOVED (its control pair had no publisher), and the independence
+        // designed in here is exactly what let it be dropped with zero entanglement.
         x.AddConsumer<PauseAllConsumer, PauseAllConsumerDefinition>()
             .Endpoint(e => { e.Name = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.GlobalPauseResumeBase, instanceId); e.Temporary = true; });
         x.AddConsumer<ResumeAllConsumer, ResumeAllConsumerDefinition>()

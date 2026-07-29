@@ -11,7 +11,7 @@ namespace BaseApi.Tests.Orchestrator;
 /// The exact property whose ABSENCE caused the <c>RESOURCE_LOCKED</c> collision that blocked
 /// <c>replicas:3</c> is <see cref="PerInstance_TwoDifferentInstanceIds_YieldDistinctNames"/>: with the
 /// old literal <c>EndpointName</c>, two pods declared the SAME exclusive/<c>Temporary</c> queue name.
-/// Co-location per pair (Start==Stop, Pause==Resume, PauseAll==ResumeAll for a given instanceId) is
+/// Co-location per pair (Start==Stop, PauseAll==ResumeAll for a given instanceId) is
 /// pinned so the fix cannot silently split a pair and break the shared <c>ConcurrentMessageLimit=1</c>
 /// serialization.
 /// </para>
@@ -21,7 +21,6 @@ public sealed class OrchestratorFanoutEndpointsFacts
     public static readonly string[] AllBases =
     {
         OrchestratorFanoutEndpoints.LifecycleBase,
-        OrchestratorFanoutEndpoints.PauseResumeBase,
         OrchestratorFanoutEndpoints.GlobalPauseResumeBase,
     };
 
@@ -42,32 +41,26 @@ public sealed class OrchestratorFanoutEndpointsFacts
     {
         const string id = "orchestrator-pod-a";
 
-        // Start and Stop co-locate; Pause and Resume co-locate; PauseAll and ResumeAll co-locate —
-        // each pair shares ONE per-instance endpoint (preserving ConcurrentMessageLimit=1 serialization).
+        // Start and Stop co-locate; PauseAll and ResumeAll co-locate — each pair shares ONE
+        // per-instance endpoint (preserving ConcurrentMessageLimit=1 serialization).
         Assert.Equal(
             OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.LifecycleBase, id),
             OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.LifecycleBase, id));
-        Assert.Equal(
-            OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.PauseResumeBase, id),
-            OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.PauseResumeBase, id));
         Assert.Equal(
             OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.GlobalPauseResumeBase, id),
             OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.GlobalPauseResumeBase, id));
     }
 
     [Fact]
-    public void PerInstance_ThreeBases_AreMutuallyDistinct_ForSameInstance()
+    public void PerInstance_TwoBases_AreMutuallyDistinct_ForSameInstance()
     {
         const string id = "orchestrator-pod-a";
 
         var lifecycle = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.LifecycleBase, id);
-        var pauseResume = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.PauseResumeBase, id);
         var globalPauseResume = OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.GlobalPauseResumeBase, id);
 
-        // Start/Stop, Pause/Resume, PauseAll/ResumeAll stay on three SEPARATE endpoints.
-        Assert.NotEqual(lifecycle, pauseResume);
+        // Start/Stop and PauseAll/ResumeAll stay on two SEPARATE endpoints.
         Assert.NotEqual(lifecycle, globalPauseResume);
-        Assert.NotEqual(pauseResume, globalPauseResume);
     }
 
     [Fact]
@@ -75,8 +68,6 @@ public sealed class OrchestratorFanoutEndpointsFacts
     {
         Assert.Equal("orchestrator-pod-x",
             OrchestratorFanoutEndpoints.PerInstance("orchestrator", "pod-x"));
-        Assert.Equal("orchestrator-pauseresume-pod-x",
-            OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.PauseResumeBase, "pod-x"));
         Assert.Equal("orchestrator-global-pauseresume-pod-x",
             OrchestratorFanoutEndpoints.PerInstance(OrchestratorFanoutEndpoints.GlobalPauseResumeBase, "pod-x"));
 

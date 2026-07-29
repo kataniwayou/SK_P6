@@ -13,9 +13,9 @@ namespace BaseApi.Tests.Orchestrator.Scheduling;
 /// PAUSE-02/03/05 RAM-scheduler proof (Wave 0 RED). Drives <see cref="WorkflowScheduler"/> against a real
 /// Quartz RAMJobStore and asserts the deterministic-TriggerKey state model the phase ships:
 /// <list type="bullet">
-///   <item><description><b>PAUSE-02 (D-08):</b> after <c>PauseAsync(jobId)</c> the workflow's trigger,
+///   <item><description><b>PAUSE-02 (D-08):</b> after <c>PauseAllAsync()</c> the workflow's trigger,
 ///   addressed by the DETERMINISTIC <c>TriggerKey(jobId.ToString("D"))</c>, is
-///   <see cref="TriggerState.Paused"/> — proving Pause is Quartz <c>PauseJob</c> and
+///   <see cref="TriggerState.Paused"/> — proving pause is a Quartz scheduler-wide <c>PauseAll</c> and
 ///   <c>GetTriggerState</c> is the sole source of truth. A fresh <c>ScheduleAsync</c> (before pause) is
 ///   <see cref="TriggerState.Normal"/> at that same key, proving the load-bearing Plan-02
 ///   <c>.WithIdentity(new TriggerKey(jobId.ToString("D")))</c> stamping is present.</description></item>
@@ -26,8 +26,8 @@ namespace BaseApi.Tests.Orchestrator.Scheduling;
 ///   <see cref="TriggerState.None"/> and an already-running one to <see cref="TriggerState.Normal"/> — the
 ///   resume guard's two ignore branches are both non-Paused.</description></item>
 /// </list>
-/// RED until Plan 02 adds <c>PauseAsync</c>/<c>GetTriggerStateAsync</c> and the deterministic-TriggerKey
-/// stamping — failing ONLY because those production members are absent (no harness errors). Each scheduler
+/// Originally authored RED (Wave 0), failing ONLY because the pause / <c>GetTriggerStateAsync</c> seams and
+/// the deterministic-TriggerKey stamping were still absent (no harness errors). Each scheduler
 /// uses a unique <c>quartz.scheduler.instanceName = test-{Guid:N}</c> RAM store, and EVERY Quartz call
 /// passes <c>TestContext.Current.CancellationToken</c> (xUnit1051).
 /// </summary>
@@ -66,7 +66,9 @@ public sealed class PauseResumeSchedulingTests
             // Proves the deterministic .WithIdentity stamping: the trigger is addressable by jobId AND Normal.
             Assert.Equal(TriggerState.Normal, await scheduler.GetTriggerState(triggerKey, ct));
 
-            await sut.PauseAsync(jobId, ct);
+            // Scheduler-wide pause (the live PauseAll seam). Nothing is rescheduled afterwards, so Quartz's
+            // pausedTriggerGroups flag has no follow-on interaction to neutralize here.
+            await sut.PauseAllAsync(ct);
 
             // PAUSE-02 / D-08: GetTriggerState is the sole source of truth — Paused suppresses the next fire.
             Assert.Equal(TriggerState.Paused, await scheduler.GetTriggerState(triggerKey, ct));
@@ -92,12 +94,16 @@ public sealed class PauseResumeSchedulingTests
 
             // Pause first, then run the resume sequence.
             await sut.ScheduleAsync(workflowId, jobId, EveryFiveMinutes, ct);
-            await sut.PauseAsync(jobId, ct);
+            await sut.PauseAllAsync(ct);
             Assert.Equal(TriggerState.Paused, await sut.GetTriggerStateAsync(jobId, ct));
 
             // PAUSE-03 resume: Paused → unschedule the paused job → schedule a fresh trigger.
             await sut.UnscheduleAsync(jobId, ct);
             await sut.ScheduleAsync(workflowId, jobId, EveryFiveMinutes, ct);
+            // Mirrors the load-bearing GAP-49-2 / D-08 live ResumeAllConsumer ORDERING: per-job fresh
+            // reschedule FIRST, group-flag clear SECOND. A scheduler-wide pause leaves Quartz's
+            // pausedTriggerGroups set, so without this clear the fresh trigger above is born Paused.
+            await sut.ResumeAllGroupsAsync(ct);
 
             // Exactly one trigger, Normal, with a future fire time (no misfire).
             var triggers = await scheduler.GetTriggersOfJob(jobKey, ct);

@@ -19,8 +19,8 @@ namespace BaseApi.Tests.Orchestrator.Consumers;
 /// ORCH-02 global resume (per-job, no herd — D-02). <see cref="ResumeAllConsumer"/> enumerates the L1
 /// <see cref="IWorkflowL1Store.WorkflowIds"/> snapshot and runs the shared
 /// <see cref="WorkflowLifecycle.ResumeAsync"/> for each, which acts ONLY on a <c>Paused</c> trigger
-/// (delete-stale + fresh from-now reschedule). Driven over a real Quartz RAMJobStore (mirroring
-/// <c>PauseResumeConsumerTests</c>): multiple workflows are seeded into L1 + Quartz and PAUSED, then one
+/// (delete-stale + fresh from-now reschedule). Driven over a real Quartz RAMJobStore: multiple
+/// workflows are seeded into L1 + Quartz and PAUSED scheduler-wide, then one
 /// <c>ResumeAll</c> must bring every paused trigger back to <see cref="TriggerState.Normal"/>; a workflow
 /// left <c>Normal</c> (never paused) is ignored (no spurious resume). Each scheduler uses a unique
 /// <c>quartz.scheduler.instanceName</c> RAM store; EVERY Quartz call carries
@@ -64,10 +64,9 @@ public sealed class ResumeAllConsumerTests
             await lifecycle.HydrateAndScheduleAsync(w1.id, ct);
             await lifecycle.HydrateAndScheduleAsync(w2.id, ct);
 
-            // Pause BOTH per-job (the Paused precondition the resume guard acts on — mirrors the proven
-            // PauseResumeSchedulingTests cycle).
-            await workflowScheduler.PauseAsync(w1.job, ct);
-            await workflowScheduler.PauseAsync(w2.job, ct);
+            // Pause BOTH: the Paused precondition the resume guard acts on now comes from the LIVE
+            // scheduler-wide pause (the seam PauseAllConsumer drives) rather than a per-job pause.
+            await workflowScheduler.PauseAllAsync(ct);
             Assert.Equal(TriggerState.Paused, await scheduler.GetTriggerState(new TriggerKey(w1.job.ToString("D")), ct));
             Assert.Equal(TriggerState.Paused, await scheduler.GetTriggerState(new TriggerKey(w2.job.ToString("D")), ct));
 

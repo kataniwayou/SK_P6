@@ -158,19 +158,6 @@ public sealed class WorkflowLifecycle(
         await scheduler.UnscheduleAsync(wf.JobId, ct); // jobId-addressed DeleteJob — NO store.Remove (keep L1)
     }
 
-    /// <summary>Pause path (D-06/D-08): resolve jobId from L1 and PauseJob — KEEP the L1 entry.
-    /// Absent-from-L1 is a business no-op. Idempotent (re-pausing a paused job is a Quartz no-op).</summary>
-    public async Task PauseOnlyAsync(Guid workflowId, CancellationToken ct)
-    {
-        if (!store.TryGet(workflowId, out var wf))
-        {
-            // BUSINESS no-op — nothing to pause.
-            return;
-        }
-
-        await scheduler.PauseAsync(wf.JobId, ct); // PauseJob — preserves the job + trigger, keeps L1
-    }
-
     /// <summary>Resume path (D-06/D-09): act ONLY if the trigger is Paused; delete the stale paused
     /// job and schedule a FRESH from-now trigger off L1's cron. None(Stopped)/Normal(Running) ignored.
     /// Guard on == Paused exactly (RESEARCH §4 — Blocked/Error fall through to ignore).</summary>

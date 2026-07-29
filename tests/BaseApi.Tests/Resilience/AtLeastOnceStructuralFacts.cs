@@ -32,12 +32,16 @@ public sealed class AtLeastOnceStructuralFacts
     /// survives on either execution-path assembly: no type literally named <c>MessageIdentity</c>, and no
     /// live public/instance property or field named <c>MessageIdentity</c> (the retired dedup key).
     /// <para>
-    /// WHY reflection, NOT a string-scan: the BIT health-gate carries a legitimate positional
-    /// <c>string H</c> member on <c>PauseWorkflow</c>/<c>ResumeWorkflow</c> (Messaging.Contracts) — a
-    /// source-scan for <c>"flag["</c> or <c>".H"</c> would false-positive on that legitimate, non-dedup
-    /// member (Pitfall 2). The type/member-NAME guard sidesteps it entirely: <c>H</c> lives on the
-    /// contracts assembly (NOT the execution-path assemblies reflected here), and is NOT named
-    /// <c>MessageIdentity</c>, so it is correctly invisible to this guard.
+    /// WHY reflection, NOT a string-scan: a source-scan for <c>"flag["</c> or <c>".H"</c> matches on
+    /// SPELLING, so ANY legitimately-named member that happens to share those characters false-positives,
+    /// and the scan cannot tell a resurrected dedup key from an unrelated member (Pitfall 2). The
+    /// type/member-NAME guard asks the LOADED assemblies whether anything is actually NAMED
+    /// <c>MessageIdentity</c> — an exact question that no naming coincidence can fool.
+    /// <br/>
+    /// (Historical note: this paragraph used to cite a worked example — a legitimate positional
+    /// <c>string H</c> member on a per-workflow fan-out control contract in Messaging.Contracts. That
+    /// example no longer exists; the dead per-workflow control pair was removed. The reasoning above never
+    /// depended on it — it holds for any member whose spelling collides with the scan pattern.)
     /// </para>
     /// </summary>
     [Fact]

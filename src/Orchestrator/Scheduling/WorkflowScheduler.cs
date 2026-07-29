@@ -112,10 +112,6 @@ public sealed class WorkflowScheduler(IScheduler scheduler, TimeProvider timePro
     public Task UnscheduleAsync(Guid jobId, CancellationToken ct) =>
         scheduler.DeleteJob(KeyFor(jobId), ct);
 
-    /// <summary>Pause the job's current triggers (Quartz PauseJob) — Pause, D-06/D-08. Idempotent.</summary>
-    public Task PauseAsync(Guid jobId, CancellationToken ct) =>
-        scheduler.PauseJob(KeyFor(jobId), ct);
-
     /// <summary>Scheduler-wide pause-all (ORCH-02, D-01). Idempotent — re-pausing already-paused groups is a Quartz no-op.</summary>
     public Task PauseAllAsync(CancellationToken ct) => scheduler.PauseAll(ct);
 

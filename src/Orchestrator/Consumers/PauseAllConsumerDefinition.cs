@@ -6,8 +6,8 @@ namespace Orchestrator.Consumers;
 /// Endpoint config seam for <see cref="PauseAllConsumer"/> (ORCH-02 / D-08). The endpoint name is now
 /// supplied PER-INSTANCE by <c>Program.cs</c> via
 /// <see cref="Orchestrator.Messaging.OrchestratorFanoutEndpoints"/>
-/// (<c>orchestrator-global-pauseresume-{instanceId}</c>) — independent from the per-workflow
-/// <c>orchestrator-pauseresume</c> so Phase 48 can drop the old endpoint with zero entanglement (D-08).
+/// (<c>orchestrator-global-pauseresume-{instanceId}</c>) — deliberately kept independent from the old
+/// per-workflow endpoint (D-08), which has since been REMOVED along with its publisher-less control pair.
 /// The literal <c>EndpointName</c> was removed: in MassTransit 8.5.5 it bypassed the InstanceId
 /// formatter, so the exclusive/<c>Temporary</c> queues collided on <c>RESOURCE_LOCKED</c> at
 /// replicas&gt;1 (HA-07 blocker). <c>ConcurrentMessageLimit = 1</c> serializes Pause/Resume on this
