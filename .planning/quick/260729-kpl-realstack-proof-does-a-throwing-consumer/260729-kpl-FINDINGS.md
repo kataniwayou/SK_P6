@@ -389,6 +389,75 @@ Be precise; do not over-claim this result.
 
 ---
 
+## 9. Scope extension (2026-07-29, same day) — the RUNTIME-bind path
+
+### Why it was run
+
+The verdict in §6 was challenged on a specific ground: *"today the processor throws and as a result the
+message is redelivered."* That challenge could not be dismissed from the original run, because §8 item 4
+scoped this proof to `AddBaseConsoleMessaging` + `ConfigureEndpoints(ctx)` — and **the processor does not
+bind that way**.
+
+This was a genuine gap that §8 did not enumerate. The processor registers its consumers with
+`.ExcludeFromConfigureEndpoints()` (`BaseProcessorServiceCollectionExtensions.cs:89`, `:95`) and binds at
+RUNTIME via `IReceiveEndpointConnector.ConnectReceiveEndpoint` (`ProcessorStartupOrchestrator.cs:268`,
+`:285`). A measurement of the static path cannot settle a claim about the runtime path.
+
+Two pieces of prior evidence were ambiguous rather than decisive:
+
+- **No `{processorId}_error` queue exists** on the broker (the only error queue is
+  `processor-identity-query_error`). That is equally consistent with "the processor throws and requeues"
+  and with "the processor has never thrown".
+- The throw surface is narrow by design: `ProcessorPipeline` routes business outcomes to a `Step*` result
+  and acks, infra outcomes to a Keeper-state message and acks. **Only send-exhaustion after the bounded
+  `RetryLoop` propagates** — which requires the broker to be refusing sends while still delivering.
+
+### Method
+
+A second `[Fact]` in the same file, `ThrowingConsumer_OnRuntimeConnectedEndpoint_HasPinnedFaultDisposition`,
+replicating the processor's construction exactly: `.ExcludeFromConfigureEndpoints()` on registration, then
+`ConnectReceiveEndpoint` with a bare tail (`ConfigureConsumer` plus prefetch/concurrency hygiene only — no
+`UseMessageRetry`, no `ConfigureError`).
+
+Discipline preserved from the original run:
+
+- `PinnedRuntimeDisposition` started `Unpinned`, so the fact **could not pass** before observation.
+- `ComputeDisposition` was **reused unedited**, so both paths are scored by identical rules and any
+  difference between them would be a real behavioral difference, not a scoring artifact.
+
+### Result — IDENTICAL to the static path
+
+Run id `c462c9c3-928a-4544-9285-26e10a1585dc`, scratch queue
+`skp-probe-fault-c462c9c3928a4544928526e10a1585dc`:
+
+```
+BIND MODE            : RUNTIME ConnectReceiveEndpoint (processor path)
+total invocations    : 1
+break reason         : error queue exists with messages >= 1 (the message has been parked)
+COMPUTED DISPOSITION : ErrorTransportPark
+```
+
+Pinned to `ErrorTransportPark`; both facts now pass (2/2). Broker left clean, zero probe residue.
+
+### Conclusion
+
+**The runtime `ConnectReceiveEndpoint` construction path does NOT differ from the static
+`ConfigureEndpoints` path in fault disposition.** The §6 verdict extends to the processor's dispatch and
+`-post` endpoints: a throwing consumer there acks and parks, it does not nack-requeue.
+
+The challenge is therefore **not supported**. The redelivery that has genuinely been observed on the
+processor→orchestrator path is the **connection-loss** kind — most concretely Phase 81's TEST-06, where a
+rabbitmq PVC crash redelivered unacked messages and inflated `processor_sent` above
+`orchestrator_consumed` (investigated then and confirmed as re-sends, not loss). That mechanism is real,
+needs no configuration, and is orthogonal to the throw path. The two were conflated by the doc-comments
+enumerated in §7 — which is very likely *how* the belief became load-bearing: a real redelivery was
+observed in a live capstone, and the wrong trigger was inferred from it.
+
+`§8 item 3 remains open`: the `Temporary = true` (exclusive/auto-delete) fan-out endpoint variant is still
+not separately measured.
+
+---
+
 ## Artifacts
 
 | File | Contents |

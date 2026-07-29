@@ -334,6 +334,162 @@ public sealed class ConsumerFaultDispositionE2ETests(ITestOutputHelper outputHel
         }
     }
 
+    /// <summary>
+    /// THE SECOND PIN — the RUNTIME-connected endpoint path. Set from OBSERVED reality, never expectation.
+    /// <para>
+    /// SCOPE GAP THIS CLOSES: the pin above measures a consumer bound STATICALLY, through
+    /// <c>AddBaseConsoleMessaging</c>'s unconditional <c>ConfigureEndpoints(ctx)</c>. The PROCESSOR does
+    /// not bind that way — it registers with <c>.ExcludeFromConfigureEndpoints()</c>
+    /// (<c>BaseProcessorServiceCollectionExtensions.cs:89</c>/<c>:95</c>) and binds at RUNTIME via
+    /// <c>IReceiveEndpointConnector.ConnectReceiveEndpoint</c>
+    /// (<c>ProcessorStartupOrchestrator.cs:268</c>/<c>:285</c>). A claim that the processor REDELIVERS on
+    /// throw therefore cannot be settled by a measurement of the static path — it needs this one.
+    /// </para>
+    /// <para>
+    /// Started <see cref="FaultDisposition.Unpinned"/> and was pinned only after the first run FAILED with
+    /// its evidence block read. Same discipline as the static pin — a test written to confirm either
+    /// belief would be worthless.
+    /// </para>
+    /// <para>
+    /// OBSERVED 2026-07-29, run id <c>c462c9c3-928a-4544-9285-26e10a1585dc</c>, scratch queue
+    /// <c>skp-probe-fault-c462c9c3928a4544928526e10a1585dc</c>: <b>IDENTICAL to the static path.</b>
+    /// Consumer invoked EXACTLY ONCE; break reason "error queue exists with messages >= 1 (the message has
+    /// been parked)"; computed disposition <c>ErrorTransportPark</c>. The runtime
+    /// <c>ConnectReceiveEndpoint</c> construction path therefore does NOT differ from the static
+    /// <c>ConfigureEndpoints</c> path in fault disposition — the processor's endpoints park on throw too.
+    /// </para>
+    /// </summary>
+    private static FaultDisposition PinnedRuntimeDisposition { get; } = FaultDisposition.ErrorTransportPark;
+
+    [Fact]
+    public async Task ThrowingConsumer_OnRuntimeConnectedEndpoint_HasPinnedFaultDisposition()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        var runId = Guid.NewGuid();
+        var scratch = $"{ProbeQueuePrefix}{runId:N}";
+
+        ProbeFaultRecorder.Reset();
+
+        using var admin = BuildAdminClient();
+
+        var timeline = new List<Snapshot>();
+        var evidence = "(evidence not produced — the run threw before the evidence block was built)";
+        IHost? host = null;
+
+        try
+        {
+            var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder();
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["RabbitMq:Host"] = "rabbitmq://localhost:5673/",
+                ["RabbitMq:Username"] = "guest",
+                ["RabbitMq:Password"] = "guest",
+            });
+
+            // THE DIFFERENCE FROM THE STATIC PIN: registered but EXCLUDED from ConfigureEndpoints, exactly
+            // as BaseProcessorServiceCollectionExtensions.cs:89 does, so no auto-named endpoint is created
+            // and the ONLY bind is the runtime one below.
+            builder.Services.AddBaseConsoleMessaging(
+                builder.Configuration,
+                x => x.AddConsumer<ProbeFaultConsumer>().ExcludeFromConfigureEndpoints());
+
+            host = builder.Build();
+            await host.StartAsync(ct);
+
+            // Runtime bind — the processor's exact construction path (ProcessorStartupOrchestrator.cs:268).
+            // Configure NOTHING but the consumer plus rate hygiene: no UseMessageRetry, no ConfigureError —
+            // the same "bare tail" posture the processor's own bind uses.
+            var connector = host.Services.GetRequiredService<IReceiveEndpointConnector>();
+            var handle = connector.ConnectReceiveEndpoint(scratch, (rctx, cfg) =>
+            {
+                cfg.PrefetchCount = 1;
+                cfg.ConcurrentMessageLimit = 1;
+                cfg.ConfigureConsumer<ProbeFaultConsumer>(rctx);
+            });
+            await handle.Ready;
+
+            var appeared = await WaitForQueueAsync(admin, scratch, TimeSpan.FromSeconds(20), ct);
+            if (!appeared)
+            {
+                Assert.Fail(
+                    $"scratch queue '{scratch}' never appeared on {MgmtBaseUrl} vhost / within 20 s — the " +
+                    "runtime ConnectReceiveEndpoint bind did not reach the intended broker. Measuring " +
+                    "nothing is not a result; STOP rather than drawing any conclusion.");
+            }
+
+            var before = await SnapshotAsync(admin, scratch, "pre-send", 0d, ct);
+            timeline.Add(before);
+
+            var bus = host.Services.GetRequiredService<IBus>();
+            var endpoint = await bus.GetSendEndpoint(new Uri($"queue:{scratch}"));
+            await endpoint.Send(new ProbeFaultMessage(runId), ct);
+
+            var loopClock = Stopwatch.StartNew();
+            var breakReason = "hard 25 s cap reached";
+            while (loopClock.Elapsed < TimeSpan.FromSeconds(25))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(500), ct);
+                var snap = await SnapshotAsync(
+                    admin, scratch, "observe", loopClock.Elapsed.TotalSeconds, ct);
+                timeline.Add(snap);
+
+                if (snap.Invocations >= 5)
+                {
+                    breakReason = "invocations >= 5 (redelivery is happening — stop hammering the live broker)";
+                    break;
+                }
+
+                if (snap.ErrorExists && snap.ErrorMessages >= 1)
+                {
+                    breakReason = "error queue exists with messages >= 1 (the message has been parked)";
+                    break;
+                }
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(2), ct);
+            timeline.Add(await SnapshotAsync(
+                admin, scratch, "settle", loopClock.Elapsed.TotalSeconds, ct));
+
+            await host.StopAsync(ct);
+
+            await Task.Delay(TimeSpan.FromSeconds(6), ct);
+            var final = await SnapshotAsync(
+                admin, scratch, "final(bus stopped)", loopClock.Elapsed.TotalSeconds, ct);
+            timeline.Add(final);
+
+            // SAME discriminator as the static pin — deliberately shared and unedited, so the two paths are
+            // scored by identical rules and any difference between them is a real difference in behavior.
+            var observed = ComputeDisposition(timeline, final);
+            evidence = BuildEvidence(runId, scratch, timeline, breakReason, observed);
+
+            outputHelper.WriteLine("BIND MODE     : RUNTIME ConnectReceiveEndpoint (processor path)");
+            outputHelper.WriteLine(evidence);
+
+            Assert.True(
+                observed == PinnedRuntimeDisposition,
+                $"runtime-endpoint fault disposition: pinned={PinnedRuntimeDisposition}, observed={observed}.\n{evidence}");
+        }
+        finally
+        {
+            if (host is not null)
+            {
+                try
+                {
+                    await host.StopAsync(CancellationToken.None);
+                }
+                catch (OperationCanceledException)
+                {
+                    // best-effort second stop — the primary stop already ran on the happy path
+                }
+                host.Dispose();
+            }
+
+            await CleanupScratchTopologyAsync(admin, scratch);
+            await AssertNoResidueAsync(admin);
+        }
+    }
+
     // ------------------------------------------------------------------ verdict discriminator
 
     /// <summary>
@@ -403,7 +559,10 @@ public sealed class ConsumerFaultDispositionE2ETests(ITestOutputHelper outputHel
                 : string.Join(", ", ProbeFaultRecorder.Offsets.Select(o => $"{o.TotalSeconds:F2}s"))));
         sb.AppendLine();
         sb.AppendLine($"COMPUTED DISPOSITION : {observed}");
-        sb.AppendLine($"PINNED DISPOSITION   : {PinnedDisposition}");
+        // NOTE: the STATIC pin, printed for reference. The runtime-endpoint fact asserts against
+        // PinnedRuntimeDisposition and prints its own BIND MODE line above this block — do not read this
+        // line as that fact's expectation.
+        sb.AppendLine($"PINNED DISPOSITION (static path) : {PinnedDisposition}");
         sb.AppendLine("=== END EVIDENCE ===");
         return sb.ToString();
     }
