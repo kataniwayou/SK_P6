@@ -148,7 +148,13 @@ param(
     [Parameter(Mandatory)][string]$ScenarioId,
     [ValidateSet('', 'Baseline', 'Scenario', 'DurationLadder')][string]$Mode = '',
     [switch]$SkipTraffic,
-    [switch]$RecordDroppedRow
+    [switch]$RecordDroppedRow,
+    # -Mode DurationLadder only. A comma-separated SUBSET of the declared rung durations, so a
+    # ladder that aborted partway can be resumed without re-driving the rungs that already produced
+    # an entry. Validated against the STATIC rung list before any cluster access (T-88-13): an
+    # unknown value exits 64 rather than silently running nothing, because "no rungs matched" and
+    # "the ladder ran and measured nothing" would produce the same empty artifact.
+    [string]$Rungs = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -454,6 +460,25 @@ try {
     }
 
     # =========================================================================================
+    # THE DURATION-LADDER RUNG TABLES — static, declared here beside the scenario table so the
+    # -Rungs filter can be validated against them BEFORE any cluster access (T-88-13).
+    #
+    # COUNTER REGIME (panels 3 and 4, lever `scale` on processor-sample). A counter is cumulative:
+    # a fault entirely between two exports still increments it, so the EVENT is never lost and only
+    # its TIMING is smeared across the 240 s rate window. A fault of duration D that drops a rate to
+    # zero therefore produces a trough of about `baseline x (1 - D/240)`.
+    #
+    # GAUGE REGIME (panel 14, lever `http`). A gauge is SAMPLED, not accumulated: a condition that
+    # begins and ends between two 60 s exports is never recorded at all. The 180 s rung is driven
+    # ONLY if all three of the declared gauge rungs fail to move the panel — it is a fallback the
+    # research names, not a routine rung, and the artifact says which rungs were actually driven.
+    # =========================================================================================
+    $LadderCounterRungs      = @(30, 60, 120, 240, 480)
+    $LadderGaugeRungs        = @(30, 60, 120)
+    $LadderGaugeFallbackRung = 180
+    $LadderAllRungDurations  = @(@($LadderCounterRungs) + @($LadderGaugeRungs) + @($LadderGaugeFallbackRung) | Sort-Object -Unique)
+
+    # =========================================================================================
     # GUARD — the id SELECTS a row and nothing else (T-88-13). Runs before ANY cluster access, so a
     # bad id costs nothing and touches nothing.
     # =========================================================================================
@@ -501,6 +526,34 @@ try {
         Write-Phase "scenario '$ScenarioId' is a '$rowMode' row (-Mode $expectedMode); -Mode $Mode was requested." 'Red'
         Write-Phase "The row decides its own mode; the parameter may only confirm it." 'Yellow'
         exit 64
+    }
+
+    # =========================================================================================
+    # GUARD — the -Rungs RESUME FILTER (T-88-13). Validated against the STATIC rung list before any
+    # cluster access. An unknown value exits 64: a silently-empty filter would produce an artifact
+    # with no rungs, which is indistinguishable from a ladder that ran and measured nothing.
+    # =========================================================================================
+    $RungFilter = @()
+    if (-not [string]::IsNullOrWhiteSpace($Rungs)) {
+        if ($rowMode -ne 'ladder') {
+            Write-Phase "-Rungs applies only to the duration-ladder row (LADDER-01); '$canonicalId' is a '$rowMode' row." 'Red'
+            exit 64
+        }
+        $badRungs = @()
+        foreach ($tok in @(("$Rungs") -split ',')) {
+            $t = ("$tok").Trim()
+            if ([string]::IsNullOrWhiteSpace($t)) { continue }
+            $n = 0
+            if (-not [int]::TryParse($t, [ref]$n) -or ($LadderAllRungDurations -notcontains $n)) { $badRungs += $t; continue }
+            if ($RungFilter -notcontains $n) { $RungFilter += $n }
+        }
+        if (@($badRungs).Count -gt 0 -or @($RungFilter).Count -eq 0) {
+            Write-Phase "-Rungs '$Rungs' names $(@($badRungs).Count) duration(s) that are not declared rungs: $(@($badRungs) -join ', ')" 'Red'
+            Write-Phase "Declared rungs: counter [$(@($LadderCounterRungs) -join ', ')]s, gauge [$(@($LadderGaugeRungs) -join ', ')]s (+ ${LadderGaugeFallbackRung}s fallback)." 'Yellow'
+            Write-Phase "REMEDIATION: pass a comma-separated SUBSET of those durations, or omit -Rungs to drive the whole ladder." 'Yellow'
+            exit 64
+        }
+        Write-Phase "-Rungs filter active: only the [$(@($RungFilter) -join ', ')]s rung(s) will be driven; every other rung is carried forward from the existing artifact if one exists." 'Yellow'
     }
 
     # =========================================================================================
@@ -758,6 +811,388 @@ try {
         return [string[]]$paths
     }
 
+    # =====================================================================================
+    # SHARED FAULT-MODE HELPERS — the capture, banding, scoring and serialisation path that
+    # BOTH `-Mode Scenario` (88-05) and `-Mode DurationLadder` (88-08) drive.
+    #
+    # They lived inside the scenario branch until 88-08. A function defined inside a branch that
+    # does not run does not EXIST — PowerShell only sees a function once its definition statement
+    # has executed — so the ladder could not have called one of them, and a second copy would have
+    # meant the ladder's rungs were measured by different code from the scenarios they are compared
+    # against. (Same fix, same reason, as 88-05 deviation 6 on Get-ProxyAggregateMean.)
+    # =====================================================================================
+
+    # ---- HTTP LOAD DRIVER (T-88-19) ------------------------------------------------------
+    # Every route is a STATIC literal in this function; nothing is derived from a parameter.
+    # NO /health/ ROUTE IS EVER DRIVEN: the collector drops those, so they would add load to the
+    # cluster and contribute nothing at all to panels 10-14.
+    # Concurrency is fixed at about ten requesters against a dev cluster and bounded by the
+    # caller's duration; the jobs are reaped by Stop-Phase88HttpLoad and again by the outer
+    # finally, so a load job can never outlive the run and pollute a LATER capture.
+    function Start-Phase88HttpLoad {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory)][ValidateSet('background', 'sustained')][string]$Shape,
+            [Parameter(Mandatory)][int]$DurationSeconds,
+            [Parameter(Mandatory)][string]$BaseUri
+        )
+
+        # READ-ONLY. Nothing here creates, mutates or deletes a row, so the load cannot perturb
+        # the pipeline signal the conservation panels are banding.
+        $readOnlyCsv = '/api/v1/workflows,/api/v1/processors,/api/v1/schemas,/api/v1/steps,/api/v1/assignments'
+        # The two status drivers PQ-03 ENUMERATED and observed, rather than invented ones:
+        #   GET /api/v1/__phase88_probe_unmatched            -> 404 (unmatched path, inert)
+        #   POST /api/v1/orchestration/start with body `[]`  -> 400 (empty activation, inert)
+        $unmatchedCsv = '/api/v1/__phase88_probe_unmatched'
+        $badBodyCsv   = '/api/v1/orchestration/start'
+
+        # Routes cross the job boundary as ONE comma-joined string: -ArgumentList maps each
+        # element to a positional parameter, and an array element there is a standing ambiguity.
+        $worker = {
+            param($BaseUri, $DurationSeconds, $RoutesCsv, $PauseMs, $Method, $Body)
+            $routes = @(("$RoutesCsv") -split ',' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            $deadline = (Get-Date).AddSeconds($DurationSeconds)
+            $n = 0
+            while ((Get-Date) -lt $deadline) {
+                foreach ($r in $routes) {
+                    try {
+                        $req = @{
+                            Uri                = "$BaseUri$r"
+                            Method             = $Method
+                            UseBasicParsing    = $true
+                            TimeoutSec         = 15
+                            SkipHttpErrorCheck = $true
+                            ErrorAction        = 'Stop'
+                        }
+                        if (-not [string]::IsNullOrEmpty($Body)) {
+                            $req['Body'] = $Body
+                            $req['ContentType'] = 'application/json'
+                        }
+                        $null = Invoke-WebRequest @req
+                        $n++
+                    } catch { }
+                    if ($PauseMs -gt 0) { Start-Sleep -Milliseconds $PauseMs }
+                    if ((Get-Date) -ge $deadline) { break }
+                }
+            }
+            return $n
+        }
+
+        $jobs = @()
+        if ($Shape -eq 'background') {
+            # The BASE-01 shape (~2.5 req/s, read-only): enough that the WebApi panels have a
+            # live level for a NON-http scenario to control against, small enough that it cannot
+            # itself be mistaken for a fault.
+            $jobs += Start-Job -ScriptBlock $worker -ArgumentList $BaseUri, $DurationSeconds, $readOnlyCsv, 400, 'GET', ''
+        }
+        else {
+            # SUSTAINED, not a burst. http_server_active_requests / kestrel_active_connections /
+            # kestrel_queued_connections are GAUGES sampled at the 60 s export cadence: a request
+            # that begins and ends between two exports is never recorded at all, so a burst would
+            # leave panel 14 reading 0 at every tick (88-RESEARCH.md Pitfall 8). Eight tight-loop
+            # readers keep ~10 connections open and requests genuinely in flight across ticks.
+            for ($w = 0; $w -lt 8; $w++) {
+                $jobs += Start-Job -ScriptBlock $worker -ArgumentList $BaseUri, $DurationSeconds, $readOnlyCsv, 0, 'GET', ''
+            }
+            # ~4 req/s each is ample to lift a 0..0 status-code band well clear of zero; hammering
+            # them harder would only add log noise for no extra signal.
+            $jobs += Start-Job -ScriptBlock $worker -ArgumentList $BaseUri, $DurationSeconds, $unmatchedCsv, 250, 'GET', ''
+            $jobs += Start-Job -ScriptBlock $worker -ArgumentList $BaseUri, $DurationSeconds, $badBodyCsv,   250, 'POST', '[]'
+        }
+        return [object[]]$jobs
+    }
+
+    # Reap the load and return the total request count. Called on the happy path; the outer
+    # finally repeats the reap so an interrupted run cannot leave a job hitting the WebApi.
+    function Stop-Phase88HttpLoad {
+        [CmdletBinding()]
+        param([AllowEmptyCollection()][object[]]$Jobs)
+        $total = 0
+        foreach ($j in @($Jobs)) {
+            try { $null = Wait-Job -Job $j -Timeout 30 } catch { }
+            try {
+                $out = @(Receive-Job -Job $j -ErrorAction SilentlyContinue)
+                if ($out.Count -gt 0) {
+                    $parsed = 0
+                    if ([int]::TryParse("$($out[-1])", [ref]$parsed)) { $total += $parsed }
+                }
+            } catch { }
+            try { Stop-Job -Job $j -ErrorAction SilentlyContinue } catch { }
+            try { Remove-Job -Job $j -Force -ErrorAction SilentlyContinue } catch { }
+        }
+        return $total
+    }
+
+    # ---- ONE CAPTURE: every requested panel over Count abutting absolute windows ending at
+    # ---- EndUtc, in ONE browser session, so a claim and its control are measured in the SAME
+    # ---- windows. Panel 4, when requested, gets a SECOND batch at its own 120 s width.
+    function Invoke-Phase88Capture {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory)][string[]]$PanelIdList,
+            [Parameter(Mandatory)][datetime]$EndUtc,
+            [Parameter(Mandatory)][int]$Count,
+            [Parameter(Mandatory)][int]$Panel4Count,
+            [Parameter(Mandatory)][string]$ShotDir,
+            [Parameter(Mandatory)][string]$Label
+        )
+
+        $sixty = @($PanelIdList | Where-Object { "$_" -ne '4' })
+        $wantsPanel4 = (@($PanelIdList | Where-Object { "$_" -eq '4' }).Count -gt 0)
+
+        $out = [ordered]@{
+            Label            = $Label
+            Batch            = $null
+            Windows          = @()
+            Panel4Batch      = $null
+            Panel4Windows    = @()
+            WindowStartUtc   = $null
+            WindowEndUtc     = $null
+            State            = 'NotRun'
+            Panel4State      = 'NotRun'
+            ScreenshotPaths  = @()
+        }
+
+        if (@($sixty).Count -gt 0) {
+            $wins = @(Get-PinnedWindowSeries -EndUtc $EndUtc -SubWindowSeconds 60 -Count $Count)
+            $mintedWidth = [int](($wins[0].ToMs - $wins[0].FromMs) / 1000)
+            if ($mintedWidth -ne 60) { throw "the minted sub-window is ${mintedWidth}s, not the 60s this capture records." }
+            $out.Windows = $wins
+            $out.WindowStartUtc = $wins[0].FromUtc
+            $out.WindowEndUtc   = $wins[-1].ToUtc
+            Write-Phase "  [$Label] reading $(@($sixty).Count) panel(s) x $Count x 60s : $($wins[0].FromUtc) -> $($wins[-1].ToUtc)" 'Gray'
+            $b = Invoke-PanelReadBatch -PanelIds ([string[]]$sixty) -Windows $wins -ScreenshotDir $ShotDir `
+                   -LocatorMode $LocatorMode -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight `
+                   -BasicAuthBase64 $adminB64
+            $out.Batch = $b
+            $out.State = "$($b.State)"
+            $out.ScreenshotPaths = @(Get-ScreenshotPaths $b.Readings)
+            Write-Phase "  [$Label] batch State=$($b.State) requested=$($b.Requested) emitted=$($b.Emitted)" 'Gray'
+        }
+
+        if ($wantsPanel4) {
+            $p4Wins = @(Get-PinnedWindowSeries -EndUtc $EndUtc -SubWindowSeconds 120 -Count $Panel4Count)
+            $out.Panel4Windows = $p4Wins
+            if ($null -eq $out.WindowStartUtc) {
+                $out.WindowStartUtc = $p4Wins[0].FromUtc
+                $out.WindowEndUtc   = $p4Wins[-1].ToUtc
+            }
+            Write-Phase "  [$Label] panel 4 at its OWN width: $Panel4Count x 120s (88-04 measured that 60s renders No data)" 'Gray'
+            $b4 = Invoke-PanelReadBatch -PanelIds @('4') -Windows $p4Wins -ScreenshotDir $ShotDir `
+                    -LocatorMode $LocatorMode -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight `
+                    -BasicAuthBase64 $adminB64
+            $out.Panel4Batch = $b4
+            $out.Panel4State = "$($b4.State)"
+            $out.ScreenshotPaths = @(@($out.ScreenshotPaths) + @(Get-ScreenshotPaths $b4.Readings) | Select-Object -Unique)
+        }
+
+        return [pscustomobject]$out
+    }
+
+    # The per-series readings for ONE panel out of a capture, plus the width they were taken at
+    # and the per-window panel states. A stat panel yields a single entry at index -1.
+    function Get-Phase88PanelReading {
+        [CmdletBinding()]
+        param([Parameter(Mandatory)]$Capture, [Parameter(Mandatory)][string]$PanelId)
+
+        $panel = $Panels[$PanelId]
+        $isP4  = ($PanelId -eq '4')
+        $batch = if ($isP4) { $Capture.Panel4Batch } else { $Capture.Batch }
+        $width = if ($isP4) { $Panel4SubWindowSeconds } else { $SubWindowSeconds }
+
+        $result = [ordered]@{
+            PanelId          = $PanelId
+            SubWindowSeconds = $width
+            Entries          = @()
+            States           = @()
+            Readable         = $false
+        }
+        if ($null -eq $batch) { return [pscustomobject]$result }
+
+        $readings = @($batch.Readings)
+        $states = @(Get-PanelStates -Readings $readings -PanelId $PanelId)
+        $result.States = [string[]]$states
+        if (@($states).Count -eq 0) { return [pscustomobject]$result }
+        $result.Readable = $true
+
+        $entries = @()
+        if ("$($panel.Type)" -eq 'stat') {
+            $entries += [pscustomobject]@{
+                Index  = -1
+                Name   = "$($panel.SeriesName)"
+                Values = [double[]]@(Get-PanelSamples -Readings $readings -PanelId $PanelId)
+            }
+        }
+        else {
+            $n = Get-PanelSeriesCount -Readings $readings -PanelId $PanelId
+            for ($i = 0; $i -lt $n; $i++) {
+                $nm = Get-PanelSeriesNameAt -Readings $readings -PanelId $PanelId -SeriesIndex $i
+                $entries += [pscustomobject]@{
+                    Index  = $i
+                    Name   = "$($nm.Name)"
+                    Values = [double[]]@(Get-PanelSamples -Readings $readings -PanelId $PanelId -SeriesIndex $i)
+                }
+            }
+        }
+        $result.Entries = [object[]]$entries
+        return [pscustomobject]$result
+    }
+
+    # Legend names, verbatim and in row order. A legend series NAME change is an INDEPENDENT
+    # discrimination signal — when an `or vector(0)` guard stops firing, the label-less series is
+    # replaced by a labelled one — so it is recorded for every timeseries panel even when the
+    # numeric assertion already passed.
+    # THE UNION OF EVERY NAME THE PANEL RENDERED IN ANY SUB-WINDOW, not the by-index name.
+    #
+    # MEASURED IN ZERO-02 RUN 2. `$Reading.Entries` is built by ROW INDEX, and its Name comes from
+    # the FIRST sub-window in which that index existed. A legend that GAINS rows mid-capture — which
+    # is precisely the guarded-panel transition ZERO-02 exists to assert — therefore reports stale
+    # names for every row after the insertion point. Panel 2 rendered, verbatim:
+    #     windows 1-2:  consumed 0 ops/s | sent 0 ops/s
+    #     windows 3-6:  consumed 0 | consumed keeper 0.00944 | sent 0 | sent keeper 0.00944
+    # and the by-index collector returned `consumed, sent, sent, sent keeper` — silently dropping
+    # `consumed keeper`, the exact name the scenario's second signal is about. Walking the readings
+    # directly makes LegendNamesAfter a record of what was RENDERED rather than of how rows were
+    # indexed. Names are returned in first-seen order and de-duplicated.
+    function Get-Phase88LegendNames {
+        [CmdletBinding()]
+        param([Parameter(Mandatory)]$Reading, $Capture = $null, [string]$PanelId = '')
+        $names = @()
+        if ($null -ne $Capture -and -not [string]::IsNullOrWhiteSpace($PanelId)) {
+            $batch = if ($PanelId -eq '4') { $Capture.Panel4Batch } else { $Capture.Batch }
+            if ($null -ne $batch) {
+                foreach ($r in @($batch.Readings)) {
+                    $rn = @(Get-PropertyNames $r)
+                    if ($rn -notcontains 'panelId' -or "$($r.panelId)" -ne $PanelId) { continue }
+                    if ($rn -notcontains 'series') { continue }
+                    foreach ($s in @($r.series)) {
+                        $sn = @(Get-PropertyNames $s)
+                        if ($sn -notcontains 'name') { continue }
+                        $nm = "$($s.name)"
+                        if ($names -notcontains $nm) { $names += $nm }
+                    }
+                }
+            }
+        }
+        if (@($names).Count -gt 0) { return [string[]]$names }
+        foreach ($e in @($Reading.Entries)) { if ($names -notcontains "$($e.Name)") { $names += "$($e.Name)" } }
+        return [string[]]$names
+    }
+
+    # The legend rows rendered in EACH sub-window, in order, so the transition is auditable window
+    # by window rather than as a merged set the reader must take on trust. The plan asks for exactly
+    # this: "record both arrays verbatim ... so a reader can see the transition".
+    function Get-Phase88LegendNamesPerWindow {
+        [CmdletBinding()]
+        param([Parameter(Mandatory)]$Capture, [Parameter(Mandatory)][string]$PanelId)
+        $out = @()
+        $batch = if ($PanelId -eq '4') { $Capture.Panel4Batch } else { $Capture.Batch }
+        if ($null -eq $batch) { return @($out) }
+        foreach ($r in @($batch.Readings)) {
+            $rn = @(Get-PropertyNames $r)
+            if ($rn -notcontains 'panelId' -or "$($r.panelId)" -ne $PanelId) { continue }
+            $rowNames = @()
+            if ($rn -contains 'series') {
+                foreach ($s in @($r.series)) {
+                    $sn = @(Get-PropertyNames $s)
+                    $rowNames += $(if ($sn -contains 'name') { "$($s.name)" } else { '' })
+                }
+            }
+            $out += [pscustomobject]@{
+                FromUtc     = $(if ($rn -contains 'fromUtc') { "$($r.fromUtc)" } else { '' })
+                ToUtc       = $(if ($rn -contains 'toUtc') { "$($r.toUtc)" } else { '' })
+                LegendNames = [string[]]@($rowNames)
+            }
+        }
+        return @($out)
+    }
+
+    # Band lookup: BY NAME FIRST, falling back to the row index. 88-04 measured that a new series
+    # shifts every later row index (panel 12 gains 400/404 the moment WEB-01 drives them), so an
+    # index-only match would silently score one series against another series' band.
+    function Find-Phase88Band {
+        [CmdletBinding()]
+        param(
+            [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Bands,
+            [Parameter(Mandatory)][int]$PanelId,
+            [Parameter(Mandatory)][AllowEmptyString()][string]$SeriesName,
+            [Parameter(Mandatory)][int]$SeriesIndex
+        )
+        $cand = @($Bands | Where-Object { [int]$_.PanelId -eq $PanelId })
+        if ($cand.Count -eq 0) { return $null }
+        if (-not [string]::IsNullOrWhiteSpace($SeriesName)) {
+            $byName = @($cand | Where-Object {
+                    [string]::Equals("$($_.SeriesName)", $SeriesName, [System.StringComparison]::Ordinal)
+                })
+            if ($byName.Count -ge 1) { return $byName[0] }
+        }
+        $byIdx = @($cand | Where-Object { [int]$_.SeriesIndex -eq $SeriesIndex })
+        if ($byIdx.Count -ge 1) { return $byIdx[0] }
+        return $null
+    }
+
+    # How far outside its band a value sits, 0 when inside. Used for MaxExcursion (a cross-talk
+    # drift is recorded WITH its size, so a hair's-breadth wobble and a real blast radius are
+    # distinguishable in the artifact rather than collapsed into one boolean).
+    function Get-Phase88Excursion {
+        [CmdletBinding()]
+        param([double]$Value, [double]$Low, [double]$High)
+        if ($Value -gt $High) { return ($Value - $High) }
+        if ($Value -lt $Low)  { return ($Low - $Value) }
+        return 0.0
+    }
+
+    # Turn a capture into band rows in the SAME shape as BASE-01's BaselineBands, so the scorer
+    # cannot tell a re-captured band from a DISC-01 one and therefore cannot treat them differently.
+    function New-Phase88BandSet {
+        [CmdletBinding()]
+        param([Parameter(Mandatory)]$Capture, [Parameter(Mandatory)][string[]]$PanelIdList)
+        $bands = @()
+        foreach ($p in @($PanelIdList)) {
+            $rd = Get-Phase88PanelReading -Capture $Capture -PanelId $p
+            foreach ($e in @($rd.Entries)) {
+                $vals = @($e.Values)
+                if ($vals.Count -eq 0) { continue }
+                $b = Get-PanelBand -Values ([double[]]$vals)
+                $bands += [pscustomobject]@{
+                    PanelId          = [int]$p
+                    PanelTitle       = "$($Panels[$p].Title)"
+                    Regime           = "$($Panels[$p].Regime)"
+                    SeriesIndex      = [int]$e.Index
+                    SeriesName       = "$($e.Name)"
+                    SubWindowSeconds = [int]$rd.SubWindowSeconds
+                    Values           = [double[]]$vals
+                    States           = [string[]]@($rd.States)
+                    BandLow          = [double]$b.Low
+                    BandHigh         = [double]$b.High
+                    BandMean         = [double]$b.Mean
+                    BandSigma        = [double]$b.Sigma
+                    FloorApplied     = [bool]$b.FloorApplied
+                    SampleCount      = [int]$b.SampleCount
+                }
+            }
+        }
+        return [object[]]$bands
+    }
+
+
+    # Write the artifact and assert its own serialisation depth. -Depth 10, NOT a shallower
+    # depth: PanelResults[] and CrossTalkPanels[] are OBJECTS INSIDE ARRAYS carrying nested
+    # Values[]/States[], which a shallower serialisation writes as the literal type name —
+    # destroying the evidence that makes every verdict here recomputable (T-88-18). The guard is
+    # STRUCTURAL (a JSON VALUE equal to that string), not a substring search, because a captured
+    # diagnostic message may legitimately MENTION the type and a guard that cries wolf on its own
+    # error text eventually gets disabled.
+    function Save-Phase88ScenarioArtifact {
+        [CmdletBinding()]
+        param([Parameter(Mandatory)]$Report, [Parameter(Mandatory)][string]$Path)
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
+        ([pscustomobject]$Report) | ConvertTo-Json -Depth 10 | Set-Content -Path $Path -Encoding utf8
+        $written = Get-Content $Path -Raw
+        return (-not ($written -match '(?m)(:\s*"System\.Object\[\]"|^\s*"System\.Object\[\]"\s*,?\s*$)'))
+    }
+
+
     # =========================================================================================
     # PRE — PRECONDITION GATE (code 64). Usage/state errors fail with a remediation line, never a
     # verdict. The stack-at-rest half is specific to this phase: a concurrent sweep or a seam left
@@ -877,9 +1312,848 @@ try {
     # sequence its own lever needs rather than a generic one written before any fault was driven.
     # =========================================================================================
     if ($rowMode -eq 'ladder') {
-        Write-Phase "mode 'ladder' is not implemented in this driver yet." 'Red'
-        Write-Phase "Plan 88-08 authors -Mode DurationLadder (LADDER-01)." 'Yellow'
-        exit 64
+
+        # =====================================================================================
+        # -Mode DurationLadder — THE DISC-07 MINIMUM DETECTABLE FAULT DURATION (plan 88-08).
+        #
+        # THE ANSWER IS TWO NUMBERS, NOT ONE, and stating it as one would mislead maintenance in
+        # exactly the direction this phase exists to prevent:
+        #
+        #   COUNTER REGIME (panels 3 and 4). A counter is CUMULATIVE. A fault occurring entirely
+        #   between two exports still increments it, and the increment arrives in the very next
+        #   export — so the EVENT is never lost and only its TIMING is smeared across the 240 s
+        #   rate window. A fault of duration D that drops a rate to zero produces a trough of about
+        #   `baseline x (1 - D/240)`. The smallest rung whose dip clears the Regime-A band for TWO
+        #   consecutive samples is the measured answer.
+        #
+        #   GAUGE REGIME (panel 14). A gauge is SAMPLED, not accumulated. A condition that begins
+        #   and ends between two 60 s exports is NEVER RECORDED AT ALL. A rung shorter than the
+        #   export cadence can therefore move nothing, whatever the fault does — and that is
+        #   recorded as `Moved` false, never retried until it passes.
+        #
+        #   REGIME B is a THIRD answer and is stated explicitly rather than folded into the other
+        #   two: for a zero-floor guarded counter a SINGLE event is detectable at ANY duration,
+        #   because the counter goes from 0 to 1 and stays there for the whole `$__range` window.
+        #   That is the strongest detection property on this dashboard and maintenance should know
+        #   it. It is a stated fact about the dashboard's design, corroborated by the ZERO-*
+        #   scenarios, NOT a ladder measurement — see RegimeBDetectionNote.
+        #
+        # EVERY RUNG IS AN INDEPENDENT MEASUREMENT (T-88-24). Each one re-captures its OWN pre-rung
+        # baseline band over ten 60 s sub-windows, and the next rung's baseline window may not begin
+        # until the rate window has cleared FULLY (the derived RateIntervalSeconds) plus a settle of
+        # at least 150 s past the previous fault's end. A rung measured on the tail of its
+        # predecessor would report the predecessor's fault as its own.
+        #
+        # THE PREDICTION IS RECORDED BESIDE THE MEASUREMENT (T-88-25), never reconciled with it.
+        # `DipFraction` (measured) sits next to `TheoreticalDipFraction` (the model), and a
+        # divergence is a FINDING rather than a reason to adjust the theory.
+        #
+        # RESTORATION IS ASSERTED PER RUNG (T-88-02), not only at the end: a rung that fails to
+        # restore invalidates every rung after it, so the ladder ABORTS with exit 65 rather than
+        # continuing to produce numbers whose baseline is a degraded stack.
+        # =====================================================================================
+
+        # ---- the fixed shape of every capture in this mode -----------------------------------
+        $SubWindowSeconds          = 60
+        # MEASURED in 88-04: panel 4 renders "No data" at a 60 s sub-window (increase() needs >= 2
+        # samples inside its range and the stored resolution here is 60 s), so it is read in its OWN
+        # batch at 120 s and every entry states its own width.
+        $Panel4SubWindowSeconds    = 120
+        $ExportTrailSeconds        = 120   # two export cadences, so the LAST sub-window is stored
+        $LadderBaselineCount       = 10    # the DISC-01 shape, re-taken PER RUNG
+        $LadderBaselinePanel4Count = 5     # 5 x 120 s = the same 600 s span
+        $LadderSettleSeconds       = 150   # two export cadences past the rate-window clear
+        $MinBandSamples            = 3     # a thinner band cannot falsify a non-move (88-05)
+        $LadderMinConsecutive      = 2     # a single 60 s excursion is a sampling artifact
+
+        $CounterPanels       = @('3', '4')
+        $CounterPrimaryPanel = '3'         # the RATE panel the counter theory is actually about
+        $GaugePanels         = @('14')
+        $GaugePrimaryPanel   = '14'
+        # DISC-03. The counter rungs control on both declared panels. The GAUGE rungs control on
+        # panel 9 ONLY, and panel 12 is deliberately excluded there with its reason stated: panel 12
+        # is the WebApi status-code mix, which is causally DOWNSTREAM of the very HTTP load a gauge
+        # rung drives — WEB-01 measured its 400 and 404 series moving off an exactly-zero band under
+        # precisely this load. A control that the fault is expected to move is not a control; it
+        # would report the driver's own footprint as a blast radius (the ZERO-02 run-1 defect).
+        $LadderCounterControls = @(@($scenario.crossTalkPanels) | ForEach-Object { "$_" })
+        $LadderGaugeControls   = @('9')
+        $LadderTier            = "$($scenario.targetTier)"
+        $shotDir               = Join-Path $screenshotRoot $canonicalId
+
+        # ---- answer fields, initialised up front so the artifact writer can read any of them on
+        # ---- any path under StrictMode.
+        $LadderRungs               = @()
+        $LadderFindings            = @()
+        $LadderScreenshotPaths     = @()
+        $LadderCrossTalk           = @()
+        $LadderRateInterval        = $null
+        $LadderTimeInterval        = $null
+        $OldestSampleUtc           = $null
+        $ReaderUnavailable         = $false
+        $LadderHostLoadRequests    = 0
+        $RunInParts                = $false
+        $PartRuns                  = @()
+        $RungsDriven               = @()
+        $RungsCarriedForward       = @()
+        $GaugeFallbackDriven       = $false
+        $CrossTalkHeld             = $null
+        $CrossTalkMeasuredOnRungs  = @()
+        $LadderAbortReason         = ''
+        $lastFaultEndUtc           = $null
+
+        # =====================================================================================
+        # STEP L1 — $__rate_interval and the evidentiary horizon, DERIVED (never assumed). PQ-04
+        # measured 240 s and locked it for the phase; it is still derived here and whatever is
+        # derived is what the rungs wait for, so the ladder can never wait for a stale constant.
+        # =====================================================================================
+        Write-Phase "STEP L1: derive `$__rate_interval and the evidentiary horizon"
+        try {
+            $ds = Invoke-RestMethod -Uri "$gf/api/datasources/uid/skp-prometheus" -Headers $auth -TimeoutSec 20 -ErrorAction Stop
+            $tiText  = ''
+            $dsNames = @(Get-PropertyNames $ds)
+            if ($dsNames -contains 'jsonData') {
+                $jdNames = @(Get-PropertyNames $ds.jsonData)
+                if ($jdNames -contains 'timeInterval') { $tiText = "$($ds.jsonData.timeInterval)" }
+            }
+            $ti = ConvertFrom-GrafanaDuration $tiText
+            if ($ti -gt 0) {
+                $LadderTimeInterval = $tiText
+                $stepL = Get-QueryStepSeconds -RangeSeconds ($SubWindowSeconds * $LadderBaselineCount) -TimeIntervalSeconds $ti -MaxDataPoints $ViewportWidth
+                $LadderRateInterval = Get-RateIntervalSeconds $ti $stepL
+            }
+        } catch {
+            Write-Phase "  the datasource read failed: $($_.Exception.Message)" 'Yellow'
+        }
+        if ($null -eq $LadderRateInterval -or [int]$LadderRateInterval -lt 60) {
+            Write-Phase "could not derive `$__rate_interval from the live datasource — every rung's independence wait is sized from it. Aborting." 'Red'
+            exit 50
+        }
+        $LadderRateClearSeconds = [int]$LadderRateInterval
+        Write-Phase "  timeInterval='$LadderTimeInterval' -> rate_interval=${LadderRateClearSeconds}s; each rung waits ${LadderRateClearSeconds}s + ${LadderSettleSeconds}s past its fault before the next baseline window may begin" 'Gray'
+
+        $nowUnixL = ([DateTimeOffset]::UtcNow).ToUnixTimeSeconds()
+        try {
+            $oldestQ = Invoke-ProxyRangeQuery -Query 'up' -StartUnix ($nowUnixL - (336 * 3600)) -EndUnix $nowUnixL -StepSeconds 3600
+            $oldestUnix = $null
+            foreach ($sOld in @($oldestQ.data.result)) {
+                $snOld = @(Get-PropertyNames $sOld)
+                if ($snOld -notcontains 'values') { continue }
+                $valsOld = @($sOld.values)
+                if ($valsOld.Count -eq 0) { continue }
+                $tsOld = [double]($valsOld[0][0])
+                if ($null -eq $oldestUnix -or $tsOld -lt $oldestUnix) { $oldestUnix = $tsOld }
+            }
+            if ($null -ne $oldestUnix) {
+                $OldestSampleUtc = ([System.DateTimeOffset]::FromUnixTimeSeconds([long]$oldestUnix)).UtcDateTime.ToString('o')
+            }
+        } catch { }
+
+        # =====================================================================================
+        # LADDER HELPERS
+        # =====================================================================================
+
+        # A bounded, chatty wait. The ladder spends most of its wall time here (a rung's
+        # independence discipline costs more than its fault does), so it reports what it is waiting
+        # FOR — a silent 16-minute sleep in a detached log is indistinguishable from a hang.
+        function Wait-LadderUntil {
+            [CmdletBinding()]
+            param([Parameter(Mandatory)][datetime]$TargetUtc, [Parameter(Mandatory)][string]$Why)
+            while ($true) {
+                $left = [int][Math]::Ceiling(($TargetUtc - [datetime]::UtcNow).TotalSeconds)
+                if ($left -le 0) { break }
+                Write-Phase ("  waiting {0}s ({1}) — {2}" -f $left, $TargetUtc.ToString('HH:mm:ss'), $Why) 'Gray'
+                Start-Sleep -Seconds ([Math]::Min($left, 60))
+            }
+        }
+
+        # Score ONE panel at ONE rung against that rung's OWN pre-rung band.
+        #
+        # The NoData run is evaluated for EVERY panel regardless of the value direction, because a
+        # panel that EMPTIES renders no legend series at all and a series-only scorer would report
+        # "nothing moved" for a panel that went completely blank (88-06 deviation 1). Panel 4 is
+        # exactly that case: 88-06 measured that `A - empty` is empty, so under a processor outage
+        # the stat renders "No data" rather than sloping up.
+        function Get-LadderPanelOutcome {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory)]$BaselineCapture,
+                [Parameter(Mandatory)]$AfterCapture,
+                [Parameter(Mandatory)][string]$PanelId,
+                [Parameter(Mandatory)][ValidateSet('down', 'up')][string]$Direction
+            )
+
+            $bands = @(New-Phase88BandSet -Capture $BaselineCapture -PanelIdList ([string[]]@($PanelId)))
+            $rd    = Get-Phase88PanelReading -Capture $AfterCapture -PanelId $PanelId
+            $states = [string[]]@($rd.States)
+
+            $noDataTest = Test-PanelMoved -Band ([pscustomobject]@{ Low = 0.0; High = 0.0 }) `
+                            -AfterStates $states -Direction 'nodata' -MinConsecutive $LadderMinConsecutive
+
+            $seriesOut = @()
+            $bestIdx   = -1
+            $bestRun   = -1
+            $bestDip   = $null
+            for ($si = 0; $si -lt @($rd.Entries).Count; $si++) {
+                $e = @($rd.Entries)[$si]
+                $vals = [double[]]@($e.Values)
+                $b = Find-Phase88Band -Bands ([object[]]@($bands)) -PanelId ([int]$PanelId) `
+                       -SeriesName "$($e.Name)" -SeriesIndex ([int]$e.Index)
+                if ($null -eq $b) {
+                    $seriesOut += [pscustomobject]@{
+                        SeriesIndex = [int]$e.Index; SeriesName = "$($e.Name)"
+                        BandLow = $null; BandHigh = $null; BandMean = $null; BandSampleCount = 0
+                        ThinBand = $true; AfterValues = $vals; Moved = $false
+                        ConsecutiveSamplesOutside = 0; DipFraction = $null
+                        Note = 'this series carried NO pre-rung band — it did not render during the baseline window, so there is no null hypothesis it could have moved away from. Recorded, never scored.'
+                    }
+                    continue
+                }
+                $thin = ([int]$b.SampleCount -lt $MinBandSamples)
+                $t = Test-PanelMoved -Band ([pscustomobject]@{ Low = [double]$b.BandLow; High = [double]$b.BandHigh }) `
+                       -AfterValues $vals -Direction $Direction -MinConsecutive $LadderMinConsecutive
+                # The measured fractional change from the band MEAN, in the direction being tested.
+                # A band whose mean is zero has no fraction to take — the change from zero is not a
+                # ratio — so the zero-mean case is flagged rather than divided, and the panel-level
+                # resolution below turns it into the binary Regime-B form of the same question.
+                $dip = $null
+                $absChange = $null
+                $zeroMean = ([Math]::Abs([double]$b.BandMean) -le 1e-9)
+                if (@($vals).Count -gt 0) {
+                    if ($Direction -eq 'down') {
+                        $extreme = ($vals | Measure-Object -Minimum).Minimum
+                        $absChange = (([double]$b.BandMean) - [double]$extreme)
+                    } else {
+                        $extreme = ($vals | Measure-Object -Maximum).Maximum
+                        $absChange = ([double]$extreme - ([double]$b.BandMean))
+                    }
+                    if (-not $zeroMean) { $dip = ([double]$absChange / [double]$b.BandMean) }
+                }
+                $moved = ([bool]$t.Moved -and -not $thin)
+                $seriesOut += [pscustomobject]@{
+                    SeriesIndex = [int]$e.Index; SeriesName = "$($e.Name)"
+                    BandLow = [double]$b.BandLow; BandHigh = [double]$b.BandHigh
+                    BandMean = [double]$b.BandMean; BandFloorApplied = [bool]$b.FloorApplied
+                    BandSampleCount = [int]$b.SampleCount; ThinBand = $thin
+                    BaselineValues = [double[]]@($b.Values)
+                    AfterValues = $vals; Moved = $moved
+                    ConsecutiveSamplesOutside = [int]$t.ConsecutiveSamplesOutside
+                    DipFraction = $dip; AbsoluteChange = $absChange; ZeroMeanBand = $zeroMean
+                    Note = $(if ($thin) { "band computed from $($b.SampleCount) sample(s) — fewer than $MinBandSamples, so it cannot falsify a non-move and this series is recorded rather than scored" } else { '' })
+                }
+                # The scored series is the one with the LONGEST run outside its band, tie-broken by
+                # the deepest measured excursion. Every series' own outcome is kept, so the
+                # selection is auditable rather than asserted.
+                $runHere = [int]$t.ConsecutiveSamplesOutside
+                if (-not $thin -and ($runHere -gt $bestRun -or ($runHere -eq $bestRun -and $null -ne $dip -and ($null -eq $bestDip -or $dip -gt $bestDip)))) {
+                    $bestRun = $runHere; $bestIdx = $seriesOut.Count - 1; $bestDip = $dip
+                }
+            }
+
+            $scored     = $(if ($bestIdx -ge 0) { $seriesOut[$bestIdx] } else { $null })
+            $movedValue = ($null -ne $scored -and [bool]$scored.Moved)
+            $movedND    = [bool]$noDataTest.Moved
+            $movedBy    = 'none'
+            if ($movedValue) { $movedBy = 'value' } elseif ($movedND) { $movedBy = 'nodata' }
+
+            # PANEL-LEVEL DIP RESOLUTION. This number is never null, because "not computable" and
+            # "zero" are different statements and a null in the artifact would collapse them into a
+            # reader's guess. Each of the three bases is stated on the row that carries it.
+            $panelDip = $null
+            $panelDipBasis = ''
+            if ($null -ne $scored -and $null -ne $scored.DipFraction) {
+                $panelDip = [double]$scored.DipFraction
+                $panelDipBasis = 'the fractional change of the scored series from its own pre-rung band MEAN, in the direction being tested'
+            }
+            elseif ($null -ne $scored -and [bool]$scored.ZeroMeanBand) {
+                $panelDip = $(if ([bool]$scored.Moved) { 1.0 } else { 0.0 })
+                $panelDipBasis = "the scored series' pre-rung band MEAN is exactly zero, so a fractional change from it is not a ratio — there is nothing to take a fraction OF. This records the Regime-B form of the same question instead: 1.0 when the panel left its exactly-zero band at all, 0.0 when it did not. AbsoluteChange on the series row carries the size of the movement in the panel's own units."
+            }
+            elseif ($null -eq $scored -and [int]$noDataTest.ConsecutiveSamplesOutside -ge 1) {
+                $panelDip = 1.0
+                $panelDipBasis = 'the panel EMPTIED — it rendered no legend series at all in the after window, which is a total loss of signal rather than a fractional drop. Recorded as 1.0 so that "the panel went blank" is never confused with "the value did not move".'
+            }
+            else {
+                $panelDip = 0.0
+                $panelDipBasis = 'no scored series and no NoData run — the panel rendered nothing measurable and nothing measurable changed. Recorded as 0.0 rather than null so that "measured, no change" and "not measured" stay distinguishable (Readable states which).'
+            }
+
+            return [pscustomobject]@{
+                PanelId          = [int]$PanelId
+                PanelTitle       = "$($Panels[$PanelId].Title)"
+                Regime           = "$($Panels[$PanelId].Regime)"
+                SubWindowSeconds = [int]$rd.SubWindowSeconds
+                Direction        = $Direction
+                Readable         = [bool]$rd.Readable
+                ScoredSeriesIndex = $(if ($null -ne $scored) { [int]$scored.SeriesIndex } else { $null })
+                ScoredSeriesName  = $(if ($null -ne $scored) { "$($scored.SeriesName)" } else { '' })
+                BandLow          = $(if ($null -ne $scored) { $scored.BandLow } else { $null })
+                BandHigh         = $(if ($null -ne $scored) { $scored.BandHigh } else { $null })
+                BandMean         = $(if ($null -ne $scored) { $scored.BandMean } else { $null })
+                BandFloorApplied = $(if ($null -ne $scored) { $scored.BandFloorApplied } else { $null })
+                BandSampleCount  = $(if ($null -ne $scored) { $scored.BandSampleCount } else { 0 })
+                BaselineValues   = $(if ($null -ne $scored) { $scored.BaselineValues } else { [double[]]@() })
+                AfterValues      = $(if ($null -ne $scored) { $scored.AfterValues } else { [double[]]@() })
+                AfterStates      = $states
+                Moved            = ($movedValue -or $movedND)
+                MovedBy          = $movedBy
+                ConsecutiveSamplesOutside = $(if ($movedND -and -not $movedValue) { [int]$noDataTest.ConsecutiveSamplesOutside } elseif ($null -ne $scored) { [int]$scored.ConsecutiveSamplesOutside } else { 0 })
+                PanelStateNoDataRun = [int]$noDataTest.ConsecutiveSamplesOutside
+                PanelStateNoDataNote = 'computed for EVERY panel regardless of the value direction, so 0 always means "measured, no run" and never "nobody looked". MovedBy states whether the NoData run is what carried the movement.'
+                DipFraction      = $panelDip
+                DipFractionBasis = $panelDipBasis
+                AbsoluteChange   = $(if ($null -ne $scored) { $scored.AbsoluteChange } else { $null })
+                SeriesResults    = [object[]]@($seriesOut)
+            }
+        }
+
+        # A cross-talk control, scored against the SAME rung's pre-rung band and read in the SAME
+        # batch and the SAME windows as the claim (DISC-03). StayedPut is STRICT: inside the band
+        # for the entire after window. A drift is recorded WITH its MaxExcursion, never
+        # re-classified.
+        function Get-LadderCrossTalk {
+            [CmdletBinding()]
+            param(
+                [Parameter(Mandatory)]$BaselineCapture,
+                [Parameter(Mandatory)]$AfterCapture,
+                [Parameter(Mandatory)][string]$PanelId,
+                [Parameter(Mandatory)][int]$FaultSeconds,
+                [Parameter(Mandatory)][string]$Regime
+            )
+            $bands  = @(New-Phase88BandSet -Capture $BaselineCapture -PanelIdList ([string[]]@($PanelId)))
+            $rd     = Get-Phase88PanelReading -Capture $AfterCapture -PanelId $PanelId
+            $stayed = $true
+            $maxExc = 0.0
+            $applicable = $false
+            $sr = @()
+            foreach ($e in @($rd.Entries)) {
+                $b = Find-Phase88Band -Bands ([object[]]@($bands)) -PanelId ([int]$PanelId) `
+                       -SeriesName "$($e.Name)" -SeriesIndex ([int]$e.Index)
+                if ($null -eq $b) {
+                    $sr += [pscustomobject]@{ SeriesIndex = [int]$e.Index; SeriesName = "$($e.Name)"; Applicable = $false; AfterValues = [double[]]@($e.Values); MaxExcursion = $null; Note = 'no pre-rung band for this control series' }
+                    continue
+                }
+                $applicable = $true
+                $exMax = 0.0
+                foreach ($v in @($e.Values)) {
+                    $ex = Get-Phase88Excursion -Value ([double]$v) -Low ([double]$b.BandLow) -High ([double]$b.BandHigh)
+                    if ($ex -gt $exMax) { $exMax = $ex }
+                }
+                if ($exMax -gt 0) { $stayed = $false }
+                if ($exMax -gt $maxExc) { $maxExc = $exMax }
+                $sr += [pscustomobject]@{
+                    SeriesIndex = [int]$e.Index; SeriesName = "$($e.Name)"; Applicable = $true
+                    BandLow = [double]$b.BandLow; BandHigh = [double]$b.BandHigh
+                    AfterValues = [double[]]@($e.Values); MaxExcursion = $exMax
+                    StayedPut = ($exMax -eq 0.0); Note = ''
+                }
+            }
+            return [pscustomobject]@{
+                PanelId = [int]$PanelId; PanelTitle = "$($Panels[$PanelId].Title)"
+                Regime = $Regime; FaultSeconds = $FaultSeconds
+                Applicable = $applicable
+                SubWindowSeconds = [int]$rd.SubWindowSeconds
+                AfterStates = [string[]]@($rd.States)
+                StayedPut = $(if ($applicable) { $stayed } else { $null })
+                MaxExcursion = $(if ($applicable) { $maxExc } else { $null })
+                BandSource = "the pre-rung baseline of the ${FaultSeconds}s $Regime rung — a LOCAL reference band, because the DISC-01 band was captured hours earlier under a different host load and a comparison against it would report a difference in CONDITIONS as drift"
+                SeriesResults = [object[]]@($sr)
+            }
+        }
+
+        # An independent LIVE re-read of every tier's replica count, so a rung's ReplicasRestored is
+        # a fresh reading rather than an echo of the sequencer's own claim (T-88-02). A rung that
+        # did not restore invalidates every rung after it.
+        function Test-LadderStackRestored {
+            [CmdletBinding()]
+            param()
+            $mismatch = @()
+            foreach ($t in $Tiers) {
+                $live = [int](Get-LiveReplicas -Tier $t)
+                if ($live -ne [int]$preReplicas[$t]) { $mismatch += "${t}: live=$live expected=$($preReplicas[$t])" }
+            }
+            return [pscustomobject]@{ Ok = (@($mismatch).Count -eq 0); Mismatches = [string[]]@($mismatch) }
+        }
+
+        # =====================================================================================
+        # STEP L2 — RESUME MERGE. A ladder that aborted partway is re-run with -Rungs, and the
+        # rungs it already measured are carried forward VERBATIM from the existing artifact rather
+        # than re-driven. RunInParts records that the ladder was run in more than one part, so an
+        # artifact assembled from two runs can never be mistaken for one continuous run.
+        # =====================================================================================
+        $reportPath = Join-Path $reportDir ("phase-88-{0}.json" -f $canonicalId)
+        if (@($RungFilter).Count -gt 0 -and (Test-Path -LiteralPath $reportPath)) {
+            try {
+                $prev = Get-Content $reportPath -Raw | ConvertFrom-Json
+                foreach ($pr in @($prev.Rungs)) {
+                    if ($RungFilter -contains [int]$pr.FaultSeconds) { continue }
+                    $RungsCarriedForward += "$($pr.Regime)/$($pr.FaultSeconds)s"
+                    $LadderRungs += $pr
+                }
+                $PartRuns += "carried $(@($RungsCarriedForward).Count) rung(s) forward from the artifact completed $($prev.CompletedUtc)"
+                $RunInParts = $true
+                Write-Phase "STEP L2: carried forward [$(@($RungsCarriedForward) -join ', ')] from the existing artifact" 'Yellow'
+            } catch {
+                Write-Phase "STEP L2: the existing artifact could not be parsed and nothing was carried forward: $($_.Exception.Message)" 'Yellow'
+            }
+        }
+
+        # =====================================================================================
+        # STEP L3 — THE COUNTER LADDER (panels 3 and 4, lever `scale` on processor-sample).
+        # =====================================================================================
+        $counterMax = ($LadderCounterRungs | Measure-Object -Maximum).Maximum
+        foreach ($rungSeconds in @($LadderCounterRungs)) {
+            if (@($RungFilter).Count -gt 0 -and $RungFilter -notcontains $rungSeconds) {
+                Write-Phase "STEP L3: counter rung ${rungSeconds}s SKIPPED by the -Rungs filter" 'Yellow'
+                continue
+            }
+            Write-Phase "STEP L3: COUNTER rung ${rungSeconds}s (lever scale on '$LadderTier', panels $(@($CounterPanels) -join '/'))"
+            $rungStartUtc = [datetime]::UtcNow
+
+            # --- independence (T-88-24): the pre-rung baseline window must lie ENTIRELY after the
+            # --- previous rung's rate window cleared and the stack settled.
+            if ($null -ne $lastFaultEndUtc) {
+                $earliestBaselineStart = ([datetime]$lastFaultEndUtc).AddSeconds($LadderRateClearSeconds + $LadderSettleSeconds)
+                $earliestCaptureAt     = $earliestBaselineStart.AddSeconds(($LadderBaselineCount * $SubWindowSeconds) + $ExportTrailSeconds)
+                Wait-LadderUntil -TargetUtc $earliestCaptureAt -Why "rung independence: this rung's baseline window may not begin until ${LadderRateClearSeconds}s (the rate window) + ${LadderSettleSeconds}s past the previous fault"
+            }
+
+            $isControlRung = ($rungSeconds -eq $counterMax)
+            $capPanels = [string[]]@(@($CounterPanels) + $(if ($isControlRung) { @($LadderCounterControls) } else { @() }) | Select-Object -Unique)
+
+            # --- the pre-rung baseline, over the window that has just ELAPSED (offset by the export
+            # --- trail so every sample in it is already stored). It costs no wall time.
+            $baseEnd = ([datetime]::UtcNow).AddSeconds(-$ExportTrailSeconds)
+            $baseCap = Invoke-Phase88Capture -PanelIdList $capPanels -EndUtc $baseEnd `
+                         -Count $LadderBaselineCount -Panel4Count $LadderBaselinePanel4Count `
+                         -ShotDir $shotDir -Label "counter-${rungSeconds}s-baseline"
+            $LadderScreenshotPaths = @(@($LadderScreenshotPaths) + @($baseCap.ScreenshotPaths) | Select-Object -Unique)
+            if ("$($baseCap.State)" -ne 'Ok') { $ReaderUnavailable = $true; $LadderFindings += "counter rung ${rungSeconds}s: the baseline batch reported State=$($baseCap.State)" }
+
+            # --- the fault. The restore target is the count READ before the mutation, never a
+            # --- tabled one; the outer teardown slots are set so an interrupted run still restores.
+            $scaledTier     = $LadderTier
+            $replicasBefore = [int](Get-LiveReplicas -Tier $LadderTier)
+            $fault = Invoke-TierScaleFault -Tier $LadderTier -DwellSeconds $rungSeconds
+            $scaledTier     = ''
+            $replicasBefore = -1
+            if (-not $fault.Ok) {
+                $LadderAbortReason = "counter rung ${rungSeconds}s: the scale fault failed (code $($fault.FailureCode)): $($fault.Detail)"
+                Write-Phase $LadderAbortReason 'Red'
+                break
+            }
+            $faultStartUtc = ([datetimeoffset]::Parse("$($fault.FaultStartUtc)")).UtcDateTime
+            $faultEndUtc   = ([datetimeoffset]::Parse("$($fault.FaultEndUtc)")).UtcDateTime
+
+            # --- the after window. It ENDS one sub-window past the fault, because a 240 s rate
+            # --- lookback is at its deepest exactly at the fault's end and recovers as the window
+            # --- slides forward; it reaches back far enough to hold the whole fault plus at least
+            # --- one healthy sub-window, and its count is EVEN so panel 4's 120 s batch divides it.
+            $afterCount = [int][Math]::Max(6, [Math]::Ceiling(($rungSeconds + 120) / 60.0))
+            if ($afterCount % 2 -ne 0) { $afterCount++ }
+            $afterEnd = $faultEndUtc.AddSeconds($SubWindowSeconds)
+
+            # --- wait for the rate window to clear FULLY before reading, so the whole after window
+            # --- is stored and the NEXT rung is not measured on this one's tail.
+            Wait-LadderUntil -TargetUtc ($faultEndUtc.AddSeconds($LadderRateClearSeconds + $LadderSettleSeconds)) `
+              -Why "letting the ${LadderRateClearSeconds}s rate window clear fully (+${LadderSettleSeconds}s settle) before the after capture"
+
+            $afterCap = Invoke-Phase88Capture -PanelIdList $capPanels -EndUtc $afterEnd `
+                          -Count $afterCount -Panel4Count ($afterCount / 2) `
+                          -ShotDir $shotDir -Label "counter-${rungSeconds}s-after"
+            $LadderScreenshotPaths = @(@($LadderScreenshotPaths) + @($afterCap.ScreenshotPaths) | Select-Object -Unique)
+            if ("$($afterCap.State)" -ne 'Ok') { $ReaderUnavailable = $true; $LadderFindings += "counter rung ${rungSeconds}s: the after batch reported State=$($afterCap.State)" }
+
+            # --- score
+            $outcomes = @()
+            foreach ($p in @($CounterPanels)) {
+                $outcomes += Get-LadderPanelOutcome -BaselineCapture $baseCap -AfterCapture $afterCap -PanelId $p -Direction 'down'
+            }
+            if ($isControlRung) {
+                foreach ($c in @($LadderCounterControls)) {
+                    $ct = Get-LadderCrossTalk -BaselineCapture $baseCap -AfterCapture $afterCap -PanelId $c -FaultSeconds $rungSeconds -Regime 'counter'
+                    $LadderCrossTalk += $ct
+                    if ($null -ne $ct.StayedPut -and -not $ct.StayedPut) {
+                        $LadderFindings += "cross-talk control panel $c DRIFTED during the ${rungSeconds}s counter rung (MaxExcursion $([Math]::Round([double]$ct.MaxExcursion, 4)))"
+                    }
+                }
+                $CrossTalkMeasuredOnRungs += "counter/${rungSeconds}s"
+            }
+
+            $primary = @($outcomes | Where-Object { [int]$_.PanelId -eq [int]$CounterPrimaryPanel })[0]
+            $rungMoved = (@($outcomes | Where-Object { $_.Moved }).Count -gt 0)
+            $theoretical = [double]([Math]::Min($rungSeconds, $LadderRateClearSeconds) / [double]$LadderRateClearSeconds)
+
+            $restoreCheck = Test-LadderStackRestored
+            $rungEndUtc = [datetime]::UtcNow
+
+            $LadderRungs += [pscustomobject]@{
+                Regime           = 'counter'
+                PanelIds         = [string[]]@($CounterPanels)
+                FaultSeconds     = $rungSeconds
+                Lever            = 'scale'
+                Tier             = $LadderTier
+                PrimaryPanelId   = [int]$CounterPrimaryPanel
+                BaselineBand     = [pscustomobject]@{
+                    PanelId = [int]$CounterPrimaryPanel; SeriesName = "$($primary.ScoredSeriesName)"
+                    Low = $primary.BandLow; High = $primary.BandHigh; Mean = $primary.BandMean
+                    FloorApplied = $primary.BandFloorApplied; SampleCount = $primary.BandSampleCount
+                    SubWindowSeconds = [int]$primary.SubWindowSeconds
+                    WindowStartUtc = "$($baseCap.WindowStartUtc)"; WindowEndUtc = "$($baseCap.WindowEndUtc)"
+                }
+                BaselineValues   = [double[]]@($primary.BaselineValues)
+                AfterValues      = [double[]]@($primary.AfterValues)
+                AfterStates      = [string[]]@($primary.AfterStates)
+                Moved            = $rungMoved
+                MovedPanelIds    = [string[]]@(@($outcomes | Where-Object { $_.Moved } | ForEach-Object { "$($_.PanelId)" }))
+                ConsecutiveSamplesOutside = [int]$primary.ConsecutiveSamplesOutside
+                DipFraction      = $primary.DipFraction
+                DipFractionBasis = "$($primary.DipFractionBasis)"
+                DipFractionKind  = "the MEASURED fractional DROP of panel $CounterPrimaryPanel's scored series from its own pre-rung band mean: (bandMean - min(afterValues)) / bandMean. Panel 4 is excluded from this number on purpose — it is an increase() stat that EMPTIES rather than dipping, so a 'dip fraction' for it would not be the same quantity."
+                TheoreticalDipFraction = $theoretical
+                TheoreticalDipFractionKind = "min(D, rateInterval) / rateInterval — the fractional DROP the smearing model predicts, i.e. the fraction of the ${LadderRateClearSeconds}s rate lookback the fault occupies. NOTE: plan 88-08's text writes this expression as `1 - min(D,240)/240`, which is the RESIDUAL trough as a fraction of baseline (recorded here as TheoreticalTroughFraction) and NOT a drop. Comparing a measured DROP against a modelled RESIDUAL would manufacture a divergence at every rung, so the two quantities are both recorded and neither is silently substituted for the other."
+                TheoreticalTroughFraction = [double](1.0 - $theoretical)
+                PredictionDivergence = [double]([Math]::Abs([double]$primary.DipFraction - $theoretical))
+                PredictionDivergenceComparable = ("$($primary.DipFractionBasis)" -like 'the fractional change*')
+                RungStartUtc     = $rungStartUtc.ToString('o')
+                RungEndUtc       = $rungEndUtc.ToString('o')
+                FaultStartUtc    = $faultStartUtc.ToString('o')
+                FaultEndUtc      = $faultEndUtc.ToString('o')
+                AfterWindowStart = "$($afterCap.WindowStartUtc)"
+                AfterWindowEnd   = "$($afterCap.WindowEndUtc)"
+                SubWindowSeconds = $SubWindowSeconds
+                SubWindowCount   = $afterCount
+                ReplicasBefore   = [int]$fault.ReplicasBefore
+                ReplicasAfter    = [int]$fault.ReplicasAfter
+                ReplicasRestored = ([bool]$fault.ReplicasRestored -and [bool]$restoreCheck.Ok)
+                ReplicasRestoredDetail = $(if ($restoreCheck.Ok) { 'the sequencer claimed the restore AND an independent live re-read of all four tiers agreed' } else { "independent live re-read DISAGREED: $(@($restoreCheck.Mismatches) -join '; ')" })
+                CrossTalkMeasured = $isControlRung
+                PanelOutcomes    = [object[]]@($outcomes)
+            }
+            $RungsDriven += "counter/${rungSeconds}s"
+            $lastFaultEndUtc = $faultEndUtc
+
+            $div = [Math]::Abs([double]$primary.DipFraction - $theoretical)
+            Write-Phase ("  rung {0}s: moved={1} dip={2:N3} theoretical={3:N3} divergence={4:N3} consecutive={5}" -f $rungSeconds, $rungMoved, [double]$primary.DipFraction, $theoretical, $div, $primary.ConsecutiveSamplesOutside) $(if ($rungMoved) { 'Green' } else { 'Yellow' })
+            # The divergence is only a comparison of LIKE quantities when the measured number is a
+            # fractional change from a non-zero band mean. Where the panel emptied or its band mean
+            # was zero, the measured number is a different KIND and the comparison is skipped rather
+            # than reported as a disagreement the theory never claimed.
+            if ($div -gt (1.0 / 3.0) -and "$($primary.DipFractionBasis)" -like 'the fractional change*') {
+                $LadderFindings += ("counter rung ${rungSeconds}s: the MEASURED dip fraction $([Math]::Round([double]$primary.DipFraction,3)) diverges from the theoretical $([Math]::Round($theoretical,3)) by $([Math]::Round($div,3)) — more than a third. Recorded as a finding; the theory is NOT adjusted to fit the measurement.")
+            }
+
+            if (-not ([bool]$fault.ReplicasRestored -and [bool]$restoreCheck.Ok)) {
+                $LadderAbortReason = "counter rung ${rungSeconds}s did NOT restore ($($restoreCheck.Mismatches -join '; ')) — every rung after it would be measured against a degraded stack, so the ladder aborts here."
+                Write-Phase $LadderAbortReason 'Red'
+                break
+            }
+        }
+
+        # =====================================================================================
+        # STEP L4 — THE GAUGE LADDER (panel 14, lever `http`).
+        #
+        # The load runs for the RUNG'S DURATION ONLY. Because the three series are gauges sampled at
+        # the 60 s export cadence, a rung shorter than the cadence can supply at most ONE affected
+        # sample and the two-consecutive-sample rule is then unsatisfiable BY CONSTRUCTION — that is
+        # recorded as Moved false with MaxPossibleConsecutiveSamples stating why, never retried
+        # until it passes.
+        # =====================================================================================
+        if ([string]::IsNullOrWhiteSpace($LadderAbortReason)) {
+            $gaugeRungList = @($LadderGaugeRungs)
+            $gi = 0
+            while ($gi -lt @($gaugeRungList).Count) {
+                $rungSeconds = [int]@($gaugeRungList)[$gi]
+                $gi++
+                if (@($RungFilter).Count -gt 0 -and $RungFilter -notcontains $rungSeconds) {
+                    Write-Phase "STEP L4: gauge rung ${rungSeconds}s SKIPPED by the -Rungs filter" 'Yellow'
+                    continue
+                }
+                Write-Phase "STEP L4: GAUGE rung ${rungSeconds}s (lever http, panel $(@($GaugePanels) -join '/'))"
+                $rungStartUtc = [datetime]::UtcNow
+
+                if ($null -ne $lastFaultEndUtc) {
+                    $earliestBaselineStart = ([datetime]$lastFaultEndUtc).AddSeconds($LadderRateClearSeconds + $LadderSettleSeconds)
+                    $earliestCaptureAt     = $earliestBaselineStart.AddSeconds(($LadderBaselineCount * $SubWindowSeconds) + $ExportTrailSeconds)
+                    Wait-LadderUntil -TargetUtc $earliestCaptureAt -Why "rung independence: this rung's baseline window may not begin until ${LadderRateClearSeconds}s + ${LadderSettleSeconds}s past the previous fault"
+                }
+
+                $isControlRung = ($rungSeconds -eq (@($gaugeRungList) | Measure-Object -Maximum).Maximum)
+                $capPanels = [string[]]@(@($GaugePanels) + $(if ($isControlRung) { @($LadderGaugeControls) } else { @() }) | Select-Object -Unique)
+
+                $baseEnd = ([datetime]::UtcNow).AddSeconds(-$ExportTrailSeconds)
+                $baseCap = Invoke-Phase88Capture -PanelIdList $capPanels -EndUtc $baseEnd `
+                             -Count $LadderBaselineCount -Panel4Count 0 `
+                             -ShotDir $shotDir -Label "gauge-${rungSeconds}s-baseline"
+                $LadderScreenshotPaths = @(@($LadderScreenshotPaths) + @($baseCap.ScreenshotPaths) | Select-Object -Unique)
+                if ("$($baseCap.State)" -ne 'Ok') { $ReaderUnavailable = $true; $LadderFindings += "gauge rung ${rungSeconds}s: the baseline batch reported State=$($baseCap.State)" }
+
+                # --- the fault: the SAME sustained concurrency WEB-01 drove, for this rung only.
+                $faultStartUtc = [datetime]::UtcNow
+                $loadJobs = @(Start-Phase88HttpLoad -Shape 'sustained' -DurationSeconds $rungSeconds -BaseUri $api)
+                Start-Sleep -Seconds $rungSeconds
+                $LadderHostLoadRequests += (Stop-Phase88HttpLoad -Jobs $loadJobs)
+                $loadJobs = @()
+                $faultEndUtc = [datetime]::UtcNow
+
+                $afterCount = 6
+                $afterEnd   = $faultEndUtc.AddSeconds($SubWindowSeconds)
+                Wait-LadderUntil -TargetUtc ($faultEndUtc.AddSeconds($LadderRateClearSeconds + $LadderSettleSeconds)) `
+                  -Why "letting the export trail and the ${LadderRateClearSeconds}s window clear fully (+${LadderSettleSeconds}s settle) before the after capture"
+
+                $afterCap = Invoke-Phase88Capture -PanelIdList $capPanels -EndUtc $afterEnd `
+                              -Count $afterCount -Panel4Count 0 `
+                              -ShotDir $shotDir -Label "gauge-${rungSeconds}s-after"
+                $LadderScreenshotPaths = @(@($LadderScreenshotPaths) + @($afterCap.ScreenshotPaths) | Select-Object -Unique)
+                if ("$($afterCap.State)" -ne 'Ok') { $ReaderUnavailable = $true; $LadderFindings += "gauge rung ${rungSeconds}s: the after batch reported State=$($afterCap.State)" }
+
+                $outcomes = @()
+                foreach ($p in @($GaugePanels)) {
+                    $outcomes += Get-LadderPanelOutcome -BaselineCapture $baseCap -AfterCapture $afterCap -PanelId $p -Direction 'up'
+                }
+                if ($isControlRung) {
+                    foreach ($c in @($LadderGaugeControls)) {
+                        $ct = Get-LadderCrossTalk -BaselineCapture $baseCap -AfterCapture $afterCap -PanelId $c -FaultSeconds $rungSeconds -Regime 'gauge'
+                        $LadderCrossTalk += $ct
+                        if ($null -ne $ct.StayedPut -and -not $ct.StayedPut) {
+                            $LadderFindings += "cross-talk control panel $c DRIFTED during the ${rungSeconds}s gauge rung (MaxExcursion $([Math]::Round([double]$ct.MaxExcursion, 4)))"
+                        }
+                    }
+                    $CrossTalkMeasuredOnRungs += "gauge/${rungSeconds}s"
+                }
+
+                $primary = @($outcomes | Where-Object { [int]$_.PanelId -eq [int]$GaugePrimaryPanel })[0]
+                $rungMoved = (@($outcomes | Where-Object { $_.Moved }).Count -gt 0)
+                $maxPossible = [int][Math]::Floor($rungSeconds / [double]$SubWindowSeconds)
+                $theoretical = [double]([Math]::Min($maxPossible, $LadderMinConsecutive) / [double]$LadderMinConsecutive)
+
+                $restoreCheck = Test-LadderStackRestored
+                $rungEndUtc = [datetime]::UtcNow
+
+                $LadderRungs += [pscustomobject]@{
+                    Regime           = 'gauge'
+                    PanelIds         = [string[]]@($GaugePanels)
+                    FaultSeconds     = $rungSeconds
+                    Lever            = 'http'
+                    Tier             = ''
+                    PrimaryPanelId   = [int]$GaugePrimaryPanel
+                    BaselineBand     = [pscustomobject]@{
+                        PanelId = [int]$GaugePrimaryPanel; SeriesName = "$($primary.ScoredSeriesName)"
+                        Low = $primary.BandLow; High = $primary.BandHigh; Mean = $primary.BandMean
+                        FloorApplied = $primary.BandFloorApplied; SampleCount = $primary.BandSampleCount
+                        SubWindowSeconds = [int]$primary.SubWindowSeconds
+                        WindowStartUtc = "$($baseCap.WindowStartUtc)"; WindowEndUtc = "$($baseCap.WindowEndUtc)"
+                    }
+                    BaselineValues   = [double[]]@($primary.BaselineValues)
+                    AfterValues      = [double[]]@($primary.AfterValues)
+                    AfterStates      = [string[]]@($primary.AfterStates)
+                    Moved            = $rungMoved
+                    MovedPanelIds    = [string[]]@(@($outcomes | Where-Object { $_.Moved } | ForEach-Object { "$($_.PanelId)" }))
+                    ConsecutiveSamplesOutside = [int]$primary.ConsecutiveSamplesOutside
+                    DipFraction      = $primary.DipFraction
+                    DipFractionBasis = "$($primary.DipFractionBasis)"
+                    DipFractionKind  = "the MEASURED fractional EXCURSION ABOVE panel $GaugePrimaryPanel's pre-rung band mean: (max(afterValues) - bandMean) / bandMean. The gauge regime moves UPWARD under load, so this is a rise, not a drop — it is NOT comparable with the counter rungs' DipFraction and must never be plotted on the same axis."
+                    TheoreticalDipFraction = $theoretical
+                    TheoreticalDipFractionKind = "min(floor(D / 60), 2) / 2 — the fraction of the two-consecutive-sample minimum that a fault of this duration can POSSIBLY supply, given that a gauge is sampled once per 60 s export. It is a detectability fraction, not a depth: at 1.0 the rung can in principle be detected, and below 1.0 the two-consecutive rule is unsatisfiable BY CONSTRUCTION however large the perturbation."
+                    TheoreticalTroughFraction = [double](1.0 - $theoretical)
+                    MaxPossibleConsecutiveSamples = $maxPossible
+                    PredictionDivergence = $null
+                    RungStartUtc     = $rungStartUtc.ToString('o')
+                    RungEndUtc       = $rungEndUtc.ToString('o')
+                    FaultStartUtc    = $faultStartUtc.ToString('o')
+                    FaultEndUtc      = $faultEndUtc.ToString('o')
+                    AfterWindowStart = "$($afterCap.WindowStartUtc)"
+                    AfterWindowEnd   = "$($afterCap.WindowEndUtc)"
+                    SubWindowSeconds = $SubWindowSeconds
+                    SubWindowCount   = $afterCount
+                    ReplicasBefore   = [int]$preReplicas['baseapi-service']
+                    ReplicasAfter    = [int](Get-LiveReplicas -Tier 'baseapi-service')
+                    ReplicasRestored = [bool]$restoreCheck.Ok
+                    ReplicasRestoredDetail = $(if ($restoreCheck.Ok) { 'this rung SCALED NOTHING (its lever is host HTTP load); an independent live re-read confirms all four tiers still sit at their pre-run counts' } else { "independent live re-read DISAGREED: $(@($restoreCheck.Mismatches) -join '; ')" })
+                    CrossTalkMeasured = $isControlRung
+                    PanelOutcomes    = [object[]]@($outcomes)
+                }
+                $RungsDriven += "gauge/${rungSeconds}s"
+                $lastFaultEndUtc = $faultEndUtc
+                Write-Phase ("  rung {0}s: moved={1} consecutive={2} maxPossibleConsecutive={3}" -f $rungSeconds, $rungMoved, $primary.ConsecutiveSamplesOutside, $maxPossible) $(if ($rungMoved) { 'Green' } else { 'Yellow' })
+
+                if (-not $restoreCheck.Ok) {
+                    $LadderAbortReason = "gauge rung ${rungSeconds}s left the stack off its pre-run replica counts ($($restoreCheck.Mismatches -join '; ')) — the ladder aborts here."
+                    Write-Phase $LadderAbortReason 'Red'
+                    break
+                }
+
+                # The 180 s FALLBACK rung, driven ONLY if all three declared gauge rungs failed to
+                # move the panel. The research names it; it is not a routine rung, and the artifact
+                # states whether it was driven.
+                if ($gi -eq @($gaugeRungList).Count -and -not $GaugeFallbackDriven -and @($RungFilter).Count -eq 0) {
+                    $gaugeSoFar = @($LadderRungs | Where-Object { "$($_.Regime)" -eq 'gauge' })
+                    if (@($gaugeSoFar).Count -ge 1 -and @($gaugeSoFar | Where-Object { $_.Moved }).Count -eq 0) {
+                        Write-Phase "STEP L4: all declared gauge rungs failed to move panel 14 — driving the ${LadderGaugeFallbackRung}s fallback rung the research names" 'Yellow'
+                        $gaugeRungList = @(@($gaugeRungList) + @($LadderGaugeFallbackRung))
+                        $GaugeFallbackDriven = $true
+                    }
+                }
+            }
+        }
+
+        # =====================================================================================
+        # STEP L5 — RESOLVE BOTH REGIME ANSWERS, ASSERT THE STACK, WRITE THE ARTIFACT.
+        # =====================================================================================
+        Write-Phase "STEP L5: resolve both regime answers, assert the stack, write the artifact"
+        if (@($loadJobs).Count -gt 0) {
+            $LadderHostLoadRequests += (Stop-Phase88HttpLoad -Jobs $loadJobs)
+            $loadJobs = @()
+        }
+
+        $counterRungs = @($LadderRungs | Where-Object { "$($_.Regime)" -eq 'counter' } | Sort-Object { [int]$_.FaultSeconds })
+        $gaugeRungs   = @($LadderRungs | Where-Object { "$($_.Regime)" -eq 'gauge' }   | Sort-Object { [int]$_.FaultSeconds })
+
+        $MinDetectableCounterSeconds = $null
+        $MinDetectableCounterNote    = ''
+        $movedCounter = @($counterRungs | Where-Object { $_.Moved } | Sort-Object { [int]$_.FaultSeconds })
+        if (@($movedCounter).Count -gt 0) {
+            $MinDetectableCounterSeconds = [int]$movedCounter[0].FaultSeconds
+            $MinDetectableCounterNote = "the smallest COUNTER rung whose panel(s) left the pre-rung band for $LadderMinConsecutive consecutive 60 s sub-windows. Rungs driven: [$(@($counterRungs | ForEach-Object { "$($_.FaultSeconds)s:$(if($_.Moved){'moved'}else{'no'})" }) -join ' ')]."
+        } else {
+            $MinDetectableCounterNote = "NULL, not the largest rung: no counter rung moved a panel for $LadderMinConsecutive consecutive sub-windows, so this ladder measured NO detectable duration in the counter regime rather than measuring the top of its own range. Rungs driven: [$(@($counterRungs | ForEach-Object { "$($_.FaultSeconds)s:no" }) -join ' ')]."
+        }
+
+        $MinDetectableGaugeSeconds = $null
+        $MinDetectableGaugeNote    = ''
+        $movedGauge = @($gaugeRungs | Where-Object { $_.Moved } | Sort-Object { [int]$_.FaultSeconds })
+        if (@($movedGauge).Count -gt 0) {
+            $MinDetectableGaugeSeconds = [int]$movedGauge[0].FaultSeconds
+            $MinDetectableGaugeNote = "the smallest GAUGE rung whose panel left the pre-rung band for $LadderMinConsecutive consecutive 60 s sub-windows. Rungs driven: [$(@($gaugeRungs | ForEach-Object { "$($_.FaultSeconds)s:$(if($_.Moved){'moved'}else{'no'})" }) -join ' ')]."
+        } else {
+            $MinDetectableGaugeNote = "NULL, not the largest rung: no gauge rung moved panel 14 for $LadderMinConsecutive consecutive sub-windows. Rungs driven: [$(@($gaugeRungs | ForEach-Object { "$($_.FaultSeconds)s:no" }) -join ' ')]."
+        }
+
+        $PredictedCounterSeconds = 120
+        $PredictedGaugeSeconds   = 120
+        $counterAgrees = ($null -ne $MinDetectableCounterSeconds -and [int]$MinDetectableCounterSeconds -eq $PredictedCounterSeconds)
+        $gaugeAgrees   = ($null -ne $MinDetectableGaugeSeconds   -and [int]$MinDetectableGaugeSeconds   -eq $PredictedGaugeSeconds)
+        $PredictionAgreesWithMeasurement = ($counterAgrees -and $gaugeAgrees)
+        $PredictionAgreementDetail = "counter: predicted ${PredictedCounterSeconds}s, measured $(if($null -eq $MinDetectableCounterSeconds){'null'}else{"$MinDetectableCounterSeconds`s"}) -> $(if($counterAgrees){'AGREES'}else{'DISAGREES'}); gauge: predicted ${PredictedGaugeSeconds}s, measured $(if($null -eq $MinDetectableGaugeSeconds){'null'}else{"$MinDetectableGaugeSeconds`s"}) -> $(if($gaugeAgrees){'AGREES'}else{'DISAGREES'}). Both the prediction and the measurement are recorded so a disagreement is VISIBLE rather than smoothed over, and so a future re-measurement can tell whether it disagrees because the stack changed or because a run was noisy."
+
+        $RegimeBDetectionNote = 'REGIME B IS A THIRD ANSWER AND IS NOT A LADDER MEASUREMENT. For a zero-floor guarded counter — panels 2, 6, 7, 8 and 13, whose DISC-01 bands are all exactly 0..0 — a SINGLE event is detectable at ANY duration, because the counter goes from 0 to 1 and STAYS there for the whole `$__range` window rather than decaying back. There is no minimum duration to measure: duration does not enter the question. That is the strongest detection property on this dashboard and maintenance should know it. It is a stated fact about the dashboard''s design (`sum(increase(counter[$__range])) or vector(0)`), corroborated by the ZERO-* scenarios rather than measured here: ZERO-02 drove a real keeper recovery event and panel 2 left its exactly-0..0 band for four consecutive sub-windows. TWO CAVEATS THAT MATTER MORE THAN THE PROPERTY: (1) the same guard makes a green 0 indistinguishable from "the counter has never been emitted at all", which is why panels 6, 7, 8 and 13 are in the accepted-unproven register; and (2) the property belongs to the increase()/$__range form, NOT to rate() — 88-07 measured that panel 2''s rate() form is BLIND to a recovery burst confined to a single 60 s export interval, because the counter series is born carrying its final value and rate() differences consecutive samples.'
+
+        $restore = Assert-StackRestored -Tiers $Tiers -ExpectedReplicas $preReplicas -ExpectedImages $preImages
+        Write-Phase "  restore: SeamVarsClean=$($restore.SeamVarsClean) ReplicasRestored=$($restore.ReplicasRestored) ImagesUnchanged=$($restore.ImagesUnchanged)" 'Gray'
+
+        $allRungsRestored = ((@($LadderRungs).Count -gt 0) -and (@($LadderRungs | Where-Object { -not $_.ReplicasRestored }).Count -eq 0))
+        $ctApplicable = @($LadderCrossTalk | Where-Object { $_.Applicable })
+        $CrossTalkHeld = $(if (@($ctApplicable).Count -eq 0) { $null } else { (@($ctApplicable | Where-Object { -not $_.StayedPut }).Count -eq 0) })
+
+        # A rung that did NOT move is a MEASUREMENT here, not a discrimination failure: the whole
+        # point of a ladder is to find where detection stops, so the scenario engine's "a panel that
+        # was read and did not move is a Fail" rule deliberately does NOT apply. Fail is reserved
+        # for a dirty stack or a control that drifted — claims that were evaluated and came back
+        # false about something other than the measurement itself.
+        $verdict = 'Pass'
+        if (-not $restore.Ok -or -not $allRungsRestored -or ($null -ne $CrossTalkHeld -and -not $CrossTalkHeld)) { $verdict = 'Fail' }
+        elseif ($ReaderUnavailable -or -not [string]::IsNullOrWhiteSpace($LadderAbortReason)) { $verdict = 'Inconclusive' }
+        elseif ($null -eq $MinDetectableCounterSeconds -or $null -eq $MinDetectableGaugeSeconds) { $verdict = 'Inconclusive' }
+        elseif (@($LadderFindings).Count -gt 0) { $verdict = 'Inconclusive' }
+
+        $human = "phase-88 $canonicalId verdict=${verdict}: DISC-07 measured in TWO regimes — " +
+                 "minDetectableCounter=$(if($null -eq $MinDetectableCounterSeconds){'null'}else{"${MinDetectableCounterSeconds}s"}) (predicted ${PredictedCounterSeconds}s), " +
+                 "minDetectableGauge=$(if($null -eq $MinDetectableGaugeSeconds){'null'}else{"${MinDetectableGaugeSeconds}s"}) (predicted ${PredictedGaugeSeconds}s), " +
+                 "predictionAgrees=$PredictionAgreesWithMeasurement | " +
+                 "counter rungs [$(@($counterRungs | ForEach-Object { "$($_.FaultSeconds)s:$(if($_.Moved){'moved'}else{'no'})" }) -join ' ')] | " +
+                 "gauge rungs [$(@($gaugeRungs | ForEach-Object { "$($_.FaultSeconds)s:$(if($_.Moved){'moved'}else{'no'})" }) -join ' ')] | " +
+                 "regime B: a single event is detectable at ANY duration (stated, not measured) | " +
+                 "crossTalkHeld=$CrossTalkHeld measured on [$(@($CrossTalkMeasuredOnRungs) -join ' ')] | " +
+                 "every rung carries its OWN pre-rung band and its OWN restore claim; independence wait ${LadderRateClearSeconds}s + ${LadderSettleSeconds}s | " +
+                 "${ViewportWidth}x${ViewportHeight}, rate_interval=${LadderRateClearSeconds}s, ~$LadderHostLoadRequests host requests | " +
+                 "findings=$(@($LadderFindings).Count) | stack clean: seamVars=$($restore.SeamVarsClean) replicas=$($restore.ReplicasRestored) images=$($restore.ImagesUnchanged)"
+        if (-not [string]::IsNullOrWhiteSpace($LadderAbortReason)) { $human += " || ABORTED: $LadderAbortReason" }
+        if ($RunInParts) { $human += " || RUN IN PARTS: $(@($PartRuns) -join '; ')" }
+
+        $report = [ordered]@{
+            ScenarioId   = $canonicalId
+            Verdict      = $verdict
+            Status       = 'Locked'
+            Lever        = "$($scenario.lever)"
+            TargetTier   = $LadderTier
+
+            Rungs        = [object[]]@($LadderRungs)
+            RungsDriven  = [string[]]@($RungsDriven)
+            RungsCarriedForward = [string[]]@($RungsCarriedForward)
+            RunInParts   = $RunInParts
+            PartRuns     = [string[]]@($PartRuns)
+            RungFilter   = [int[]]@($RungFilter)
+            DeclaredCounterRungs = [int[]]@($LadderCounterRungs)
+            DeclaredGaugeRungs   = [int[]]@($LadderGaugeRungs)
+            GaugeFallbackRung    = $LadderGaugeFallbackRung
+            GaugeFallbackDriven  = $GaugeFallbackDriven
+
+            MinDetectableCounterSeconds = $MinDetectableCounterSeconds
+            MinDetectableCounterNote    = $MinDetectableCounterNote
+            MinDetectableGaugeSeconds   = $MinDetectableGaugeSeconds
+            MinDetectableGaugeNote      = $MinDetectableGaugeNote
+            RegimeBDetectionNote        = $RegimeBDetectionNote
+
+            PredictedCounterSeconds = $PredictedCounterSeconds
+            PredictedGaugeSeconds   = $PredictedGaugeSeconds
+            PredictionAgreesWithMeasurement = $PredictionAgreesWithMeasurement
+            PredictionAgreementDetail       = $PredictionAgreementDetail
+            PredictionSource = '88-RESEARCH.md § Minimum Detectable Fault Duration — 120 s for counter-backed panels (the two-consecutive-samples rule raises a theoretical ~24 s floor to 120 s) and >= 120 s for gauge-backed panels (2 x the 60 s export cadence; anything shorter is a coin flip).'
+
+            IndependenceNote = "Each rung re-captures its OWN pre-rung baseline over $LadderBaselineCount x ${SubWindowSeconds}s sub-windows, and no rung's baseline window may BEGIN until ${LadderRateClearSeconds}s (the derived rate window) plus ${LadderSettleSeconds}s have elapsed since the previous rung's fault ended. Without that, a rung would be measured on the tail of its predecessor and would report the predecessor's fault as its own (T-88-24)."
+            ScoringNote = "A rung that did NOT move is a MEASUREMENT, not a discrimination failure — finding where detection stops is the whole point of a ladder — so the scenario engine's 'a panel that was read and did not move is a Fail' rule deliberately does not apply here. Fail is reserved for a stack that did not restore or a cross-talk control that drifted."
+
+            CrossTalkPanels        = [object[]]@($LadderCrossTalk)
+            CrossTalkHeld          = $CrossTalkHeld
+            CrossTalkMeasuredOnRungs = [string[]]@($CrossTalkMeasuredOnRungs)
+            CrossTalkNote = "DISC-03. The controls are measured on the LONGEST rung of each regime, in the SAME batch and the SAME windows as the claim: the blast radius of a fault is monotonic in its duration, so a control that held under the longest outage held under every shorter one. Panels [$(@($LadderCounterControls) -join ',')] control the counter rungs. Only panel [$(@($LadderGaugeControls) -join ',')] controls the GAUGE rungs — panel 12 is deliberately excluded there, because the WebApi status-code mix is causally DOWNSTREAM of the very HTTP load a gauge rung drives (WEB-01 measured its 400 and 404 series moving off an exactly-zero band under precisely this load). A control the fault is expected to move is not a control; it would report the driver's own footprint as a blast radius."
+
+            StackRestored    = [bool]$restore.Ok
+            AllRungsRestored = $allRungsRestored
+            ReplicasRestored = $restore.ReplicasRestored
+            SeamVarsClean    = $restore.SeamVarsClean
+            SeamVarsAfter    = @($restore.SeamVarsFound)
+            ImagesUnchanged  = $restore.ImagesUnchanged
+            ImagesBefore     = $preImages
+            ReplicasBefore   = $preReplicas
+            ReplicaMismatches = @($restore.ReplicaMismatches)
+            ImageMismatches   = @($restore.ImageMismatches)
+            UnknownTiers      = @($restore.UnknownTiers)
+            ReplicasFieldNote = 'this row drives many faults rather than one, so ReplicasBefore carries the four-tier MAP read at the PRE gate; the scalar before/after pair for the tier a rung scaled lives on that rung''s own entry, together with its own ReplicasRestored claim.'
+
+            SubWindowSeconds       = $SubWindowSeconds
+            Panel4SubWindowSeconds = $Panel4SubWindowSeconds
+            Panel4SubWindowNote    = 'MEASURED in 88-04: panel 4 renders "No data" at a 60 s sub-window, because increase() needs at least TWO samples inside its range and the stored resolution here is 60 s. Every panel-4 reading in this ladder is taken in its OWN 120 s batch and every band entry states its own width, so a 120 s reading can never be silently compared against a 60 s one.'
+            ViewportWidth          = $ViewportWidth
+            ViewportHeight         = $ViewportHeight
+            LocatorMode            = $LocatorMode
+            RateIntervalSeconds    = $LadderRateClearSeconds
+            DatasourceTimeInterval = $LadderTimeInterval
+            OldestSampleUtc        = $OldestSampleUtc
+            HostLoadRequests       = $LadderHostLoadRequests
+
+            AbortReason        = $LadderAbortReason
+            ReaderUnavailable  = $ReaderUnavailable
+            Findings           = [string[]]@($LadderFindings)
+            ScreenshotPaths    = @($LadderScreenshotPaths)
+            CompletedUtc       = ([DateTimeOffset]::UtcNow).ToString('o')
+            HumanSummary       = $human
+        }
+
+        if (-not (Save-Phase88ScenarioArtifact -Report $report -Path $reportPath)) {
+            Write-Phase "the written artifact carries a JSON VALUE of 'System.Object-array' — the serialisation depth is too shallow." 'Red'
+            exit 66
+        }
+        Write-Phase "verdict artifact: $reportPath" 'Green'
+        Write-Phase $human $(if ($verdict -eq 'Pass') { 'Green' } elseif ($verdict -eq 'Fail') { 'Red' } else { 'Yellow' })
+        foreach ($f in $LadderFindings) { Write-Phase "  FINDING: $f" 'Yellow' }
+
+        $exitCode = Resolve-AnalyzerExitCode ([pscustomobject]$report)
+        if ($ReaderUnavailable -and $exitCode -eq 0) { $exitCode = 66 }
+        if (-not $restore.Ok -or -not $allRungsRestored) { $exitCode = 65 }
+        $resolved = Resolve-SweepClass $exitCode
+        Write-Phase "class=$($resolved.Class) exit=$exitCode" 'Gray'
+        exit $exitCode
     }
 
     if ($rowMode -eq 'scenario') {
@@ -1040,379 +2314,17 @@ try {
         $controls = @($scenario.crossTalkPanels | ForEach-Object { "$_" })
 
         # =====================================================================================
-        # SCENARIO HELPERS
-        # =====================================================================================
-
-        # ---- HTTP LOAD DRIVER (T-88-19) ------------------------------------------------------
-        # Every route is a STATIC literal in this function; nothing is derived from a parameter.
-        # NO /health/ ROUTE IS EVER DRIVEN: the collector drops those, so they would add load to the
-        # cluster and contribute nothing at all to panels 10-14.
-        # Concurrency is fixed at about ten requesters against a dev cluster and bounded by the
-        # caller's duration; the jobs are reaped by Stop-Phase88HttpLoad and again by the outer
-        # finally, so a load job can never outlive the run and pollute a LATER capture.
-        function Start-Phase88HttpLoad {
-            [CmdletBinding()]
-            param(
-                [Parameter(Mandatory)][ValidateSet('background', 'sustained')][string]$Shape,
-                [Parameter(Mandatory)][int]$DurationSeconds,
-                [Parameter(Mandatory)][string]$BaseUri
-            )
-
-            # READ-ONLY. Nothing here creates, mutates or deletes a row, so the load cannot perturb
-            # the pipeline signal the conservation panels are banding.
-            $readOnlyCsv = '/api/v1/workflows,/api/v1/processors,/api/v1/schemas,/api/v1/steps,/api/v1/assignments'
-            # The two status drivers PQ-03 ENUMERATED and observed, rather than invented ones:
-            #   GET /api/v1/__phase88_probe_unmatched            -> 404 (unmatched path, inert)
-            #   POST /api/v1/orchestration/start with body `[]`  -> 400 (empty activation, inert)
-            $unmatchedCsv = '/api/v1/__phase88_probe_unmatched'
-            $badBodyCsv   = '/api/v1/orchestration/start'
-
-            # Routes cross the job boundary as ONE comma-joined string: -ArgumentList maps each
-            # element to a positional parameter, and an array element there is a standing ambiguity.
-            $worker = {
-                param($BaseUri, $DurationSeconds, $RoutesCsv, $PauseMs, $Method, $Body)
-                $routes = @(("$RoutesCsv") -split ',' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-                $deadline = (Get-Date).AddSeconds($DurationSeconds)
-                $n = 0
-                while ((Get-Date) -lt $deadline) {
-                    foreach ($r in $routes) {
-                        try {
-                            $req = @{
-                                Uri                = "$BaseUri$r"
-                                Method             = $Method
-                                UseBasicParsing    = $true
-                                TimeoutSec         = 15
-                                SkipHttpErrorCheck = $true
-                                ErrorAction        = 'Stop'
-                            }
-                            if (-not [string]::IsNullOrEmpty($Body)) {
-                                $req['Body'] = $Body
-                                $req['ContentType'] = 'application/json'
-                            }
-                            $null = Invoke-WebRequest @req
-                            $n++
-                        } catch { }
-                        if ($PauseMs -gt 0) { Start-Sleep -Milliseconds $PauseMs }
-                        if ((Get-Date) -ge $deadline) { break }
-                    }
-                }
-                return $n
-            }
-
-            $jobs = @()
-            if ($Shape -eq 'background') {
-                # The BASE-01 shape (~2.5 req/s, read-only): enough that the WebApi panels have a
-                # live level for a NON-http scenario to control against, small enough that it cannot
-                # itself be mistaken for a fault.
-                $jobs += Start-Job -ScriptBlock $worker -ArgumentList $BaseUri, $DurationSeconds, $readOnlyCsv, 400, 'GET', ''
-            }
-            else {
-                # SUSTAINED, not a burst. http_server_active_requests / kestrel_active_connections /
-                # kestrel_queued_connections are GAUGES sampled at the 60 s export cadence: a request
-                # that begins and ends between two exports is never recorded at all, so a burst would
-                # leave panel 14 reading 0 at every tick (88-RESEARCH.md Pitfall 8). Eight tight-loop
-                # readers keep ~10 connections open and requests genuinely in flight across ticks.
-                for ($w = 0; $w -lt 8; $w++) {
-                    $jobs += Start-Job -ScriptBlock $worker -ArgumentList $BaseUri, $DurationSeconds, $readOnlyCsv, 0, 'GET', ''
-                }
-                # ~4 req/s each is ample to lift a 0..0 status-code band well clear of zero; hammering
-                # them harder would only add log noise for no extra signal.
-                $jobs += Start-Job -ScriptBlock $worker -ArgumentList $BaseUri, $DurationSeconds, $unmatchedCsv, 250, 'GET', ''
-                $jobs += Start-Job -ScriptBlock $worker -ArgumentList $BaseUri, $DurationSeconds, $badBodyCsv,   250, 'POST', '[]'
-            }
-            return [object[]]$jobs
-        }
-
-        # Reap the load and return the total request count. Called on the happy path; the outer
-        # finally repeats the reap so an interrupted run cannot leave a job hitting the WebApi.
-        function Stop-Phase88HttpLoad {
-            [CmdletBinding()]
-            param([AllowEmptyCollection()][object[]]$Jobs)
-            $total = 0
-            foreach ($j in @($Jobs)) {
-                try { $null = Wait-Job -Job $j -Timeout 30 } catch { }
-                try {
-                    $out = @(Receive-Job -Job $j -ErrorAction SilentlyContinue)
-                    if ($out.Count -gt 0) {
-                        $parsed = 0
-                        if ([int]::TryParse("$($out[-1])", [ref]$parsed)) { $total += $parsed }
-                    }
-                } catch { }
-                try { Stop-Job -Job $j -ErrorAction SilentlyContinue } catch { }
-                try { Remove-Job -Job $j -Force -ErrorAction SilentlyContinue } catch { }
-            }
-            return $total
-        }
-
-        # ---- ONE CAPTURE: every requested panel over Count abutting absolute windows ending at
-        # ---- EndUtc, in ONE browser session, so a claim and its control are measured in the SAME
-        # ---- windows. Panel 4, when requested, gets a SECOND batch at its own 120 s width.
-        function Invoke-Phase88Capture {
-            [CmdletBinding()]
-            param(
-                [Parameter(Mandatory)][string[]]$PanelIdList,
-                [Parameter(Mandatory)][datetime]$EndUtc,
-                [Parameter(Mandatory)][int]$Count,
-                [Parameter(Mandatory)][int]$Panel4Count,
-                [Parameter(Mandatory)][string]$ShotDir,
-                [Parameter(Mandatory)][string]$Label
-            )
-
-            $sixty = @($PanelIdList | Where-Object { "$_" -ne '4' })
-            $wantsPanel4 = (@($PanelIdList | Where-Object { "$_" -eq '4' }).Count -gt 0)
-
-            $out = [ordered]@{
-                Label            = $Label
-                Batch            = $null
-                Windows          = @()
-                Panel4Batch      = $null
-                Panel4Windows    = @()
-                WindowStartUtc   = $null
-                WindowEndUtc     = $null
-                State            = 'NotRun'
-                Panel4State      = 'NotRun'
-                ScreenshotPaths  = @()
-            }
-
-            if (@($sixty).Count -gt 0) {
-                $wins = @(Get-PinnedWindowSeries -EndUtc $EndUtc -SubWindowSeconds 60 -Count $Count)
-                $mintedWidth = [int](($wins[0].ToMs - $wins[0].FromMs) / 1000)
-                if ($mintedWidth -ne 60) { throw "the minted sub-window is ${mintedWidth}s, not the 60s this capture records." }
-                $out.Windows = $wins
-                $out.WindowStartUtc = $wins[0].FromUtc
-                $out.WindowEndUtc   = $wins[-1].ToUtc
-                Write-Phase "  [$Label] reading $(@($sixty).Count) panel(s) x $Count x 60s : $($wins[0].FromUtc) -> $($wins[-1].ToUtc)" 'Gray'
-                $b = Invoke-PanelReadBatch -PanelIds ([string[]]$sixty) -Windows $wins -ScreenshotDir $ShotDir `
-                       -LocatorMode $LocatorMode -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight `
-                       -BasicAuthBase64 $adminB64
-                $out.Batch = $b
-                $out.State = "$($b.State)"
-                $out.ScreenshotPaths = @(Get-ScreenshotPaths $b.Readings)
-                Write-Phase "  [$Label] batch State=$($b.State) requested=$($b.Requested) emitted=$($b.Emitted)" 'Gray'
-            }
-
-            if ($wantsPanel4) {
-                $p4Wins = @(Get-PinnedWindowSeries -EndUtc $EndUtc -SubWindowSeconds 120 -Count $Panel4Count)
-                $out.Panel4Windows = $p4Wins
-                if ($null -eq $out.WindowStartUtc) {
-                    $out.WindowStartUtc = $p4Wins[0].FromUtc
-                    $out.WindowEndUtc   = $p4Wins[-1].ToUtc
-                }
-                Write-Phase "  [$Label] panel 4 at its OWN width: $Panel4Count x 120s (88-04 measured that 60s renders No data)" 'Gray'
-                $b4 = Invoke-PanelReadBatch -PanelIds @('4') -Windows $p4Wins -ScreenshotDir $ShotDir `
-                        -LocatorMode $LocatorMode -ViewportWidth $ViewportWidth -ViewportHeight $ViewportHeight `
-                        -BasicAuthBase64 $adminB64
-                $out.Panel4Batch = $b4
-                $out.Panel4State = "$($b4.State)"
-                $out.ScreenshotPaths = @(@($out.ScreenshotPaths) + @(Get-ScreenshotPaths $b4.Readings) | Select-Object -Unique)
-            }
-
-            return [pscustomobject]$out
-        }
-
-        # The per-series readings for ONE panel out of a capture, plus the width they were taken at
-        # and the per-window panel states. A stat panel yields a single entry at index -1.
-        function Get-Phase88PanelReading {
-            [CmdletBinding()]
-            param([Parameter(Mandatory)]$Capture, [Parameter(Mandatory)][string]$PanelId)
-
-            $panel = $Panels[$PanelId]
-            $isP4  = ($PanelId -eq '4')
-            $batch = if ($isP4) { $Capture.Panel4Batch } else { $Capture.Batch }
-            $width = if ($isP4) { $Panel4SubWindowSeconds } else { $SubWindowSeconds }
-
-            $result = [ordered]@{
-                PanelId          = $PanelId
-                SubWindowSeconds = $width
-                Entries          = @()
-                States           = @()
-                Readable         = $false
-            }
-            if ($null -eq $batch) { return [pscustomobject]$result }
-
-            $readings = @($batch.Readings)
-            $states = @(Get-PanelStates -Readings $readings -PanelId $PanelId)
-            $result.States = [string[]]$states
-            if (@($states).Count -eq 0) { return [pscustomobject]$result }
-            $result.Readable = $true
-
-            $entries = @()
-            if ("$($panel.Type)" -eq 'stat') {
-                $entries += [pscustomobject]@{
-                    Index  = -1
-                    Name   = "$($panel.SeriesName)"
-                    Values = [double[]]@(Get-PanelSamples -Readings $readings -PanelId $PanelId)
-                }
-            }
-            else {
-                $n = Get-PanelSeriesCount -Readings $readings -PanelId $PanelId
-                for ($i = 0; $i -lt $n; $i++) {
-                    $nm = Get-PanelSeriesNameAt -Readings $readings -PanelId $PanelId -SeriesIndex $i
-                    $entries += [pscustomobject]@{
-                        Index  = $i
-                        Name   = "$($nm.Name)"
-                        Values = [double[]]@(Get-PanelSamples -Readings $readings -PanelId $PanelId -SeriesIndex $i)
-                    }
-                }
-            }
-            $result.Entries = [object[]]$entries
-            return [pscustomobject]$result
-        }
-
-        # Legend names, verbatim and in row order. A legend series NAME change is an INDEPENDENT
-        # discrimination signal — when an `or vector(0)` guard stops firing, the label-less series is
-        # replaced by a labelled one — so it is recorded for every timeseries panel even when the
-        # numeric assertion already passed.
-        # THE UNION OF EVERY NAME THE PANEL RENDERED IN ANY SUB-WINDOW, not the by-index name.
+        # SCENARIO HELPERS — MOVED to the shared HELPERS section above (plan 88-08).
         #
-        # MEASURED IN ZERO-02 RUN 2. `$Reading.Entries` is built by ROW INDEX, and its Name comes from
-        # the FIRST sub-window in which that index existed. A legend that GAINS rows mid-capture — which
-        # is precisely the guarded-panel transition ZERO-02 exists to assert — therefore reports stale
-        # names for every row after the insertion point. Panel 2 rendered, verbatim:
-        #     windows 1-2:  consumed 0 ops/s | sent 0 ops/s
-        #     windows 3-6:  consumed 0 | consumed keeper 0.00944 | sent 0 | sent keeper 0.00944
-        # and the by-index collector returned `consumed, sent, sent, sent keeper` — silently dropping
-        # `consumed keeper`, the exact name the scenario's second signal is about. Walking the readings
-        # directly makes LegendNamesAfter a record of what was RENDERED rather than of how rows were
-        # indexed. Names are returned in first-seen order and de-duplicated.
-        function Get-Phase88LegendNames {
-            [CmdletBinding()]
-            param([Parameter(Mandatory)]$Reading, $Capture = $null, [string]$PanelId = '')
-            $names = @()
-            if ($null -ne $Capture -and -not [string]::IsNullOrWhiteSpace($PanelId)) {
-                $batch = if ($PanelId -eq '4') { $Capture.Panel4Batch } else { $Capture.Batch }
-                if ($null -ne $batch) {
-                    foreach ($r in @($batch.Readings)) {
-                        $rn = @(Get-PropertyNames $r)
-                        if ($rn -notcontains 'panelId' -or "$($r.panelId)" -ne $PanelId) { continue }
-                        if ($rn -notcontains 'series') { continue }
-                        foreach ($s in @($r.series)) {
-                            $sn = @(Get-PropertyNames $s)
-                            if ($sn -notcontains 'name') { continue }
-                            $nm = "$($s.name)"
-                            if ($names -notcontains $nm) { $names += $nm }
-                        }
-                    }
-                }
-            }
-            if (@($names).Count -gt 0) { return [string[]]$names }
-            foreach ($e in @($Reading.Entries)) { if ($names -notcontains "$($e.Name)") { $names += "$($e.Name)" } }
-            return [string[]]$names
-        }
-
-        # The legend rows rendered in EACH sub-window, in order, so the transition is auditable window
-        # by window rather than as a merged set the reader must take on trust. The plan asks for exactly
-        # this: "record both arrays verbatim ... so a reader can see the transition".
-        function Get-Phase88LegendNamesPerWindow {
-            [CmdletBinding()]
-            param([Parameter(Mandatory)]$Capture, [Parameter(Mandatory)][string]$PanelId)
-            $out = @()
-            $batch = if ($PanelId -eq '4') { $Capture.Panel4Batch } else { $Capture.Batch }
-            if ($null -eq $batch) { return @($out) }
-            foreach ($r in @($batch.Readings)) {
-                $rn = @(Get-PropertyNames $r)
-                if ($rn -notcontains 'panelId' -or "$($r.panelId)" -ne $PanelId) { continue }
-                $rowNames = @()
-                if ($rn -contains 'series') {
-                    foreach ($s in @($r.series)) {
-                        $sn = @(Get-PropertyNames $s)
-                        $rowNames += $(if ($sn -contains 'name') { "$($s.name)" } else { '' })
-                    }
-                }
-                $out += [pscustomobject]@{
-                    FromUtc     = $(if ($rn -contains 'fromUtc') { "$($r.fromUtc)" } else { '' })
-                    ToUtc       = $(if ($rn -contains 'toUtc') { "$($r.toUtc)" } else { '' })
-                    LegendNames = [string[]]@($rowNames)
-                }
-            }
-            return @($out)
-        }
-
-        # Band lookup: BY NAME FIRST, falling back to the row index. 88-04 measured that a new series
-        # shifts every later row index (panel 12 gains 400/404 the moment WEB-01 drives them), so an
-        # index-only match would silently score one series against another series' band.
-        function Find-Phase88Band {
-            [CmdletBinding()]
-            param(
-                [Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Bands,
-                [Parameter(Mandatory)][int]$PanelId,
-                [Parameter(Mandatory)][AllowEmptyString()][string]$SeriesName,
-                [Parameter(Mandatory)][int]$SeriesIndex
-            )
-            $cand = @($Bands | Where-Object { [int]$_.PanelId -eq $PanelId })
-            if ($cand.Count -eq 0) { return $null }
-            if (-not [string]::IsNullOrWhiteSpace($SeriesName)) {
-                $byName = @($cand | Where-Object {
-                        [string]::Equals("$($_.SeriesName)", $SeriesName, [System.StringComparison]::Ordinal)
-                    })
-                if ($byName.Count -ge 1) { return $byName[0] }
-            }
-            $byIdx = @($cand | Where-Object { [int]$_.SeriesIndex -eq $SeriesIndex })
-            if ($byIdx.Count -ge 1) { return $byIdx[0] }
-            return $null
-        }
-
-        # How far outside its band a value sits, 0 when inside. Used for MaxExcursion (a cross-talk
-        # drift is recorded WITH its size, so a hair's-breadth wobble and a real blast radius are
-        # distinguishable in the artifact rather than collapsed into one boolean).
-        function Get-Phase88Excursion {
-            [CmdletBinding()]
-            param([double]$Value, [double]$Low, [double]$High)
-            if ($Value -gt $High) { return ($Value - $High) }
-            if ($Value -lt $Low)  { return ($Low - $Value) }
-            return 0.0
-        }
-
-        # Turn a capture into band rows in the SAME shape as BASE-01's BaselineBands, so the scorer
-        # cannot tell a re-captured band from a DISC-01 one and therefore cannot treat them differently.
-        function New-Phase88BandSet {
-            [CmdletBinding()]
-            param([Parameter(Mandatory)]$Capture, [Parameter(Mandatory)][string[]]$PanelIdList)
-            $bands = @()
-            foreach ($p in @($PanelIdList)) {
-                $rd = Get-Phase88PanelReading -Capture $Capture -PanelId $p
-                foreach ($e in @($rd.Entries)) {
-                    $vals = @($e.Values)
-                    if ($vals.Count -eq 0) { continue }
-                    $b = Get-PanelBand -Values ([double[]]$vals)
-                    $bands += [pscustomobject]@{
-                        PanelId          = [int]$p
-                        PanelTitle       = "$($Panels[$p].Title)"
-                        Regime           = "$($Panels[$p].Regime)"
-                        SeriesIndex      = [int]$e.Index
-                        SeriesName       = "$($e.Name)"
-                        SubWindowSeconds = [int]$rd.SubWindowSeconds
-                        Values           = [double[]]$vals
-                        States           = [string[]]@($rd.States)
-                        BandLow          = [double]$b.Low
-                        BandHigh         = [double]$b.High
-                        BandMean         = [double]$b.Mean
-                        BandSigma        = [double]$b.Sigma
-                        FloorApplied     = [bool]$b.FloorApplied
-                        SampleCount      = [int]$b.SampleCount
-                    }
-                }
-            }
-            return [object[]]$bands
-        }
-
-
-        # Write the artifact and assert its own serialisation depth. -Depth 10, NOT a shallower
-        # depth: PanelResults[] and CrossTalkPanels[] are OBJECTS INSIDE ARRAYS carrying nested
-        # Values[]/States[], which a shallower serialisation writes as the literal type name —
-        # destroying the evidence that makes every verdict here recomputable (T-88-18). The guard is
-        # STRUCTURAL (a JSON VALUE equal to that string), not a substring search, because a captured
-        # diagnostic message may legitimately MENTION the type and a guard that cries wolf on its own
-        # error text eventually gets disabled.
-        function Save-Phase88ScenarioArtifact {
-            [CmdletBinding()]
-            param([Parameter(Mandatory)]$Report, [Parameter(Mandatory)][string]$Path)
-            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Path) | Out-Null
-            ([pscustomobject]$Report) | ConvertTo-Json -Depth 10 | Set-Content -Path $Path -Encoding utf8
-            $written = Get-Content $Path -Raw
-            return (-not ($written -match '(?m)(:\s*"System\.Object\[\]"|^\s*"System\.Object\[\]"\s*,?\s*$)'))
-        }
-
+        # They were defined here, INSIDE `if ($rowMode -eq 'scenario')`, which meant that the
+        # duration-ladder mode — dispatched earlier and never entering this block — could not call
+        # a single one of them. PowerShell only sees a function once its definition STATEMENT has
+        # executed, so a helper defined in a branch that did not run does not exist. Both modes now
+        # capture, band, score and serialise through ONE definition, which is the same fix 88-05
+        # deviation 6 applied to Get-ProxyAggregateMean and for the same reason: two copies of a
+        # capture path would be two things to keep in step, and the ladder's whole claim is that its
+        # rungs are measured the way every other scenario in this phase was measured.
+        # =====================================================================================
         # =====================================================================================
         # STEP S1 — THE DISC-01 BANDS. Loaded as the starting reference for every scenario, and
         # AUTHORITATIVE only where the row's lever caused no rollout (see STEP S4).
