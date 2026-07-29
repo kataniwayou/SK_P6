@@ -42,7 +42,35 @@ Open Grafana live and walk 2-3 panels (e.g. panel 9, panel 14) against the runbo
 
 expected: The rendered panel matches what the runbook and artifacts claim.
 why_human: Sign-off check #7 NOT PERFORMED — 88-11 was a documentation-only plan instructed not to drive the live cluster, and the verification pass also stayed read-only to avoid mutating a healthy stack. Values were cross-checked against JSON artifacts only, never a fresh live render.
-result: [pending]
+result: issue
+performed_by: automated live render, 2026-07-29T04:31:34Z (read-only; no fault driven, no cluster mutation)
+method: |
+  `scripts/lib/phase-88-panel-read.ps1` -> `Invoke-PanelReadBatch` against the live
+  `skp-business` dashboard, LocatorMode viewpanel, six pinned 60 s sub-windows.
+  Read State Ok, Requested 12, Emitted 12, Complete true, all 12 states `Rendered`.
+reported: |
+  Panel 9 matches exactly. Both keeper pods (keeper-99b8c574b-27gx7,
+  keeper-99b8c574b-xk7rd) read 0.2000 across all six sub-windows, mean 0.2000,
+  against the runbook's stated 0.180-0.220 band and "measured mean exactly 0.2000
+  on each of two keeper pods". Legend names bound correctly, independently
+  re-confirming the 88-03/88-04 reader amendment on a fresh render.
+
+  Panel 14 matches on two of three series and not on the third:
+    - in-flight      : runbook "exactly 0"  -> live 0.0000 x6   MATCH
+    - kestrel queued : runbook "exactly 0"  -> live 0.0000 x6   MATCH
+    - kestrel active : runbook "mean 0.5"   -> live 0.0000 x6   MISMATCH
+
+  The stated envelope (-0.207 to 1.207) still contains 0, so the panel is not
+  broken and the envelope claim holds. What does not reproduce is the detail
+  claim that `kestrel active` rests at ~0.5 on a healthy stack. The runbook's
+  abnormal-state trigger for panel 14 is worded "kestrel active climbs above its
+  usual half-connection"; if the resting value is 0, that phrase is wrong.
+
+  Probable cause: BASE-01 was captured while the phase was itself driving traffic
+  at baseapi-service, so ~0.5 was residual load rather than a resting value.
+  Operational impact is low - WEB-01 measured a real climb at 2.5-5, which clears
+  either threshold - but the runbook states it as a healthy-baseline fact.
+severity: minor
 
 ### 5. Handover conversation — condition 5
 
@@ -56,12 +84,29 @@ result: [pending]
 
 total: 5
 passed: 0
-issues: 0
-pending: 5
+issues: 1
+pending: 4
 skipped: 0
 blocked: 0
 
 ## Gaps
+
+- truth: "The rendered panel matches what the runbook and artifacts claim (panel 14)."
+  status: failed
+  reason: |
+    Live render 2026-07-29T04:31:34Z: `kestrel active` reads exactly 0.0000 across six
+    pinned 60 s sub-windows on an idle stack, but docs/runbooks/business-dashboard-runbook.md
+    states its healthy detail value as "mean 0.5" and words panel 14's abnormal-state
+    trigger as "kestrel active climbs above its usual half-connection". The stated
+    envelope (-0.207 to 1.207) still holds; the detail claim and the trigger wording
+    do not reproduce. Panel 9 matched exactly on both keeper pods.
+  severity: minor
+  test: 4
+  artifacts:
+    - docs/runbooks/business-dashboard-runbook.md
+    - analyzer-reports/phase-88-BASE-01.json
+    - analyzer-reports/phase-88-WEB-01.json
+  missing: []
 
 ## Note on how this file came to exist
 
