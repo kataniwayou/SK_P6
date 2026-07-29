@@ -3,14 +3,14 @@ gsd_state_version: 1.0
 milestone: v13.0.0
 milestone_name: Observability Dashboards
 status: executing
-stopped_at: Completed 88-08-PLAN.md
-last_updated: "2026-07-29T03:15:33.310Z"
+stopped_at: Completed 88-10-PLAN.md
+last_updated: "2026-07-29T03:39:08.389Z"
 last_activity: 2026-07-29
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 26
-  completed_plans: 24
+  completed_plans: 25
   percent: 67
 ---
 
@@ -28,7 +28,7 @@ See: .planning/PROJECT.md (updated 2026-06-16 — **v8.0.0 (E2E Resilience Proof
 ## Current Position
 
 Phase: 88 (pipeline-dashboard-maintenance-handoff-proof-fault-injection) — EXECUTING
-Plan: 10 of 11
+Plan: 11 of 11
 Status: Ready to execute
 Last activity: 2026-07-29
 Current focus: Phase 87 — awaiting `/gsd-plan-phase 87`
@@ -721,7 +721,7 @@ Build order (locked): 25 (leaf contracts + WebApi responders) → 26 (BaseProces
 - Zero-warning build: Release = 0 Warning(s) / 0 Error(s); Debug = 0 Warning(s) / 0 Error(s).
 - Operator confirmation: "approved" — SUMMARY + STATE/ROADMAP/REQUIREMENTS finalized.
 
-Progress: [█████████░] 92%
+Progress: [██████████] 96%
 
 ### Milestone Phases (v3.4.0)
 
@@ -1129,6 +1129,7 @@ Items acknowledged and deferred at v3.3.0 milestone close on 2026-05-29:
 | Phase 88 P07 | 235min | 3 tasks | 10 files |
 | Phase 88 P08 | 180min | 3 tasks | 5 files |
 | Phase 88 P09 | 45min | 2 tasks | 2 files |
+| Phase 88 P10 | 55min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -1726,6 +1727,11 @@ Recent decisions affecting current work:
 - [Phase ?]: 88-09: DISC-04 recorded Partial and BLOCKED, not Complete and not silently Pending — panel 8 is measured-unreachable because the Phase-79 seam calls CountSent on both branches by design; roadmap SC-5 met, SC-4 not met
 - [Phase ?]: 88-09: the HAND-04 register is DERIVED from phase-88-discrimination.json and asserted mechanically to equal the matrix AcceptedUnproven set (panels 6,7,8,13), so the two partitions cannot drift apart
 - [Phase ?]: 88-09: the HAND-03 rubric is 14x6=84 cells with NO weights and NO aggregate; Q5 non-yes on 13 panels, Q6 no dashboard-wide and stated as a blocking gap rather than softened
+- [Phase ?]: 88-10: the handoff verdict is a QUALIFIED NEGATIVE — the business dashboard is not ready for an unconditional handoff (loopback port-forward only, 13 of 14 panels misleading by default, 4 guarded zeros indistinguishable from 'never instrumented')
+- [Phase ?]: 88-10: HAND-01/HAND-02 are Complete because the documents exist and the verdict is honest — NOT because the dashboard is handover-ready; the REQUIREMENTS.md note defines the word so the status cannot be quoted as readiness
+- [Phase ?]: 88-10: the operator runbook lives at docs/runbooks/business-dashboard-runbook.md, not under .planning/ — the location is itself rubric question 6, and a runbook a maintenance department cannot find is part of the reachability gap it describes
+- [Phase ?]: 88-10: the nine roadmap success criteria are graded 7 PASS / 1 PARTIAL (SC-1 — 13 Class-A series band at exactly zero and carry no usable null hypothesis) / 1 FAIL (SC-4 — panel 8, blocked); no criterion was rounded up
+- [Phase ?]: 88-10: Phase 88 is proven to have left the Phase-87 dashboards intact — dashboard lint exit 0 and the live proof exit 0 with Verdict Pass, the artifact differing from its previous run by its two observation-window timestamps only
 
 ### Roadmap Milestone Log
 
@@ -1839,8 +1845,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-07-29T03:14:39.455Z
-Stopped at: Completed 88-08-PLAN.md
+Last session: 2026-07-29T03:39:08.345Z
+Stopped at: Completed 88-10-PLAN.md
 Resume file: None
 
 **Completed Phase:** 28 (SourceHash Identity + Processor.Sample + E2E Closeout) — 4/4 plans — close gate exit 0 (395 facts GREEN ×3 + triple-SHA `psql \l`/`redis-cli --scan`/`rabbitmqctl list_queues` BEFORE==AFTER held); IDENT-01/02, SAMPLE-01/02, TEST-01/02 satisfied.

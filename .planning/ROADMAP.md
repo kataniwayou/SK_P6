@@ -109,7 +109,7 @@
   - [x] 88-07-PLAN.md — Wave 6: guarded-zero scenarios ZERO-01/02/03 — panel 6 off its zero, panel 2 non-zero with the reinject intact, panel 8's gap opened with `KEEPER_DEFEAT_REINJECT`; the phase's only seam scenario, disarmed and asserted byte-identical (DISC-02, DISC-03, DISC-04, DISC-05, DISC-06)
   - [x] 88-08-PLAN.md — Wave 7: `-Mode DurationLadder` (five counter rungs + three gauge rungs) measuring the minimum detectable fault duration per regime, plus `scripts/phase-88-rollup.ps1` producing the fourteen-row panel-keyed discrimination matrix (DISC-02, DISC-07)
   - [x] 88-09-PLAN.md — Wave 8: `88-FINDINGS.md` — the accepted-unproven register (panel 7 user-locked, with its `SpawnSendExhaustedException` log route) and the six-question practicality rubric; REQUIREMENTS.md traceability set from the artifacts (HAND-03, HAND-04, DISC-01..07)
-  - [ ] 88-10-PLAN.md — Wave 9: the operator runbook at `docs/runbooks/business-dashboard-runbook.md` + `88-HANDOFF-VERDICT.md` (blocking gaps, misleading-by-default panels, nine-criterion table) + the Phase-87 non-regression gate (HAND-01, HAND-02)
+  - [x] 88-10-PLAN.md — Wave 9: the operator runbook at `docs/runbooks/business-dashboard-runbook.md` + `88-HANDOFF-VERDICT.md` (blocking gaps, misleading-by-default panels, nine-criterion table) + the Phase-87 non-regression gate (HAND-01, HAND-02)
   - [ ] 88-11-PLAN.md — Wave 10: blocking human checkpoint — attributed sign-off on the runbook and the readiness verdict, or findings recorded verbatim for gap closure (HAND-01, HAND-02)
 
 ## ✅ v12.0.0 Resilience & Health-Probe Hardening (SHIPPED — 2026-07-27, tag `v12.0.0`)
