@@ -1,19 +1,18 @@
 ---
-status: partial
+status: complete
 phase: 88-pipeline-dashboard-maintenance-handoff-proof-fault-injection
 source: [88-VERIFICATION.md]
 started: 2026-07-29T00:00:00Z
-updated: 2026-07-29T04:45:00Z
+updated: 2026-07-29T05:45:00Z
 ---
 
 ## Current Test
 
-number: 5
-name: Handover conversation — condition 5
-expected: |
-  A named receiver acknowledges, unprompted, the five points in section 7 of
-  docs/runbooks/business-dashboard-handover-briefing.md.
-awaiting: a handover conversation with a named receiver
+[testing complete — 2026-07-29]
+
+All five items have a definitive result. Item 5 is SKIPPED (deferred, no receiver), not passed:
+verdict condition 5 is still unsatisfied and 88-VERIFICATION.md remains `human_needed` so it
+keeps surfacing in /gsd-audit-uat until a real handover occurs.
 
 ## Tests
 
@@ -87,9 +86,16 @@ Conduct the handover conversation and confirm the receiver understands that a gr
 
 expected: Explicit acknowledgement, not just a document read.
 why_human: No conversation occurred; 88-11 explicitly records condition 5 as not satisfied by the sign-off it produced.
-result: [pending]
+result: skipped
+skipped_on: 2026-07-29
+reason: |
+  No receiver to hand off to yet. Deferred by the user, not waived — the two handoff
+  conditions that would make a handover meaningful (ingress, real authentication) are out
+  of scope for milestone v13.0.0, so there is no maintenance owner to brief. Verdict
+  condition 5 remains UNSATISFIED; this records that the conversation has not happened,
+  not that it is unnecessary.
 note: |
-  Still pending — no handover conversation has taken place and no receiver is named.
+  No handover conversation has taken place and no receiver is named.
   Supporting material was prepared on 2026-07-29:
   `docs/runbooks/business-dashboard-handover-briefing.md`, a two-minute briefing whose
   section 7 is the five-point acknowledgement checklist a receiver must be able to say
@@ -102,8 +108,8 @@ total: 5
 passed: 3
 resolved: 1
 issues: 0
-pending: 1
-skipped: 0
+pending: 0
+skipped: 1
 blocked: 0
 
 ## Gaps
